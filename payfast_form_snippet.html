@@ -1,0 +1,86 @@
+<!--
+  KasiScore PayFast Payment Form — Paste this into your payment page
+  ================================================================
+  Replace: MERCHANT_ID, MERCHANT_KEY with values from your PayFast dashboard
+  The PAYFAST_PASSPHRASE must match what's in your .env file:
+    PAYFAST_PASSPHRASE=rliCpiVQauDarXXr5z8mrTv-
+
+  How it works:
+    1. User clicks "Subscribe" → this form POSTs to PayFast
+    2. PayFast processes payment and POSTs to your notify_url
+    3. Your /webhooks/payfast endpoint verifies signature + grants Pro
+-->
+
+<!-- MONTHLY PLAN (R99/month) -->
+<form action="https://www.payfast.co.za/eng/process" method="POST" id="kasiscore-monthly-form">
+  <!-- Merchant details — replace these -->
+  <input type="hidden" name="merchant_id"    value="YOUR_MERCHANT_ID">
+  <input type="hidden" name="merchant_key"   value="YOUR_MERCHANT_KEY">
+
+  <!-- URLs -->
+  <input type="hidden" name="return_url"     value="https://kasiscore-sports-intelligence.com/?subscribed=1">
+  <input type="hidden" name="cancel_url"     value="https://kasiscore-sports-intelligence.com/?cancelled=1">
+  <input type="hidden" name="notify_url"     value="https://kasiscore-sports-intelligence.com/webhooks/payfast">
+
+  <!-- Product -->
+  <input type="hidden" name="item_name"      value="KasiScore Pro — Monthly">
+  <input type="hidden" name="amount"         value="99.00">
+  <input type="hidden" name="item_description" value="KasiScore Pro subscription — AI predictions, corners intel, live scores">
+
+  <!-- Subscription (recurring) -->
+  <input type="hidden" name="subscription_type" value="1">
+  <input type="hidden" name="billing_date"       value="2024-01-01">
+  <input type="hidden" name="recurring_amount"   value="99.00">
+  <input type="hidden" name="frequency"          value="3">   <!-- 3 = monthly -->
+  <input type="hidden" name="cycles"             value="0">   <!-- 0 = indefinite -->
+
+  <!-- Pass subscriber email to our webhook (custom_str1) -->
+  <!-- In your checkout page JS, set this dynamically: -->
+  <!-- document.querySelector('[name=custom_str1]').value = loggedInUserEmail; -->
+  <input type="hidden" name="custom_str1"    value="">   <!-- subscriber email — FILL DYNAMICALLY -->
+  <input type="hidden" name="custom_str2"    value="monthly">
+
+  <!-- Signature — generated server-side in production -->
+  <!-- See: https://developers.payfast.co.za/documentation#step-1-generate-signature -->
+  <input type="hidden" name="signature"      value="">   <!-- generated server-side -->
+
+  <button type="submit" style="background:#007bff;color:#fff;border:none;padding:14px 32px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer">
+    💳 Subscribe R99/month
+  </button>
+</form>
+
+<!-- LIFETIME PLAN (R799 once-off) -->
+<form action="https://www.payfast.co.za/eng/process" method="POST" id="kasiscore-lifetime-form">
+  <input type="hidden" name="merchant_id"    value="YOUR_MERCHANT_ID">
+  <input type="hidden" name="merchant_key"   value="YOUR_MERCHANT_KEY">
+  <input type="hidden" name="return_url"     value="https://kasiscore-sports-intelligence.com/?subscribed=1">
+  <input type="hidden" name="cancel_url"     value="https://kasiscore-sports-intelligence.com/?cancelled=1">
+  <input type="hidden" name="notify_url"     value="https://kasiscore-sports-intelligence.com/webhooks/payfast">
+  <input type="hidden" name="item_name"      value="KasiScore Pro — Lifetime">
+  <input type="hidden" name="amount"         value="799.00">
+  <input type="hidden" name="item_description" value="KasiScore Pro lifetime access — once-off payment">
+  <input type="hidden" name="custom_str1"    value="">   <!-- subscriber email — FILL DYNAMICALLY -->
+  <input type="hidden" name="custom_str2"    value="lifetime">
+  <input type="hidden" name="signature"      value="">
+  <button type="submit" style="background:#28a745;color:#fff;border:none;padding:14px 32px;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer">
+    🏆 Lifetime Access R799
+  </button>
+</form>
+
+<!--
+  JAVASCRIPT HELPER — inject logged-in email into forms before submit
+  Add this to your page script:
+
+  document.querySelectorAll('[name=custom_str1]').forEach(input => {
+    input.value = localStorage.getItem('kasiscore_email') || '';
+  });
+
+  PAYFAST MERCHANT DASHBOARD SETTINGS:
+    Profile → Edit profile:
+      Passphrase: rliCpiVQauDarXXr5z8mrTv-   ← must match PAYFAST_PASSPHRASE in .env
+      Notify URL: https://kasiscore-sports-intelligence.com/webhooks/payfast
+
+  TESTING:
+    Use PayFast sandbox: https://sandbox.payfast.co.za/eng/process
+    Test merchant ID: 10000100  Test key: 46f0cd694581a
+-->
