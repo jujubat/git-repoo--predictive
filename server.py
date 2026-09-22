@@ -44,6 +44,7 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
+INDEX_HTML = BASE_DIR / "index.html"
 load_dotenv(BASE_DIR / ".env", override=True)
 
 API_KEY = os.getenv("AFOOT_API_KEY", "")
