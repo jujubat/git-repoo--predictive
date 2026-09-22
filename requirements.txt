@@ -5,3 +5,4 @@ cachetools>=5.3
 python-dotenv>=1.0
 pydantic>=2.5
 pywebpush>=2.0.0
+libsql-client
