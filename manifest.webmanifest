@@ -1,18 +1,11 @@
 {
-  "name": "KasiScore Sports Intelligence",
-  "short_name": "KasiScore Sports",
-  "description": "Live sports scores, predictions, odds intelligence and data analysis.",
+  "name": "Kasi Sports News",
+  "short_name": "Kasi Sports",
+  "description": "Live scores, sports news, standings and predictions.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
-  "orientation": "any",
-  "background_color": "#071426",
-  "theme_color": "#071426",
-  "lang": "en-ZA",
-  "categories": ["sports", "news", "entertainment"],
-  "icons": [
-    {"src":"/icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
-    {"src":"/icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
-  ]
+  "background_color": "#080d12",
+  "theme_color": "#080d12",
+  "icons": []
 }
