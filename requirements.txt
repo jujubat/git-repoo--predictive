@@ -7,3 +7,4 @@ pydantic>=2.5
 pywebpush>=2.0.0
 libsql-client
 psycopg2-binary==2.9.10
+websockets==15.0.1
