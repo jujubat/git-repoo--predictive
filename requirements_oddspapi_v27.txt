@@ -1,0 +1,2 @@
+# Add to your EXISTING requirements.txt; do not replace the file.
+websockets==15.0.1
