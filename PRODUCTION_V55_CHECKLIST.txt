@@ -1,0 +1,32 @@
+KASI SPORTS NEWS v55 PRODUCTION CHECKLIST
+
+RENDER
+- GitHub production branch: main
+- Auto-Deploy: On Commit
+- Build: pip install -r requirements.txt
+- Start: uvicorn server:app --host 0.0.0.0 --port $PORT
+- Health Check Path: /health
+- Keep API-Football, OddsPAPI, AUTH_SECRET and DATABASE_URL only in Render environment variables.
+- A failed health check must prevent the new deployment becoming healthy production.
+
+CLOUDFLARE (manual DNS/account step; do not change nameservers until imported records are verified)
+- Import/verify root A -> Render target and www CNAME -> Render service.
+- Preserve MX/mail records and Google Search Console TXT.
+- SSL/TLS: Full (strict).
+- Always Use HTTPS: On.
+- Brotli/compression: On; HTTP/3: On where available.
+- Cache static assets (CSS/JS/images) with long TTL/versioned filenames.
+- Bypass cache: /auth/*, /admin/*, /live*, /ai-predictions*, /fixtures*, /odds*, /exports/*.
+- WAF/bot protection: On.
+- Rate-limit sensitive auth/admin/export routes; do not apply aggressive caching to sports APIs.
+- Never put API provider credentials in Cloudflare page rules, frontend JS, DNS, or public headers.
+
+VERIFY AFTER DEPLOY
+1. /health -> 200 and version v55.
+2. /fixtures/with-odds?league=ALL&type=upcoming -> count > 0 when fixtures exist.
+3. /ai-predictions?league=ALL&type=upcoming&refresh=0 -> success/empty structured response, never endless loading.
+4. Public dashboard has no Current Odds / Fixtures with real odds KPI cards.
+5. Admin Diagnostics -> API/Odds Monitoring works for authenticated admin.
+6. CSV/PDF fixture exports download and match visible fixture pool.
+7. Player pages and Match Statistics show independent No data available/Error states.
+8. News/Highlights show no broken media cards and video playback remains 16:9 inline.
