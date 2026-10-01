@@ -1,0 +1,31 @@
+KSN v383 — Production 1 Structure Lock
+
+Structural reference: KSN v370 Canonical Permanent Results Search.
+Functional baseline: v382 Production 1 Audit.
+
+Locked hierarchy:
+HOME: Tip of the Day -> Latest News -> Sports News -> Kasi Match Highlights.
+LIVE: Live Matches -> Finished Games -> Historical Results Search.
+FIXTURES: Football -> Rugby -> Cricket -> PDF/CSV.
+PREDICTIONS: Football -> Rugby -> Cricket.
+STANDINGS: competition/group tables.
+TEAMS & PLAYERS: Football -> Rugby -> Cricket -> Players; dedicated Team/Player pages.
+SPORTS NEWS: Football/Rugby/Cricket article feeds and internal article pages.
+SEARCH: sports entities only; no News results.
+ADMIN: login first; admin-only provider/odds/qualified-fixture/operational data after login.
+
+v383 addition:
+- Each current Tip of the Day row now carries its fixture/provider ID into a right-aligned Stats action.
+- Stats opens the existing /matches/{fixtureId}/stats page.
+- Mobile rule is scoped only to Tip rows; no global mobile CSS added.
+
+Preserved newer functionality:
+- permanent historical results search/provider gap-fill and archive
+- PostgreSQL historical search cast fix
+- historical fixture/provider IDs for Stats
+- instant/cache-first Highlights
+- Yesterday predicted-vs-outcome in Tip response
+- current backend/API logic
+
+Important verification boundary:
+Static source/compile checks pass. Provider-dependent production data (including a specific historical South Africa/Eritrea result) still requires a deployed live-provider test.
