@@ -51,7 +51,7 @@ from cachetools import TTLCache
 from dotenv import load_dotenv
 # KSN backend v359: prediction feeds remain public; no prediction entitlement gate.
 from fastapi import FastAPI, HTTPException, Query, Header, Response, Request
-from fastapi.responses import HTMLResponse, FileResponse, Response, StreamingResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
