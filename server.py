@@ -1042,6 +1042,14 @@ def _v448_api_football_provider_locked() -> bool:
 
 
 def _api_football_budget_guard(path: str):
+    if os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1":
+        raise HTTPException(
+            503,
+            detail={
+                "code": "STAGING_SEO_TEST_PROVIDER_DISABLED",
+                "message": "API-Football disabled during staging SEO tests."
+            }
+        )
     _reset_api_football_usage_if_new_day()
     remaining = _quota_state.get("dailyRemaining")
     limit = _quota_state.get("dailyLimit") or 7500
@@ -4015,8 +4023,28 @@ async def _background_prediction_refresh():
         except Exception as exc:
             log.warning("Background prediction refresh error: %s", exc)
 
+def _ksn_staging_seo_test_mode():
+    return os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1"
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    if _ksn_staging_seo_test_mode():
+        identity = " ".join(
+            os.getenv(k, "") for k in (
+                "RENDER_SERVICE_NAME", "RENDER_EXTERNAL_URL", "KSN_ENV"
+            )
+        ).lower()
+        if "staging" not in identity:
+            raise RuntimeError(
+                "SEO test mode is restricted to a staging service."
+            )
+        log.warning(
+            "STAGING SEO TEST MODE: all startup background jobs disabled"
+        )
+        yield
+        return
+
     v141_learning.init()
     log.info("KasiScore v182 starting on port %d", PORT)
     log.info("API-Football key: %s", "SET" if API_KEY else "NOT SET")
@@ -4540,6 +4568,29 @@ async def google_sitemap_xml():
         body.append(f"<url><loc>{_xml_safe(base + path)}</loc></url>")
     body.append("</urlset>")
     return Response(content="".join(body), media_type="application/xml; charset=utf-8", headers={"Cache-Control":"public, max-age=300, s-maxage=900"})
+
+
+@app.middleware("http")
+async def ksn_staging_seo_test_gate(request: Request, call_next):
+    if _ksn_staging_seo_test_mode():
+        path = request.url.path
+        allowed = path in {
+            "/health", "/robots.txt",
+            "/sitemap.xml", "/seo/sitemap.xml"
+        }
+        if (
+            path == "/seo/render"
+            and request.query_params.get("path")
+            == "/__ksn_invalid_probe__"
+        ):
+            allowed = True
+        if not allowed:
+            return Response(
+                content="Staging SEO test mode: route disabled",
+                status_code=503,
+                media_type="text/plain"
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
