@@ -14863,7 +14863,7 @@ async def sports_live_all(request: Request):
     cached=(snap or {}).get("data") if isinstance(snap,dict) else None
     age=time.time()-float((snap or {}).get("updated_at") or 0) if snap else 10**9
     if _LIVE_TASK is None or _LIVE_TASK.done():
-        if not (isinstance(cached,dict) and age<15):
+        if not (isinstance(cached,dict) and age<30):
             _LIVE_TASK=asyncio.create_task(_sports_live_compute())
     # v451: an empty partial snapshot is not a valid last-good result. It means
     # at least one sport failed, so "zero live games" was never established.
@@ -16388,7 +16388,7 @@ async def _v427_shared_cache_warmer():
                 async with httpx.AsyncClient(transport=transport,base_url="http://ksn.internal",timeout=60.0) as c:
                     await hit(c,"/sports/live")
             except Exception as exc: log.debug("v432 live warm: %s",exc)
-            await asyncio.sleep(15)
+            await asyncio.sleep(30)
     live_task = asyncio.create_task(live_loop(), name="ksn-live-cache-warm")
     try:
       while True:
