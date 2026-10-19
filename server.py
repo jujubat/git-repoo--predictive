@@ -1032,6 +1032,159 @@ def _record_api_football_call(path: str):
     by[path] = int(by.get(path, 0)) + 1
     _api_football_usage["lastCallAt"] = datetime.now(timezone.utc).isoformat()
 
+
+# v652: Persistent API-Football usage reservations.
+# Disabled by default until staging PostgreSQL tests pass.
+_KSN652_LEDGER_ENABLED = (
+    os.getenv("KSN_PROVIDER_LEDGER_ENABLED", "0") == "1"
+)
+_KSN652_TEAM_MISS_PER_MINUTE = max(
+    1, int(os.getenv("KSN_TEAM_MISS_PER_MINUTE", "12"))
+)
+_KSN652_SCHEMA_READY = False
+
+
+def _ksn652_ledger_reserve_sync(path: str) -> None:
+    global _KSN652_SCHEMA_READY
+
+    if not DATABASE_URL or psycopg2 is None:
+        raise HTTPException(
+            503, detail={"code": "KSN652_LEDGER_NOT_CONFIGURED"}
+        )
+
+    utc_now = datetime.now(timezone.utc)
+    daily_cap = max(0, KASISCORE_DAILY_BUDGET)
+    provider_limit = _quota_state.get("dailyLimit")
+
+    if isinstance(provider_limit, int) and provider_limit > 0:
+        daily_cap = min(
+            daily_cap,
+            max(0, provider_limit - KASISCORE_PROVIDER_RESERVE)
+        )
+
+    if daily_cap == 0:
+        raise HTTPException(
+            429, detail={"code": "KSN652_PROVIDER_BUDGET_EXHAUSTED"}
+        )
+
+    conn = None
+
+    try:
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=4)
+        need_schema = not _KSN652_SCHEMA_READY
+
+        with conn:
+            with conn.cursor() as cur:
+                if need_schema:
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(652001)"
+                    )
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS ksn_afoot_daily_v652 (
+                            utc_day DATE PRIMARY KEY,
+                            reserved_calls INTEGER NOT NULL
+                                CHECK (reserved_calls >= 0),
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                        )
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS ksn_afoot_minute_v652 (
+                            minute_utc TIMESTAMPTZ PRIMARY KEY,
+                            team_search_misses INTEGER NOT NULL
+                                CHECK (team_search_misses >= 0)
+                        )
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS ksn_afoot_paths_v652 (
+                            utc_day DATE NOT NULL,
+                            path TEXT NOT NULL,
+                            reserved_calls INTEGER NOT NULL
+                                CHECK (reserved_calls >= 0),
+                            PRIMARY KEY (utc_day, path)
+                        )
+                    """)
+
+                cur.execute("""
+                    INSERT INTO ksn_afoot_daily_v652
+                        (utc_day, reserved_calls)
+                    VALUES (%s, 1)
+                    ON CONFLICT (utc_day) DO UPDATE SET
+                        reserved_calls =
+                            ksn_afoot_daily_v652.reserved_calls + 1,
+                        updated_at = now()
+                    WHERE
+                        ksn_afoot_daily_v652.reserved_calls < %s
+                    RETURNING reserved_calls
+                """, (utc_now.date(), daily_cap))
+
+                if cur.fetchone() is None:
+                    raise HTTPException(
+                        429,
+                        detail={
+                            "code": "KSN652_PROVIDER_BUDGET_EXHAUSTED"
+                        }
+                    )
+
+                if path == "/teams":
+                    minute = utc_now.replace(
+                        second=0, microsecond=0
+                    )
+                    cur.execute("""
+                        INSERT INTO ksn_afoot_minute_v652
+                            (minute_utc, team_search_misses)
+                        VALUES (%s, 1)
+                        ON CONFLICT (minute_utc) DO UPDATE SET
+                            team_search_misses =
+                                ksn_afoot_minute_v652.team_search_misses + 1
+                        WHERE
+                            ksn_afoot_minute_v652.team_search_misses < %s
+                        RETURNING team_search_misses
+                    """, (
+                        minute, _KSN652_TEAM_MISS_PER_MINUTE
+                    ))
+
+                    if cur.fetchone() is None:
+                        raise HTTPException(
+                            429,
+                            detail={
+                                "code": "KSN652_TEAM_SEARCH_RATE_LIMIT"
+                            }
+                        )
+
+                cur.execute("""
+                    INSERT INTO ksn_afoot_paths_v652
+                        (utc_day, path, reserved_calls)
+                    VALUES (%s, %s, 1)
+                    ON CONFLICT (utc_day, path) DO UPDATE SET
+                        reserved_calls =
+                            ksn_afoot_paths_v652.reserved_calls + 1
+                """, (utc_now.date(), path))
+
+        if need_schema:
+            _KSN652_SCHEMA_READY = True
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error(
+            "v652 provider ledger unavailable (%s)",
+            type(exc).__name__
+        )
+        raise HTTPException(
+            503, detail={"code": "KSN652_LEDGER_UNAVAILABLE"}
+        ) from None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+async def _ksn652_ledger_reserve(path: str) -> None:
+    if _KSN652_LEDGER_ENABLED:
+        await asyncio.to_thread(
+            _ksn652_ledger_reserve_sync, path
+        )
+
+
 def _v448_api_football_provider_locked() -> bool:
     """True when background/non-essential API-Football work must use cache only."""
     _reset_api_football_usage_if_new_day()
@@ -2338,6 +2491,7 @@ async def _afoot_get_uncollapsed(path: str, params: dict, force_fresh: bool = Fa
             await asyncio.sleep(min(4, 2 ** attempt))
         try:
             _api_football_budget_guard(path)
+            await _ksn652_ledger_reserve(path)
             response = await client.get(path, params=params)
             _record_api_football_call(path)
             _record_quota(response, path)
