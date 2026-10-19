@@ -26,6 +26,49 @@
     Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
     Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
 
+# KasiScore server-rendered SEO routes
+[[redirects]]
+  from = "/today"
+  to = "/.netlify/functions/seo?path=/today"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/weekend"
+  to = "/.netlify/functions/seo?path=/weekend"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/football"
+  to = "/.netlify/functions/seo?path=/football"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/football/*"
+  to = "/.netlify/functions/seo?path=/football/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/team/*"
+  to = "/.netlify/functions/seo?path=/team/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/player/*"
+  to = "/.netlify/functions/seo?path=/player/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/match/*"
+  to = "/.netlify/functions/seo?path=/match/:splat"
+  status = 200
+  force = true
+
 # SPA catchall — serves index.html for every route including /
 # Must be last
 [[redirects]]
