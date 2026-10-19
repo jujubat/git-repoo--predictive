@@ -17643,6 +17643,7 @@ async def seo_pages(page_type: str = Query(""), sport: str = Query(""), limit: i
         rows = [r for r in rows if r["path"].startswith(prefix)]
     return {"count": len(rows[:limit]), "pages": rows[:limit], "generatedAt": datetime.now(timezone.utc).isoformat()}
 
+@app.get("/seo/render", response_class=HTMLResponse)
 @app.get("//render", response_class=HTMLResponse)
 async def seo_render(path: str = Query("/")):
     if not path.startswith("/"):
@@ -17704,6 +17705,7 @@ async def _seo_dynamic_rows() -> list[dict]:
     """SEO registry plus durable canonical team URLs; never call upstream APIs."""
     return list(_seo_registry_pages()) + _ksn_v483_sitemap_team_rows()
 
+@app.get("/seo/sitemap.xml", response_class=Response)
 @app.get("//sitemap.xml", response_class=Response)
 async def seo_sitemap():
     rows = await _seo_dynamic_rows()
