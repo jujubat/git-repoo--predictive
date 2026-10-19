@@ -11976,6 +11976,63 @@ async def _v141_existing_api_call(path, params):
             "error": str(exc.detail),
         }
 
+
+# v651: Render-native compatibility for legacy frontend football widgets.
+# Restricted operations; reuse the existing provider cache and quota controls.
+@app.get("/api-football/legacy")
+async def ksn_v651_legacy_football(
+    path: str = Query(...),
+    search: Optional[str] = Query(None),
+    date: Optional[str] = Query(None),
+    team: Optional[int] = Query(None),
+    season: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    league: Optional[int] = Query(None),
+):
+    if _ksn_staging_seo_test_mode():
+        raise HTTPException(503, "Provider disabled in staging SEO test mode")
+
+    provider_path = "/" + path.strip("/")
+
+    if provider_path not in {
+        "/teams", "/fixtures", "/players/topscorers"
+    }:
+        raise HTTPException(404, "Unsupported football operation")
+
+    if provider_path == "/teams":
+        query = (search or "").strip()
+        if not 2 <= len(query) <= 80:
+            raise HTTPException(422, "Team search must be 2-80 characters")
+        params = {"search": query}
+
+    elif provider_path == "/fixtures":
+        if date is None and team is None:
+            raise HTTPException(422, "Fixture date or team required")
+        if date is not None:
+            import datetime as _dt
+            try:
+                _dt.date.fromisoformat(date)
+            except ValueError:
+                raise HTTPException(422, "Invalid fixture date")
+        if team is not None and team <= 0:
+            raise HTTPException(422, "Invalid team ID")
+        params = {
+            k: v for k, v in {
+                "date": date, "team": team,
+                "season": season, "status": status,
+            }.items() if v is not None
+        }
+
+    else:
+        if league is None or season is None:
+            raise HTTPException(422, "League and season required")
+        if league <= 0:
+            raise HTTPException(422, "Invalid league ID")
+        params = {"league": league, "season": season}
+
+    return await _afoot_get(provider_path, params)
+
+
 async def _v141_cached_provider(path, params):
     key = path + ":" + json.dumps(
         params,
