@@ -1457,6 +1457,68 @@ def _ksn655_run_once_sync() -> dict:
         conn.close()
 
 
+async def _ksn655_retention_scheduler_loop():
+    """Run bounded retention daily at 03:15 UTC.
+
+    Disabled by default. Up to two hourly retries
+    after a failed, skipped, or contested run.
+    """
+    while True:
+        if not _ksn655_scheduler_allowed():
+            return
+
+        next_run = _ksn655_next_run_utc()
+        delay = max(
+            0.0,
+            (
+                next_run - datetime.now(timezone.utc)
+            ).total_seconds()
+        )
+
+        await asyncio.sleep(delay)
+
+        for attempt in range(3):
+            if not _ksn655_scheduler_allowed():
+                return
+
+            try:
+                result = await asyncio.to_thread(
+                    _ksn655_run_once_sync
+                )
+
+                status = result.get(
+                    "status", "unknown"
+                )
+
+                if status in (
+                    "completed",
+                    "already_completed",
+                    "disabled",
+                ):
+                    log.info(
+                        "v655 retention result=%s",
+                        status,
+                    )
+                    break
+
+                log.warning(
+                    "v655 retention skipped: %s",
+                    status,
+                )
+
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as exc:
+                log.error(
+                    "v655 retention error: %s",
+                    type(exc).__name__,
+                )
+
+            if attempt < 2:
+                await asyncio.sleep(3600)
+
+
 def _v448_api_football_provider_locked() -> bool:
     """True when background/non-essential API-Football work must use cache only."""
     _reset_api_football_usage_if_new_day()
@@ -4515,8 +4577,23 @@ async def lifespan(app: FastAPI):
     # guaranteed to execute when a custom lifespan handler is installed).
     shared_warmer_task = asyncio.create_task(_v427_shared_cache_warmer(), name="ksn-shared-cache-warmer")
     loop_watchdog_task = asyncio.create_task(_v502_event_loop_watchdog(), name="ksn-event-loop-watchdog")
+    retention_scheduler_task = (
+        asyncio.create_task(
+            _ksn655_retention_scheduler_loop(),
+            name="ksn-v655-ledger-retention",
+        )
+        if _ksn655_scheduler_allowed()
+        else None
+    )
 
     yield
+
+    if retention_scheduler_task is not None:
+        retention_scheduler_task.cancel()
+        await asyncio.gather(
+            retention_scheduler_task,
+            return_exceptions=True,
+        )
 
     loop_probe_stop.set()
     shared_warmer_task.cancel()
