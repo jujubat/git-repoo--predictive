@@ -1185,6 +1185,129 @@ async def _ksn652_ledger_reserve(path: str) -> None:
         )
 
 
+# v654: Bounded PostgreSQL ledger retention.
+# Separate from reservations; disabled until explicitly activated.
+_KSN654_RETENTION_ENABLED = (
+    os.getenv("KSN_LEDGER_RETENTION_ENABLED", "0") == "1"
+)
+
+
+def _ksn654_ledger_cleanup_sync(batch_size: int = 200) -> dict:
+    """Delete only expired v652 ledger rows, in bounded batches.
+
+    No provider HTTP calls. Does not create or alter ledger tables.
+    One PostgreSQL transaction; competing cleaners skip this pass.
+    """
+    if not DATABASE_URL or psycopg2 is None:
+        raise RuntimeError("KSN654_LEDGER_DB_NOT_CONFIGURED")
+
+    batch = min(max(int(batch_size), 1), 200)
+    conn = None
+
+    try:
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=4)
+
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_xact_lock(654001)"
+                )
+                locked = bool(cur.fetchone()[0])
+
+                if not locked:
+                    return {
+                        "skipped": "cleanup_lock_busy",
+                        "minute": 0,
+                        "daily": 0,
+                        "paths": 0,
+                    }
+
+                # Minute counters: preserve the last 48 hours.
+                cur.execute("""
+                    WITH candidates AS (
+                        SELECT minute_utc
+                        FROM ksn_afoot_minute_v652
+                        WHERE minute_utc <
+                              now() - INTERVAL '48 hours'
+                        ORDER BY minute_utc
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    DELETE FROM ksn_afoot_minute_v652 AS target
+                    USING candidates
+                    WHERE target.minute_utc =
+                          candidates.minute_utc
+                """, (batch,))
+                minute_deleted = cur.rowcount
+
+                # Daily reservations: preserve today and the
+                # preceding 90 complete UTC calendar days.
+                cur.execute("""
+                    WITH candidates AS (
+                        SELECT utc_day
+                        FROM ksn_afoot_daily_v652
+                        WHERE utc_day <
+                            (now() AT TIME ZONE 'UTC')::date - 90
+                        ORDER BY utc_day
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    DELETE FROM ksn_afoot_daily_v652 AS target
+                    USING candidates
+                    WHERE target.utc_day = candidates.utc_day
+                """, (batch,))
+                daily_deleted = cur.rowcount
+
+                # Per-path history follows the same UTC cutoff.
+                cur.execute("""
+                    WITH candidates AS (
+                        SELECT utc_day, path
+                        FROM ksn_afoot_paths_v652
+                        WHERE utc_day <
+                            (now() AT TIME ZONE 'UTC')::date - 90
+                        ORDER BY utc_day, path
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    DELETE FROM ksn_afoot_paths_v652 AS target
+                    USING candidates
+                    WHERE target.utc_day = candidates.utc_day
+                      AND target.path = candidates.path
+                """, (batch,))
+                paths_deleted = cur.rowcount
+
+        return {
+            "skipped": None,
+            "minute": minute_deleted,
+            "daily": daily_deleted,
+            "paths": paths_deleted,
+        }
+
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+async def _ksn654_ledger_cleanup(
+    batch_size: int = 200,
+) -> dict:
+    """Explicitly gated cleanup; never started automatically."""
+    if not (
+        _KSN652_LEDGER_ENABLED
+        and _KSN654_RETENTION_ENABLED
+    ):
+        return {
+            "skipped": "retention_disabled",
+            "minute": 0,
+            "daily": 0,
+            "paths": 0,
+        }
+
+    return await asyncio.to_thread(
+        _ksn654_ledger_cleanup_sync, batch_size
+    )
+
+
 def _v448_api_football_provider_locked() -> bool:
     """True when background/non-essential API-Football work must use cache only."""
     _reset_api_football_usage_if_new_day()
