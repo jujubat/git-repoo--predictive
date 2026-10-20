@@ -1308,6 +1308,217 @@ async def _ksn654_ledger_cleanup(
     )
 
 
+# v655: Controlled daily retention scheduler.
+# Disabled by default and blocked in staging SEO mode.
+_KSN655_SCHEDULER_ENABLED = (
+    os.getenv("KSN_LEDGER_SCHEDULER_ENABLED", "0") == "1"
+)
+
+_KSN655_RUN_HOUR_UTC = 3
+_KSN655_RUN_MINUTE_UTC = 15
+
+
+def _ksn655_scheduler_allowed() -> bool:
+    return (
+        _KSN655_SCHEDULER_ENABLED
+        and _KSN652_LEDGER_ENABLED
+        and _KSN654_RETENTION_ENABLED
+        and os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") != "1"
+    )
+
+
+def _ksn655_next_run_utc(now=None):
+    """Return the next scheduled 03:15 UTC maintenance time."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    if now.tzinfo is None:
+        raise ValueError("Timezone-aware datetime required")
+
+    utc_now = now.astimezone(timezone.utc)
+
+    next_run = utc_now.replace(
+        hour=_KSN655_RUN_HOUR_UTC,
+        minute=_KSN655_RUN_MINUTE_UTC,
+        second=0,
+        microsecond=0,
+    )
+
+    if next_run <= utc_now:
+        next_run += timedelta(days=1)
+
+    return next_run
+
+
+def _ksn655_run_once_sync() -> dict:
+    """Run one successful bounded retention pass per UTC day.
+
+    A session advisory lock serializes cooperating workers.
+    The completion journal prevents repeat runs after success.
+    Cleanup and journal writes use separate transactions.
+    """
+    if not _ksn655_scheduler_allowed():
+        return {"status": "disabled"}
+
+    if not DATABASE_URL or psycopg2 is None:
+        raise RuntimeError("KSN655_DATABASE_NOT_CONFIGURED")
+
+    conn = psycopg2.connect(
+        DATABASE_URL,
+        connect_timeout=4,
+    )
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(655001)"
+                )
+
+                if not bool(cur.fetchone()[0]):
+                    return {
+                        "status": "another_worker_running"
+                    }
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS
+                    ksn_afoot_retention_runs_v655 (
+                        utc_day DATE PRIMARY KEY,
+                        completed_at TIMESTAMPTZ NOT NULL
+                            DEFAULT now(),
+                        minute_deleted INTEGER NOT NULL,
+                        daily_deleted INTEGER NOT NULL,
+                        paths_deleted INTEGER NOT NULL
+                    )
+                """)
+
+                cur.execute(
+                    "SELECT (now() AT TIME ZONE 'UTC')::date"
+                )
+                utc_day = cur.fetchone()[0]
+
+                cur.execute("""
+                    SELECT 1
+                    FROM ksn_afoot_retention_runs_v655
+                    WHERE utc_day = %s
+                """, (utc_day,))
+
+                if cur.fetchone() is not None:
+                    return {
+                        "status": "already_completed",
+                        "utcDay": utc_day.isoformat(),
+                    }
+
+                # Existing v654 cleanup runs on its own
+                # database connection and transaction.
+                result = _ksn654_ledger_cleanup_sync(
+                    batch_size=200
+                )
+
+                if result.get("skipped") is not None:
+                    return {
+                        "status": "cleanup_skipped",
+                        "reason": result["skipped"],
+                    }
+
+                cur.execute("""
+                    INSERT INTO ksn_afoot_retention_runs_v655
+                        (
+                            utc_day,
+                            minute_deleted,
+                            daily_deleted,
+                            paths_deleted
+                        )
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (utc_day) DO NOTHING
+                    RETURNING utc_day
+                """, (
+                    utc_day,
+                    result["minute"],
+                    result["daily"],
+                    result["paths"],
+                ))
+
+                if cur.fetchone() is None:
+                    return {
+                        "status": "already_completed",
+                        "utcDay": utc_day.isoformat(),
+                    }
+
+                return {
+                    "status": "completed",
+                    "utcDay": utc_day.isoformat(),
+                    "minute": result["minute"],
+                    "daily": result["daily"],
+                    "paths": result["paths"],
+                }
+
+    finally:
+        conn.close()
+
+
+async def _ksn655_retention_scheduler_loop():
+    """Run bounded retention daily at 03:15 UTC.
+
+    Disabled by default. Up to two hourly retries
+    after a failed, skipped, or contested run.
+    """
+    while True:
+        if not _ksn655_scheduler_allowed():
+            return
+
+        next_run = _ksn655_next_run_utc()
+        delay = max(
+            0.0,
+            (
+                next_run - datetime.now(timezone.utc)
+            ).total_seconds()
+        )
+
+        await asyncio.sleep(delay)
+
+        for attempt in range(3):
+            if not _ksn655_scheduler_allowed():
+                return
+
+            try:
+                result = await asyncio.to_thread(
+                    _ksn655_run_once_sync
+                )
+
+                status = result.get(
+                    "status", "unknown"
+                )
+
+                if status in (
+                    "completed",
+                    "already_completed",
+                    "disabled",
+                ):
+                    log.info(
+                        "v655 retention result=%s",
+                        status,
+                    )
+                    break
+
+                log.warning(
+                    "v655 retention skipped: %s",
+                    status,
+                )
+
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as exc:
+                log.error(
+                    "v655 retention error: %s",
+                    type(exc).__name__,
+                )
+
+            if attempt < 2:
+                await asyncio.sleep(3600)
+
+
 def _v448_api_football_provider_locked() -> bool:
     """True when background/non-essential API-Football work must use cache only."""
     _reset_api_football_usage_if_new_day()
@@ -4366,8 +4577,23 @@ async def lifespan(app: FastAPI):
     # guaranteed to execute when a custom lifespan handler is installed).
     shared_warmer_task = asyncio.create_task(_v427_shared_cache_warmer(), name="ksn-shared-cache-warmer")
     loop_watchdog_task = asyncio.create_task(_v502_event_loop_watchdog(), name="ksn-event-loop-watchdog")
+    retention_scheduler_task = (
+        asyncio.create_task(
+            _ksn655_retention_scheduler_loop(),
+            name="ksn-v655-ledger-retention",
+        )
+        if _ksn655_scheduler_allowed()
+        else None
+    )
 
     yield
+
+    if retention_scheduler_task is not None:
+        retention_scheduler_task.cancel()
+        await asyncio.gather(
+            retention_scheduler_task,
+            return_exceptions=True,
+        )
 
     loop_probe_stop.set()
     shared_warmer_task.cancel()
