@@ -22336,44 +22336,45 @@ async def players_psl(season: int = Query(2025)):
         return {"players": [], "source": "API key not configured", "league": "PSL South Africa", "season": season}
     players: list = []
     page = 1
-    async with httpx.AsyncClient(timeout=30) as client:
-        while True:
-            try:
-                r = await client.get(f"{API_BASE}/players", params={"league": 288, "season": season, "page": page},
-                                     headers={"x-apisports-key": API_KEY})
-                _record_quota(r, "/players/psl")
-                data = r.json()
-                results = data.get("response", [])
-                if not results: break
-                for item in results:
-                    p = item.get("player", {})
-                    stats = item.get("statistics", [{}])[0] if item.get("statistics") else {}
-                    team = stats.get("team", {}).get("name", "")
-                    goals = stats.get("goals", {})
-                    passes = stats.get("passes", {})
-                    games = stats.get("games", {})
-                    players.append({
-                        "id": p.get("id"), "name": p.get("name", ""), "team": team,
-                        "position": games.get("position", ""),
-                        "appearances": games.get("appearences", 0) or 0,
-                        "goals": goals.get("total", 0) or 0,
-                        "assists": goals.get("assists", 0) or 0,
-                        "rating": float(games.get("rating", 0) or 0),
-                        "nationality": p.get("nationality", ""),
-                        "photo": p.get("photo", ""),
-                        "yellow": stats.get("cards", {}).get("yellow", 0) or 0,
-                        "red": stats.get("cards", {}).get("red", 0) or 0,
-                        "minutesPlayed": games.get("minutes", 0) or 0,
-                        "keyPasses": passes.get("key", 0) or 0,
-                        "shotsTotal": stats.get("shots", {}).get("total", 0) or 0,
-                        "dribbles": stats.get("dribbles", {}).get("success", 0) or 0,
-                    })
-                paging = data.get("paging", {})
-                if page >= paging.get("total", 1): break
-                page += 1
-                await asyncio.sleep(0.25)  # respect rate limit
-            except Exception as e:
-                log.warning(f"PSL players page {page}: {e}"); break
+    while True:
+        try:
+            data = await _afoot_get(
+                "/players",
+                {"league": 288, "season": season, "page": page}
+            )
+            results = data.get("response", [])
+            if not results: break
+            for item in results:
+                p = item.get("player", {})
+                stats = item.get("statistics", [{}])[0] if item.get("statistics") else {}
+                team = stats.get("team", {}).get("name", "")
+                goals = stats.get("goals", {})
+                passes = stats.get("passes", {})
+                games = stats.get("games", {})
+                players.append({
+                    "id": p.get("id"), "name": p.get("name", ""), "team": team,
+                    "position": games.get("position", ""),
+                    "appearances": games.get("appearences", 0) or 0,
+                    "goals": goals.get("total", 0) or 0,
+                    "assists": goals.get("assists", 0) or 0,
+                    "rating": float(games.get("rating", 0) or 0),
+                    "nationality": p.get("nationality", ""),
+                    "photo": p.get("photo", ""),
+                    "yellow": stats.get("cards", {}).get("yellow", 0) or 0,
+                    "red": stats.get("cards", {}).get("red", 0) or 0,
+                    "minutesPlayed": games.get("minutes", 0) or 0,
+                    "keyPasses": passes.get("key", 0) or 0,
+                    "shotsTotal": stats.get("shots", {}).get("total", 0) or 0,
+                    "dribbles": stats.get("dribbles", {}).get("success", 0) or 0,
+                })
+            paging = data.get("paging", {})
+            if page >= paging.get("total", 1): break
+            page += 1
+            await asyncio.sleep(0.25)  # respect rate limit
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.warning(f"PSL players page {page}: {e}"); break
     result = {"players": players, "count": len(players), "league": "PSL South Africa", "leagueId": 288, "season": season, "source": "API-Football"}
     PSL_PLAYER_CACHE[cache_key] = result
     PSL_PLAYER_CACHE_TS = time.time()
