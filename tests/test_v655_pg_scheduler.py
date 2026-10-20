@@ -113,6 +113,24 @@ run_once = namespace["_ksn655_run_once_sync"]
 
 admin = psycopg2.connect(url, connect_timeout=4)
 admin.autocommit = True
+
+# Verify the database independently of the Render
+# service name, before any schema or table mutation.
+try:
+    with admin.cursor() as cur:
+        cur.execute("SELECT current_database()")
+        actual_database_name = cur.fetchone()[0]
+
+    if "staging" not in actual_database_name.lower():
+        raise RuntimeError(
+            "STOP: connected PostgreSQL database "
+            "is not identified as staging"
+        )
+except BaseException:
+    admin.close()
+    raise
+
+print("PASS: staging database identity verified")
 created = False
 
 
