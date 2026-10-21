@@ -564,8 +564,8 @@ def _ksn_match_league_text(row: dict) -> str:
 def _ksn_league_priority_bucket(row: dict, visitor_country: str="") -> int:
     """Single competition priority for all public football feeds.
 
-    Big Five (0-4), UEFA Champions/Europa/Conference (5-7), Turkish
-    Super Lig (8), visitor-country leagues (9), remaining leagues (10).
+    Big Five (0-4), UEFA Champions/Europa (5-6), Turkish
+    Super Lig (7), visitor-country leagues (8), remaining leagues (9).
     League IDs are authoritative. A reused league name alone is never enough
     to identify a Big Five or UEFA competition.
     """
@@ -588,7 +588,7 @@ def _ksn_league_priority_bucket(row: dict, visitor_country: str="") -> int:
         lid = None
     # Do not allow an inconsistent name/country to override a known provider ID.
     verified = {39: 0, 140: 1, 78: 2, 135: 3, 61: 4,
-                2: 5, 3: 6, 848: 7, 203: 8}
+                2: 5, 3: 6, 848: 9, 203: 7}
     if lid in verified:
         return verified[lid]
     # If a provider supplies an unrecognised ID, do not reclassify that
@@ -604,21 +604,25 @@ def _ksn_league_priority_bucket(row: dict, visitor_country: str="") -> int:
         for rank, (nation, aliases) in enumerate(major):
             if country == nation and name in aliases:
                 return rank
-        if country in ("world", "europe", "international", "uefa"):
+        if country in ("world", "europe", "international", "uefa", "europe (uefa)"):
             uefa = {"uefa champions league": 5, "champions league": 5,
                     "uefa europa league": 6, "europa league": 6,
-                    "uefa europa conference league": 7,
-                    "uefa conference league": 7, "conference league": 7}
+                    "uefa europa conference league": 9,
+                    "uefa conference league": 9, "conference league": 9}
             if name in uefa:
                 return uefa[name]
         if country in ("turkey", "türkiye") and name in (
                 "super lig", "süper lig", "turkish super lig"):
-            return 8
+            return 7
     visitor = str(visitor_country or "").strip()
     visitor = _KSN_COUNTRY_NAMES.get(visitor.upper(), visitor.casefold())
-    if visitor and country == visitor:
-        return 9
-    return 10
+    domestic = lid in (288,235,233,88,71,128) or bool(re.search(
+        r"\b(league|liga|ligue|division|bundesliga|serie|série|championship|premiership|eredivisie|primera|superliga|süper lig|allsvenskan|eliteserien|ekstraklasa)\b", name))
+    excluded = bool(re.search(
+        r"\b(cup|copa|coupe|coppa|pokal|trophy|shield|supercup|friendly|friendlies|champions league|europa league|conference league|international)\b", name))
+    if visitor and country == visitor and domestic and not excluded:
+        return 8
+    return 9
 
 def _ksn_sort_football_rows(rows, visitor_country: str="", newest_first: bool=False):
     rows=list(rows or [])
@@ -9211,12 +9215,12 @@ async def sports_db_sync_player(player_id:int,season:int=Query(0,ge=0),force:int
 
 # Do not let a sports-cache database failure take down authentication, news,
 # health checks, or the rest of Kasi Sports News during application import.
-if SPORTS_DB_ENABLED:
+if SPORTS_DB_ENABLED and not _ksn_staging_seo_test_mode():
     try:
         _sports_db_init()
     except Exception as exc:
         SPORTS_DB_INIT_ERROR = f"{type(exc).__name__}: {exc}"
-        logger.exception("Sports database initialisation failed; continuing in degraded mode")
+        log.exception("Sports database initialisation failed; continuing in degraded mode")
 
 @app.get("/public-route/{kind}/{provider_id}")
 async def public_route(kind:str,provider_id:int,name:str=Query(""),response:Response=None):
@@ -18135,7 +18139,8 @@ def _init_growth_db():
         );
         """)
 
-_init_growth_db()
+if not _ksn_staging_seo_test_mode():
+    _init_growth_db()
 
 SEO_PAGE_TYPES = {
     "competition": {"priority": "0.9", "changefreq": "hourly"},
@@ -18294,7 +18299,7 @@ def _ksn_v483_sitemap_team_rows() -> list[dict]:
     Player URLs are intentionally excluded pending equivalent identity validation.
     """
     verified = {541: "Real Madrid", 1064: "Platense"}
-    if globals().get("SPORTS_DB_ENABLED", False):
+    if globals().get("SPORTS_DB_ENABLED", False) and not _ksn_staging_seo_test_mode():
         try:
             with _sports_db() as db:
                 records = db.execute(
@@ -23157,6 +23162,8 @@ def _ksn_v482_team_response(token: str):
 
 @app.middleware("http")
 async def ksn_v482_team_seo_guard(request: Request, call_next):
+    if _ksn_staging_seo_test_mode():
+        return await ksn_staging_seo_test_gate(request, call_next)
     match = re.fullmatch(r"/teams/([^/]+)/?", request.url.path)
     if request.method in ("GET", "HEAD") and match:
         try:
