@@ -5643,44 +5643,7 @@ function _updateLiveCornerCounts(matches) {
 }
 
 // ── API key settings in diagnostics area ──────────────────
-(function addApiKeyInput() {
-  // Render-only deployment: legacy Netlify proxy configuration intentionally disabled.
-  return;
-  const diagSec = document.getElementById('diagnostics');
-  if (!diagSec) return;
-  const div = document.createElement('div');
-  div.className = 'card';
-  div.style.marginBottom = '12px';
-  div.innerHTML = `<h2 style="margin:0 0 8px"> Netlify Proxy URL</h2>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Deploy <b>football-ai-proxy</b> to Netlify, then paste your site URL here. <a href="https://app.netlify.com" target="_blank" style="color:var(--accent)">Open Netlify →</a></div>
-    <div style="display:flex;gap:8px;margin-bottom:12px">
-      <input id="proxyUrlInput" placeholder="https://your-site-name.netlify.app" value="${PROXY_BASE}" style="flex:1">
-      <button onclick="saveProxyUrl()" class="primary">Save</button>
-    </div>
-    <div id="proxyUrlSaved" style="font-size:11px;color:var(--green);margin-bottom:8px;display:none"> Proxy URL saved — refreshing live scores…</div>
-    <div style="font-size:11px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;line-height:1.8">
-      <b style="color:var(--text)">Setup steps:</b><br>
-      1. Download the <b>football-ai-proxy</b> zip from this dashboard<br>
-      2. Go to <a href="https://app.netlify.com" target="_blank" style="color:var(--accent)">app.netlify.com</a> → Add new site → Deploy manually → drag the folder<br>
-      3. Site config → Environment variables → add <code style="color:var(--accent)">AFOOT_API_KEY</code> = your Football data key<br>
-      4. Deploys → Trigger deploy → then paste your site URL above
-    </div>`;
-  diagSec.insertBefore(div, diagSec.firstChild);
-  window.saveApiKey = function() {
-    const v = document.getElementById('apiKeyInput')?.value?.trim();
-    /* provider credentials are never stored in the browser */
-    const s = document.getElementById('apiKeySaved');
-    if (s) { s.style.display = 'block'; setTimeout(()=>s.style.display='none', 3000); }
-    liveWidgetRefresh();
-  };
-  window.saveProxyUrl = function() {
-    const v = document.getElementById('proxyUrlInput')?.value?.trim();
-    if (v) { localStorage.setItem('faiProxyUrl', v); PROXY_BASE = v; }
-    const s = document.getElementById('proxyUrlSaved');
-    if (s) { s.style.display = 'block'; setTimeout(()=>s.style.display='none', 3000); }
-    liveWidgetRefresh();
-  };
-})();
+
 
 // v185: provider API keys are server-side only; no browser/localStorage API key seeding.
 
@@ -6701,7 +6664,7 @@ window.loadExpectedScorers = async function() {
     const today   = new Date().toISOString().slice(0,10);
 
     // Get today's fixtures first (same call as main data)
-    const fixRes = await fetch(`${PROXY}/.netlify/functions/football?path=/fixtures&date=${today}`);
+    const fixRes = await fetch(`${window.location.origin}/api-football/legacy?path=/fixtures&date=${today}`);
     const fixData = await fixRes.json();
     let fixtures = (fixData.response || []).filter(f => f.fixture.status.short !== 'FT');
 
@@ -6723,7 +6686,7 @@ window.loadExpectedScorers = async function() {
       const [lgId, season] = key.split('|');
       try {
         // Current season top scorers
-        const sc = await fetch(`${PROXY}/.netlify/functions/football?path=/players/topscorers&league=${lgId}&season=${season}`);
+        const sc = await fetch(`${window.location.origin}/api-football/legacy?path=/players/topscorers&league=${lgId}&season=${season}`);
         const sd = await sc.json();
         scorersMap[lgId] = (sd.response || []).slice(0, 15);
       } catch(_) {}

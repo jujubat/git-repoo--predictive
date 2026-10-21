@@ -3,7 +3,7 @@
   ================================================================
   Replace: MERCHANT_ID, MERCHANT_KEY with values from your PayFast dashboard
   The PAYFAST_PASSPHRASE must match what's in your .env file:
-    PAYFAST_PASSPHRASE=rliCpiVQauDarXXr5z8mrTv-
+    PAYFAST_PASSPHRASE=<CONFIGURE_IN_RENDER>
 
   How it works:
     1. User clicks "Subscribe" → this form POSTs to PayFast
@@ -18,9 +18,9 @@
   <input type="hidden" name="merchant_key"   value="YOUR_MERCHANT_KEY">
 
   <!-- URLs -->
-  <input type="hidden" name="return_url"     value="https://kasiscore-sports-intelligence.com/?subscribed=1">
-  <input type="hidden" name="cancel_url"     value="https://kasiscore-sports-intelligence.com/?cancelled=1">
-  <input type="hidden" name="notify_url"     value="https://kasiscore-sports-intelligence.com/webhooks/payfast">
+  <input type="hidden" name="return_url"     value="https://kasilivescore.com/?subscribed=1">
+  <input type="hidden" name="cancel_url"     value="https://kasilivescore.com/?cancelled=1">
+  <input type="hidden" name="notify_url"     value="https://kasilivescore.com/webhooks/payfast">
 
   <!-- Product -->
   <input type="hidden" name="item_name"      value="KasiScore Pro — Monthly">
@@ -53,9 +53,9 @@
 <form action="https://www.payfast.co.za/eng/process" method="POST" id="kasiscore-lifetime-form">
   <input type="hidden" name="merchant_id"    value="YOUR_MERCHANT_ID">
   <input type="hidden" name="merchant_key"   value="YOUR_MERCHANT_KEY">
-  <input type="hidden" name="return_url"     value="https://kasiscore-sports-intelligence.com/?subscribed=1">
-  <input type="hidden" name="cancel_url"     value="https://kasiscore-sports-intelligence.com/?cancelled=1">
-  <input type="hidden" name="notify_url"     value="https://kasiscore-sports-intelligence.com/webhooks/payfast">
+  <input type="hidden" name="return_url"     value="https://kasilivescore.com/?subscribed=1">
+  <input type="hidden" name="cancel_url"     value="https://kasilivescore.com/?cancelled=1">
+  <input type="hidden" name="notify_url"     value="https://kasilivescore.com/webhooks/payfast">
   <input type="hidden" name="item_name"      value="KasiScore Pro — Lifetime">
   <input type="hidden" name="amount"         value="799.00">
   <input type="hidden" name="item_description" value="KasiScore Pro lifetime access — once-off payment">
@@ -77,8 +77,8 @@
 
   PAYFAST MERCHANT DASHBOARD SETTINGS:
     Profile → Edit profile:
-      Passphrase: rliCpiVQauDarXXr5z8mrTv-   ← must match PAYFAST_PASSPHRASE in .env
-      Notify URL: https://kasiscore-sports-intelligence.com/webhooks/payfast
+      Passphrase: <CONFIGURE_PRIVATELY>
+      Notify URL: https://kasilivescore.com/webhooks/payfast
 
   TESTING:
     Use PayFast sandbox: https://sandbox.payfast.co.za/eng/process

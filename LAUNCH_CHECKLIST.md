@@ -10,8 +10,8 @@
 | VAPID public key | `BBLCMqeJI_ymGm7renKr945uZgUUeqT4YmVHyb95BbYv1QsdXhh6Aa9bZPOrQj_ggV3oFhyScQNngvhHHdtzO4s` |
 | VAPID private key | In `.env` as `VAPID_PRIVATE_KEY` |
 | AUTH_SECRET | In `.env` — random 48-char secret |
-| AUTH_ADMIN_KEY | In `.env` — `d-6cSYq_42eTdZ7obpsnZKXbRl47fNiR` |
-| PAYFAST_PASSPHRASE | In `.env` — `rliCpiVQauDarXXr5z8mrTv-` |
+| AUTH_ADMIN_KEY | Configure securely in Render; rotate any previously exposed value |
+| PAYFAST_PASSPHRASE | Configure securely in Render and PayFast |
 | ENV variable naming | Fixed (`BACKENDURL`) |
 | Rate limiting | Enabled at 30 req/min default |
 | Push notification handler | Service worker updated |
@@ -19,7 +19,7 @@
 | PSL player stats | `/players/psl` (league ID 288) |
 | Cricket Intel tab | Full UI + backend wiring |
 | Tennis Intel tab | Full UI + ATP/WTA rankings |
-| SSR routes | rugby, cricket, tennis → Netlify SSR function |
+| SSR routes | FastAPI pages served directly by Render |
 | Payment gate | No free unlock — shows contact email instead |
 | Distribution queue | Real WhatsApp/Telegram/X/Facebook share sheet |
 | Admin login | Server-auth JWT (no hardcoded credentials) |
@@ -42,34 +42,32 @@ python setup.py --server http://localhost:8000
 This creates your admin account, runs lottery sync, and validates all endpoints.
 
 **Admin credentials after setup:**
-- Email: `jbatuma@yahoo.com`
-- Password: `KasiScore@2024!`
+- Email: Your configured administrator email
+- Password: Configure securely; never commit to Git
 - ⚠️ Change password after first login
 
 ### 3. Configure PayFast (10 minutes)
 
 1. Log in to [payfast.co.za](https://www.payfast.co.za) → Settings → Edit profile
-2. Set **Passphrase** = `rliCpiVQauDarXXr5z8mrTv-`
-3. Set **Notify URL** = `https://kasiscore-sports-intelligence.com/webhooks/payfast`
+2. Configure a new private passphrase in PayFast and Render
+3. Set **Notify URL** = `https://kasilivescore.com/webhooks/payfast`
 4. Copy your **Merchant ID** and **Merchant Key**
 5. Fill them into `payfast_form_snippet.html` and deploy that as your checkout page
 6. In KasiScore admin → **Monetise tab** → paste your PayFast checkout URLs → Save
 
-### 4. Deploy frontend to Netlify
-```bash
-# In Netlify dashboard:
-# 1. Connect your GitHub repo OR drag-and-drop the kasiscore_v162 folder
-# 2. Set environment variable:
-#    BACKENDURL = https://your-backend.com   (your Railway/Render server URL)
-# 3. Deploy
-```
-netlify.toml is pre-configured — no build command needed, just static deploy.
+### 4. Deploy through Render and Cloudflare
+
+- GitHub supplies the application source code.
+- Render serves the FastAPI backend, frontend and SEO pages.
+- Cloudflare manages DNS, TLS, security and caching.
+- Production domain: https://kasilivescore.com.
+- Test staging before deploying production.
 
 ### 5. (Optional) Set up Stripe
 1. [Stripe Dashboard](https://dashboard.stripe.com) → Products → Create monthly + lifetime prices
 2. Get Payment Links for each → paste into **Monetise tab** in the admin panel
 3. Developers → Webhooks → Add endpoint:
-   - URL: `https://kasiscore-sports-intelligence.com/webhooks/stripe`
+   - URL: `https://kasilivescore.com/webhooks/stripe`
    - Events: `checkout.session.completed`, `customer.subscription.deleted`
 4. Copy signing secret → paste into `.env` as `STRIPE_WEBHOOK_SECRET` → restart server
 

@@ -1,3 +1,5 @@
+# KasiScore v647: Big Five bounded staging audit/repair.
+# KasiScore v645: verified team squads, truthful completeness and staging repair diagnostics
 import io
 import csv
 import threading
@@ -562,8 +564,8 @@ def _ksn_match_league_text(row: dict) -> str:
 def _ksn_league_priority_bucket(row: dict, visitor_country: str="") -> int:
     """Single competition priority for all public football feeds.
 
-    Big Five (0-4), UEFA Champions/Europa/Conference (5-7), Turkish
-    Super Lig (8), visitor-country leagues (9), remaining leagues (10).
+    Big Five (0-4), UEFA Champions/Europa (5-6), Turkish
+    Super Lig (7), visitor-country leagues (8), remaining leagues (9).
     League IDs are authoritative. A reused league name alone is never enough
     to identify a Big Five or UEFA competition.
     """
@@ -586,7 +588,7 @@ def _ksn_league_priority_bucket(row: dict, visitor_country: str="") -> int:
         lid = None
     # Do not allow an inconsistent name/country to override a known provider ID.
     verified = {39: 0, 140: 1, 78: 2, 135: 3, 61: 4,
-                2: 5, 3: 6, 848: 7, 203: 8}
+                2: 5, 3: 6, 848: 9, 203: 7}
     if lid in verified:
         return verified[lid]
     # If a provider supplies an unrecognised ID, do not reclassify that
@@ -602,21 +604,25 @@ def _ksn_league_priority_bucket(row: dict, visitor_country: str="") -> int:
         for rank, (nation, aliases) in enumerate(major):
             if country == nation and name in aliases:
                 return rank
-        if country in ("world", "europe", "international", "uefa"):
+        if country in ("world", "europe", "international", "uefa", "europe (uefa)"):
             uefa = {"uefa champions league": 5, "champions league": 5,
                     "uefa europa league": 6, "europa league": 6,
-                    "uefa europa conference league": 7,
-                    "uefa conference league": 7, "conference league": 7}
+                    "uefa europa conference league": 9,
+                    "uefa conference league": 9, "conference league": 9}
             if name in uefa:
                 return uefa[name]
         if country in ("turkey", "türkiye") and name in (
                 "super lig", "süper lig", "turkish super lig"):
-            return 8
+            return 7
     visitor = str(visitor_country or "").strip()
     visitor = _KSN_COUNTRY_NAMES.get(visitor.upper(), visitor.casefold())
-    if visitor and country == visitor:
-        return 9
-    return 10
+    domestic = lid in (288,235,233,88,71,128) or bool(re.search(
+        r"\b(league|liga|ligue|division|bundesliga|serie|série|championship|premiership|eredivisie|primera|superliga|süper lig|allsvenskan|eliteserien|ekstraklasa)\b", name))
+    excluded = bool(re.search(
+        r"\b(cup|copa|coupe|coppa|pokal|trophy|shield|supercup|friendly|friendlies|champions league|europa league|conference league|international)\b", name))
+    if visitor and country == visitor and domestic and not excluded:
+        return 8
+    return 9
 
 def _ksn_sort_football_rows(rows, visitor_country: str="", newest_first: bool=False):
     rows=list(rows or [])
@@ -1030,6 +1036,493 @@ def _record_api_football_call(path: str):
     by[path] = int(by.get(path, 0)) + 1
     _api_football_usage["lastCallAt"] = datetime.now(timezone.utc).isoformat()
 
+
+# v652: Persistent API-Football usage reservations.
+# Disabled by default until staging PostgreSQL tests pass.
+_KSN652_LEDGER_ENABLED = (
+    os.getenv("KSN_PROVIDER_LEDGER_ENABLED", "0") == "1"
+)
+_KSN652_TEAM_MISS_PER_MINUTE = max(
+    1, int(os.getenv("KSN_TEAM_MISS_PER_MINUTE", "12"))
+)
+_KSN652_SCHEMA_READY = False
+
+
+def _ksn652_ledger_reserve_sync(path: str) -> None:
+    global _KSN652_SCHEMA_READY
+
+    if not DATABASE_URL or psycopg2 is None:
+        raise HTTPException(
+            503, detail={"code": "KSN652_LEDGER_NOT_CONFIGURED"}
+        )
+
+    utc_now = datetime.now(timezone.utc)
+    daily_cap = max(0, KASISCORE_DAILY_BUDGET)
+    provider_limit = _quota_state.get("dailyLimit")
+
+    if isinstance(provider_limit, int) and provider_limit > 0:
+        daily_cap = min(
+            daily_cap,
+            max(0, provider_limit - KASISCORE_PROVIDER_RESERVE)
+        )
+
+    if daily_cap == 0:
+        raise HTTPException(
+            429, detail={"code": "KSN652_PROVIDER_BUDGET_EXHAUSTED"}
+        )
+
+    conn = None
+
+    try:
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=4)
+        need_schema = not _KSN652_SCHEMA_READY
+
+        with conn:
+            with conn.cursor() as cur:
+                if need_schema:
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(652001)"
+                    )
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS ksn_afoot_daily_v652 (
+                            utc_day DATE PRIMARY KEY,
+                            reserved_calls INTEGER NOT NULL
+                                CHECK (reserved_calls >= 0),
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                        )
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS ksn_afoot_minute_v652 (
+                            minute_utc TIMESTAMPTZ PRIMARY KEY,
+                            team_search_misses INTEGER NOT NULL
+                                CHECK (team_search_misses >= 0)
+                        )
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS ksn_afoot_paths_v652 (
+                            utc_day DATE NOT NULL,
+                            path TEXT NOT NULL,
+                            reserved_calls INTEGER NOT NULL
+                                CHECK (reserved_calls >= 0),
+                            PRIMARY KEY (utc_day, path)
+                        )
+                    """)
+
+                cur.execute("""
+                    INSERT INTO ksn_afoot_daily_v652
+                        (utc_day, reserved_calls)
+                    VALUES (%s, 1)
+                    ON CONFLICT (utc_day) DO UPDATE SET
+                        reserved_calls =
+                            ksn_afoot_daily_v652.reserved_calls + 1,
+                        updated_at = now()
+                    WHERE
+                        ksn_afoot_daily_v652.reserved_calls < %s
+                    RETURNING reserved_calls
+                """, (utc_now.date(), daily_cap))
+
+                if cur.fetchone() is None:
+                    raise HTTPException(
+                        429,
+                        detail={
+                            "code": "KSN652_PROVIDER_BUDGET_EXHAUSTED"
+                        }
+                    )
+
+                if path == "/teams":
+                    minute = utc_now.replace(
+                        second=0, microsecond=0
+                    )
+                    cur.execute("""
+                        INSERT INTO ksn_afoot_minute_v652
+                            (minute_utc, team_search_misses)
+                        VALUES (%s, 1)
+                        ON CONFLICT (minute_utc) DO UPDATE SET
+                            team_search_misses =
+                                ksn_afoot_minute_v652.team_search_misses + 1
+                        WHERE
+                            ksn_afoot_minute_v652.team_search_misses < %s
+                        RETURNING team_search_misses
+                    """, (
+                        minute, _KSN652_TEAM_MISS_PER_MINUTE
+                    ))
+
+                    if cur.fetchone() is None:
+                        raise HTTPException(
+                            429,
+                            detail={
+                                "code": "KSN652_TEAM_SEARCH_RATE_LIMIT"
+                            }
+                        )
+
+                cur.execute("""
+                    INSERT INTO ksn_afoot_paths_v652
+                        (utc_day, path, reserved_calls)
+                    VALUES (%s, %s, 1)
+                    ON CONFLICT (utc_day, path) DO UPDATE SET
+                        reserved_calls =
+                            ksn_afoot_paths_v652.reserved_calls + 1
+                """, (utc_now.date(), path))
+
+        if need_schema:
+            _KSN652_SCHEMA_READY = True
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error(
+            "v652 provider ledger unavailable (%s)",
+            type(exc).__name__
+        )
+        raise HTTPException(
+            503, detail={"code": "KSN652_LEDGER_UNAVAILABLE"}
+        ) from None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+async def _ksn652_ledger_reserve(path: str) -> None:
+    if _KSN652_LEDGER_ENABLED:
+        await asyncio.to_thread(
+            _ksn652_ledger_reserve_sync, path
+        )
+
+
+# v654: Bounded PostgreSQL ledger retention.
+# Separate from reservations; disabled until explicitly activated.
+_KSN654_RETENTION_ENABLED = (
+    os.getenv("KSN_LEDGER_RETENTION_ENABLED", "0") == "1"
+)
+
+
+def _ksn654_ledger_cleanup_sync(batch_size: int = 200) -> dict:
+    """Delete only expired v652 ledger rows, in bounded batches.
+
+    No provider HTTP calls. Does not create or alter ledger tables.
+    One PostgreSQL transaction; competing cleaners skip this pass.
+    """
+    if not DATABASE_URL or psycopg2 is None:
+        raise RuntimeError("KSN654_LEDGER_DB_NOT_CONFIGURED")
+
+    batch = min(max(int(batch_size), 1), 200)
+    conn = None
+
+    try:
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=4)
+
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_xact_lock(654001)"
+                )
+                locked = bool(cur.fetchone()[0])
+
+                if not locked:
+                    return {
+                        "skipped": "cleanup_lock_busy",
+                        "minute": 0,
+                        "daily": 0,
+                        "paths": 0,
+                    }
+
+                # Minute counters: preserve the last 48 hours.
+                cur.execute("""
+                    WITH candidates AS (
+                        SELECT minute_utc
+                        FROM ksn_afoot_minute_v652
+                        WHERE minute_utc <
+                              now() - INTERVAL '48 hours'
+                        ORDER BY minute_utc
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    DELETE FROM ksn_afoot_minute_v652 AS target
+                    USING candidates
+                    WHERE target.minute_utc =
+                          candidates.minute_utc
+                """, (batch,))
+                minute_deleted = cur.rowcount
+
+                # Daily reservations: preserve today and the
+                # preceding 90 complete UTC calendar days.
+                cur.execute("""
+                    WITH candidates AS (
+                        SELECT utc_day
+                        FROM ksn_afoot_daily_v652
+                        WHERE utc_day <
+                            (now() AT TIME ZONE 'UTC')::date - 90
+                        ORDER BY utc_day
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    DELETE FROM ksn_afoot_daily_v652 AS target
+                    USING candidates
+                    WHERE target.utc_day = candidates.utc_day
+                """, (batch,))
+                daily_deleted = cur.rowcount
+
+                # Per-path history follows the same UTC cutoff.
+                cur.execute("""
+                    WITH candidates AS (
+                        SELECT utc_day, path
+                        FROM ksn_afoot_paths_v652
+                        WHERE utc_day <
+                            (now() AT TIME ZONE 'UTC')::date - 90
+                        ORDER BY utc_day, path
+                        LIMIT %s
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    DELETE FROM ksn_afoot_paths_v652 AS target
+                    USING candidates
+                    WHERE target.utc_day = candidates.utc_day
+                      AND target.path = candidates.path
+                """, (batch,))
+                paths_deleted = cur.rowcount
+
+        return {
+            "skipped": None,
+            "minute": minute_deleted,
+            "daily": daily_deleted,
+            "paths": paths_deleted,
+        }
+
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+async def _ksn654_ledger_cleanup(
+    batch_size: int = 200,
+) -> dict:
+    """Explicitly gated cleanup; never started automatically."""
+    if not (
+        _KSN652_LEDGER_ENABLED
+        and _KSN654_RETENTION_ENABLED
+    ):
+        return {
+            "skipped": "retention_disabled",
+            "minute": 0,
+            "daily": 0,
+            "paths": 0,
+        }
+
+    return await asyncio.to_thread(
+        _ksn654_ledger_cleanup_sync, batch_size
+    )
+
+
+# v655: Controlled daily retention scheduler.
+# Disabled by default and blocked in staging SEO mode.
+_KSN655_SCHEDULER_ENABLED = (
+    os.getenv("KSN_LEDGER_SCHEDULER_ENABLED", "0") == "1"
+)
+
+_KSN655_RUN_HOUR_UTC = 3
+_KSN655_RUN_MINUTE_UTC = 15
+
+
+def _ksn655_scheduler_allowed() -> bool:
+    return (
+        _KSN655_SCHEDULER_ENABLED
+        and _KSN652_LEDGER_ENABLED
+        and _KSN654_RETENTION_ENABLED
+        and os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") != "1"
+    )
+
+
+def _ksn655_next_run_utc(now=None):
+    """Return the next scheduled 03:15 UTC maintenance time."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    if now.tzinfo is None:
+        raise ValueError("Timezone-aware datetime required")
+
+    utc_now = now.astimezone(timezone.utc)
+
+    next_run = utc_now.replace(
+        hour=_KSN655_RUN_HOUR_UTC,
+        minute=_KSN655_RUN_MINUTE_UTC,
+        second=0,
+        microsecond=0,
+    )
+
+    if next_run <= utc_now:
+        next_run += timedelta(days=1)
+
+    return next_run
+
+
+def _ksn655_run_once_sync() -> dict:
+    """Run one successful bounded retention pass per UTC day.
+
+    A session advisory lock serializes cooperating workers.
+    The completion journal prevents repeat runs after success.
+    Cleanup and journal writes use separate transactions.
+    """
+    if not _ksn655_scheduler_allowed():
+        return {"status": "disabled"}
+
+    if not DATABASE_URL or psycopg2 is None:
+        raise RuntimeError("KSN655_DATABASE_NOT_CONFIGURED")
+
+    conn = psycopg2.connect(
+        DATABASE_URL,
+        connect_timeout=4,
+    )
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(655001)"
+                )
+
+                if not bool(cur.fetchone()[0]):
+                    return {
+                        "status": "another_worker_running"
+                    }
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS
+                    ksn_afoot_retention_runs_v655 (
+                        utc_day DATE PRIMARY KEY,
+                        completed_at TIMESTAMPTZ NOT NULL
+                            DEFAULT now(),
+                        minute_deleted INTEGER NOT NULL,
+                        daily_deleted INTEGER NOT NULL,
+                        paths_deleted INTEGER NOT NULL
+                    )
+                """)
+
+                cur.execute(
+                    "SELECT (now() AT TIME ZONE 'UTC')::date"
+                )
+                utc_day = cur.fetchone()[0]
+
+                cur.execute("""
+                    SELECT 1
+                    FROM ksn_afoot_retention_runs_v655
+                    WHERE utc_day = %s
+                """, (utc_day,))
+
+                if cur.fetchone() is not None:
+                    return {
+                        "status": "already_completed",
+                        "utcDay": utc_day.isoformat(),
+                    }
+
+                # Existing v654 cleanup runs on its own
+                # database connection and transaction.
+                result = _ksn654_ledger_cleanup_sync(
+                    batch_size=200
+                )
+
+                if result.get("skipped") is not None:
+                    return {
+                        "status": "cleanup_skipped",
+                        "reason": result["skipped"],
+                    }
+
+                cur.execute("""
+                    INSERT INTO ksn_afoot_retention_runs_v655
+                        (
+                            utc_day,
+                            minute_deleted,
+                            daily_deleted,
+                            paths_deleted
+                        )
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (utc_day) DO NOTHING
+                    RETURNING utc_day
+                """, (
+                    utc_day,
+                    result["minute"],
+                    result["daily"],
+                    result["paths"],
+                ))
+
+                if cur.fetchone() is None:
+                    return {
+                        "status": "already_completed",
+                        "utcDay": utc_day.isoformat(),
+                    }
+
+                return {
+                    "status": "completed",
+                    "utcDay": utc_day.isoformat(),
+                    "minute": result["minute"],
+                    "daily": result["daily"],
+                    "paths": result["paths"],
+                }
+
+    finally:
+        conn.close()
+
+
+async def _ksn655_retention_scheduler_loop():
+    """Run bounded retention daily at 03:15 UTC.
+
+    Disabled by default. Up to two hourly retries
+    after a failed, skipped, or contested run.
+    """
+    while True:
+        if not _ksn655_scheduler_allowed():
+            return
+
+        next_run = _ksn655_next_run_utc()
+        delay = max(
+            0.0,
+            (
+                next_run - datetime.now(timezone.utc)
+            ).total_seconds()
+        )
+
+        await asyncio.sleep(delay)
+
+        for attempt in range(3):
+            if not _ksn655_scheduler_allowed():
+                return
+
+            try:
+                result = await asyncio.to_thread(
+                    _ksn655_run_once_sync
+                )
+
+                status = result.get(
+                    "status", "unknown"
+                )
+
+                if status in (
+                    "completed",
+                    "already_completed",
+                    "disabled",
+                ):
+                    log.info(
+                        "v655 retention result=%s",
+                        status,
+                    )
+                    break
+
+                log.warning(
+                    "v655 retention skipped: %s",
+                    status,
+                )
+
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as exc:
+                log.error(
+                    "v655 retention error: %s",
+                    type(exc).__name__,
+                )
+
+            if attempt < 2:
+                await asyncio.sleep(3600)
+
+
 def _v448_api_football_provider_locked() -> bool:
     """True when background/non-essential API-Football work must use cache only."""
     _reset_api_football_usage_if_new_day()
@@ -1040,6 +1533,14 @@ def _v448_api_football_provider_locked() -> bool:
 
 
 def _api_football_budget_guard(path: str):
+    if os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1":
+        raise HTTPException(
+            503,
+            detail={
+                "code": "STAGING_SEO_TEST_PROVIDER_DISABLED",
+                "message": "API-Football disabled during staging SEO tests."
+            }
+        )
     _reset_api_football_usage_if_new_day()
     remaining = _quota_state.get("dailyRemaining")
     limit = _quota_state.get("dailyLimit") or 7500
@@ -2328,6 +2829,7 @@ async def _afoot_get_uncollapsed(path: str, params: dict, force_fresh: bool = Fa
             await asyncio.sleep(min(4, 2 ** attempt))
         try:
             _api_football_budget_guard(path)
+            await _ksn652_ledger_reserve(path)
             response = await client.get(path, params=params)
             _record_api_football_call(path)
             _record_quota(response, path)
@@ -4015,8 +4517,28 @@ async def _background_prediction_refresh():
         except Exception as exc:
             log.warning("Background prediction refresh error: %s", exc)
 
+def _ksn_staging_seo_test_mode():
+    return os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1"
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    if _ksn_staging_seo_test_mode():
+        identity = " ".join(
+            os.getenv(k, "") for k in (
+                "RENDER_SERVICE_NAME", "RENDER_EXTERNAL_URL", "KSN_ENV"
+            )
+        ).lower()
+        if "staging" not in identity:
+            raise RuntimeError(
+                "SEO test mode is restricted to a staging service."
+            )
+        log.warning(
+            "STAGING SEO TEST MODE: all startup background jobs disabled"
+        )
+        yield
+        return
+
     v141_learning.init()
     log.info("KasiScore v182 starting on port %d", PORT)
     log.info("API-Football key: %s", "SET" if API_KEY else "NOT SET")
@@ -4061,8 +4583,23 @@ async def lifespan(app: FastAPI):
     # guaranteed to execute when a custom lifespan handler is installed).
     shared_warmer_task = asyncio.create_task(_v427_shared_cache_warmer(), name="ksn-shared-cache-warmer")
     loop_watchdog_task = asyncio.create_task(_v502_event_loop_watchdog(), name="ksn-event-loop-watchdog")
+    retention_scheduler_task = (
+        asyncio.create_task(
+            _ksn655_retention_scheduler_loop(),
+            name="ksn-v655-ledger-retention",
+        )
+        if _ksn655_scheduler_allowed()
+        else None
+    )
 
     yield
+
+    if retention_scheduler_task is not None:
+        retention_scheduler_task.cancel()
+        await asyncio.gather(
+            retention_scheduler_task,
+            return_exceptions=True,
+        )
 
     loop_probe_stop.set()
     shared_warmer_task.cancel()
@@ -4097,7 +4634,7 @@ async def lifespan(app: FastAPI):
 # Kasi Sports News v226 International SEO & Discoverability
 KASI_PUBLIC_ORIGIN = "https://kasilivescore.com"
 
-KSN_BUILD_VERSION = "v634-v625-arsenal-reference-league-validation"
+KSN_BUILD_VERSION = "v656-production-integration"
 
 app = FastAPI(
     title="Football Server",
@@ -4493,6 +5030,10 @@ def kasi_social_preview_image():
 @app.get("/robots.txt", include_in_schema=False)
 def google_robots_txt():
     base = KASI_PUBLIC_ORIGIN
+    # Never advertise production sitemaps from a staging service.
+    staging = (os.getenv("RENDER_SERVICE_NAME", "") + " " + os.getenv("RENDER_EXTERNAL_URL", "") + " " + os.getenv("KSN_ENV", "")).lower()
+    if "staging" in staging:
+        return Response(content="User-agent: *\nDisallow: /\n", media_type="text/plain; charset=utf-8", headers={"Cache-Control":"no-store", "X-Robots-Tag":"noindex, nofollow, noarchive"})
     body = (
         "User-agent: *\n"
         "Allow: /\n"
@@ -4536,6 +5077,29 @@ async def google_sitemap_xml():
         body.append(f"<url><loc>{_xml_safe(base + path)}</loc></url>")
     body.append("</urlset>")
     return Response(content="".join(body), media_type="application/xml; charset=utf-8", headers={"Cache-Control":"public, max-age=300, s-maxage=900"})
+
+
+@app.middleware("http")
+async def ksn_staging_seo_test_gate(request: Request, call_next):
+    if _ksn_staging_seo_test_mode():
+        path = request.url.path
+        allowed = path in {
+            "/health", "/robots.txt",
+            "/sitemap.xml", "/seo/sitemap.xml"
+        }
+        if (
+            path == "/seo/render"
+            and request.query_params.get("path")
+            == "/__ksn_invalid_probe__"
+        ):
+            allowed = True
+        if not allowed:
+            return Response(
+                content="Staging SEO test mode: route disabled",
+                status_code=503,
+                media_type="text/plain"
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -7457,6 +8021,7 @@ async def _sql_sync_team(team_id:int,season:int,force:bool=False):
             years={int(y.get("year") or 0) for y in entry.get("seasons") or []}
             if not lid or (years and season not in years):
                 continue
+            # Domestic league before cups; never infer another team's identity.
             league_type=str(lg.get("type") or "").lower()
             country=str((entry.get("country") or {}).get("name") or "").lower()
             options.append((0 if league_type=="league" and country not in ("world","") else
@@ -8342,7 +8907,7 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
         sources[yr]=src
     # v622: seasons with no stored row are filled from that season's league table (cached /standings call, fetched
     # concurrently, saved permanently) so the page shows the current season + 6 past seasons.
-    miss=[y for y in years if sources.get(y)=="none"] if v622 else []
+    miss=[y for y in years if sources.get(y)=="none"] if (v622 or league_hint in _KSN_V644_BIG5) else []
     if miss and league_hint and not _v448_api_football_provider_locked():
         async def _fill(y):
             try:
@@ -8357,7 +8922,7 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
                 return y,row
             except Exception as exc:
                 log.warning("v622 history standings fill skipped team=%s season=%s: %s",team,y,type(exc).__name__); return y,None
-        for y,row in await asyncio.gather(*(_fill(y) for y in miss)):
+        for y,row in await asyncio.gather(*(_fill(y) for y in miss[:3])):
             if row: out.append(row); sources[y]="provider-league-table"
     # Last resort: rebuild a season from the full profile, only for seasons still missing and only while
     # there is time left. A single rebuild is slow, so never start one after 3 seconds.
@@ -8386,7 +8951,7 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
     cs_scheduled=_ksn_v621_schedule_cs_fill(team,league_hint,cs_missing) if cs_missing else False
     out.sort(key=lambda r:int(r.get("season") or 0),reverse=True)
     return {"teamId":team,"defaultSeason":current,"seasons":out,"coverage":"Current season + the last 6 completed seasons when provider data is available","source":"PostgreSQL-first historical team intelligence","updatedAt":datetime.now(timezone.utc).isoformat(),
-            "diagnostics":{"elapsedMs":int((time.time()-t0)*1000),"leagueId":league_hint,"sources":sources,"cleanSheetsMissing":cs_missing,"csFillScheduled":cs_scheduled}}
+            "diagnostics":{"elapsedMs":int((time.time()-t0)*1000),"leagueId":league_hint,"sources":sources,"cleanSheetsMissing":cs_missing,"csFillScheduled":cs_scheduled,"requestedSeasons":years,"missingSeasons":[y for y in years if y not in have],"historyFetchLimitPerRequest":3}}
 
 @app.get("/player/history")
 async def player_history(player: int=Query(...,ge=1), seasons: int=Query(4,ge=1,le=4), refresh: int=Query(0,ge=0,le=1)):
@@ -8670,12 +9235,12 @@ async def sports_db_sync_player(player_id:int,season:int=Query(0,ge=0),force:int
 
 # Do not let a sports-cache database failure take down authentication, news,
 # health checks, or the rest of Kasi Sports News during application import.
-if SPORTS_DB_ENABLED:
+if SPORTS_DB_ENABLED and not _ksn_staging_seo_test_mode():
     try:
         _sports_db_init()
     except Exception as exc:
         SPORTS_DB_INIT_ERROR = f"{type(exc).__name__}: {exc}"
-        logger.exception("Sports database initialisation failed; continuing in degraded mode")
+        log.exception("Sports database initialisation failed; continuing in degraded mode")
 
 @app.get("/public-route/{kind}/{provider_id}")
 async def public_route(kind:str,provider_id:int,name:str=Query(""),response:Response=None):
@@ -9681,6 +10246,33 @@ def _ksn_v591_pg_team_view(profile, team_id, season):
 
 # v590: One read-only team view for profile, intelligence and health.
 # Sources are existing SQL, last-good snapshot, match-centre cache and results archive.
+# v644: recover verified team identity directly from existing Big Five standings.
+# Read-only; no provider calls, no guessed country and no cross-team substitutions.
+_KSN_V644_BIG5 = {39: "England", 140: "Spain", 135: "Italy", 78: "Germany", 61: "France"}
+
+def _ksn_v644_standings_identity(team_id, season):
+    try:
+        keys = [f"canonical_standings:{lid}:{season}" for lid in _KSN_V644_BIG5]
+        snapshots = _ksn_v617_snapshots_bulk(keys)
+        for lid, country in _KSN_V644_BIG5.items():
+            payload = (snapshots.get(f"canonical_standings:{lid}:{season}") or {}).get("data") or {}
+            rows = payload.get("standings") or []
+            if isinstance(rows, dict):
+                rows = (rows.get("league") or rows.get("standings") or [])
+                if isinstance(rows, dict): rows = rows.get("standings") or []
+            if isinstance(rows, list) and rows and isinstance(rows[0], list): rows = rows[0]
+            if not isinstance(rows, list): continue
+            for item in rows:
+                if not isinstance(item, dict): continue
+                team = item.get("team") or {}
+                if str(team.get("id") or "") != str(team_id): continue
+                return {"team": {"id": int(team_id), "name": team.get("name"),
+                                 "logo": team.get("logo"), "country": country},
+                        "leagueId": lid, "standing": item, "source": "stored-big5-standings"}
+    except Exception as exc:
+        log.warning("v644 standings identity read failed team=%s: %s", team_id, type(exc).__name__)
+    return None
+
 def _ksn_v590_team_view(profile, team_id, season):
     base = dict(profile) if isinstance(profile, dict) else {}
     snap = _dashboard_snapshot_get(f"team_profile_last_good:{team_id}:{season}")
@@ -9709,6 +10301,22 @@ def _ksn_v590_team_view(profile, team_id, season):
                     base[key] = saved[key]
             if not _ksn_valid_team_stats(base.get("teamStats")) and _ksn_valid_team_stats(saved.get("teamStats")):
                 base["teamStats"] = saved["teamStats"]
+    # Standings are authoritative for identity when a team's SQL record is partial.
+    # Do not overwrite already-verified nonempty fields or fabricate a country.
+    standing_identity = _ksn_v644_standings_identity(team_id, season)
+    if standing_identity:
+        current_team = base.get("team") if isinstance(base.get("team"), dict) else {}
+        recovered = standing_identity["team"]
+        current_team = dict(current_team)
+        for field in ("name", "logo", "country"):
+            if not current_team.get(field) or (field == "name" and str(current_team[field]) == str(team_id)):
+                if recovered.get(field): current_team[field] = recovered[field]
+        current_team["id"] = int(team_id)
+        base["team"] = current_team
+        if not base.get("standings"):
+            base["standings"] = [standing_identity["standing"]]
+        if not base.get("league"):
+            base["league"] = {"id": standing_identity["leagueId"]}
     base.setdefault("team", {"id": team_id})
     base["season"] = season
     # v607: restore verified upcoming fixtures from durable PostgreSQL-backed
@@ -9774,25 +10382,51 @@ def _ksn_v590_team_view(profile, team_id, season):
             base["past10"] = sorted(by_id.values(), key=lambda r: str(r.get("date") or ""), reverse=True)[:10]
     except Exception as exc:
         log.warning("v609 finished fixture recovery failed team=%s: %s", team_id, type(exc).__name__)
+    # v645: FantasyPlayoffs is not a verified squad provider. Keep its
+    # statistics in fantasy feeds; never advertise fantasy-only records as a
+    # team's official squad or as evidence of squad completeness.
+    official_players = [p for p in (base.get("players") or [])
+                        if isinstance(p, dict) and str(p.get("id") or "").isdigit()
+                        and int(p["id"]) > 0]
+    base["players"] = official_players
     # Archive and shared match cache supply recent results even if SQL has only players.
     base = _ksn_v496_enrich_profile(base, team_id, season)
     base = _ksn_v591_pg_team_view(base, team_id, season)
     base = _ksn_v588_complete_profile(base, team_id, season)
+    # v645: keep the public squad restricted to verifiable API-Football IDs.
+    # Do not manufacture shirt numbers from fantasy ranking positions.
+    base["players"] = [p for p in (base.get("players") or [])
+                       if isinstance(p, dict) and str(p.get("id") or "").isdigit()
+                       and int(p["id"]) > 0]
     base["cached"] = True
     base["refreshing"] = False
     return base
 
 
+# v646: shared revision marker prevents stale profiles on other Render workers.
+# The staging repair writes this only after its verified SQL/snapshot sync succeeds.
+def _ksn_v646_profile_revision(team_id, season):
+    snap = _dashboard_snapshot_get(f"team_profile_repair_revision_v646:{team_id}:{season}") or {}
+    data = snap.get("data") if isinstance(snap, dict) else {}
+    return str((data or {}).get("revision") or "") if isinstance(data, dict) else ""
+
 @app.get("/team/profile")
-async def team_profile(team: str = Query(...), season: int = Query(0, ge=0)):
+async def team_profile(team: str = Query(...), season: int = Query(0, ge=0), refresh: int = Query(0, ge=0, le=1)):
     """Cached team profile with identity, squad, fixtures, table and season data."""
     season=season or _current_season()
     raw=str(team).strip()
     cache_key=f"team-profile-v480:{raw.lower()}:{season}"
-    cached=_team_profile_page_cache.get(cache_key)
+    cached = None if refresh else _team_profile_page_cache.get(cache_key)
+    if cached is not None and raw.isdigit():
+        # Check the shared PostgreSQL revision on every cache hit; this is a
+        # read-only DB lookup, never a provider call or destructive invalidation.
+        revision = _ksn_v646_profile_revision(int(raw), season)
+        if revision and cached.get("_repairRevision") != revision:
+            _team_profile_page_cache.pop(cache_key, None)
+            cached = None
     if cached is not None and raw.isdigit():
         return _ksn_v590_team_view(cached, int(raw), season)
-    if cached is not None:return cached
+    if cached is not None: return cached
 
     if raw.isdigit():
         tid=int(raw)
@@ -9847,11 +10481,20 @@ async def team_profile(team: str = Query(...), season: int = Query(0, ge=0)):
                         sql_profile["cached"]=True;sql_profile["refreshing"]=False
                         sql_profile["dataComplete"]=bool((sql_profile.get("past10") or sql_profile.get("future")) and sql_profile.get("standings") and _ksn_valid_team_stats(sql_profile.get("teamStats")) and sql_profile.get("players"))
                         sql_profile = _ksn_v590_team_view(sql_profile, tid, season)
+                        sql_profile["dataComplete"] = bool(
+                            sql_profile.get("players") and
+                            (sql_profile.get("past10") or sql_profile.get("future")) and
+                            sql_profile.get("standings") and
+                            _ksn_valid_team_stats(sql_profile.get("teamStats")))
+                        sql_profile["squadSource"] = "API-Football verified" if sql_profile.get("players") else "unavailable"
+                        sql_profile["repairRequired"] = not sql_profile["dataComplete"]
+                        sql_profile["_repairRevision"] = _ksn_v646_profile_revision(tid, season)
                         _team_profile_page_cache[cache_key]=sql_profile
                         return sql_profile
         if isinstance(snap_data,dict) and (snap_data.get("team") or snap_data.get("players") or snap_data.get("past10") or snap_data.get("future")):
             snap_data=_ksn_v588_complete_profile(_ksn_v496_enrich_profile({**snap_data,"cached":True,"refreshing":False}, tid, season),tid,season)
             snap_data = _ksn_v590_team_view(snap_data, tid, season)
+            snap_data["_repairRevision"] = _ksn_v646_profile_revision(tid, season)
             _team_profile_page_cache[cache_key]=snap_data
             if SPORTS_DB_ENABLED:pass  # v494: no upstream sync from profile page views
             return snap_data
@@ -10924,7 +11567,7 @@ async def tip_of_day(request: Request):
         if not isinstance(row, dict):
             return False
         status = str(row.get("status") or row.get("matchStatus") or "").casefold()
-        if any(word in status for word in ("finished", "postpon", "cancel", "abandon", "full time")) or status in {"ft", "aet", "pen", "p", "canc", "pst", "abd"}:
+        if status and status not in {"ns", "not started", "scheduled", "upcoming", "tbd", "time to be defined"}:
             return False
         kickoff = row.get("datetime") or row.get("kickoff") or row.get("date") or row.get("startTime")
         parsed = _parse_provider_time(kickoff)
@@ -11097,21 +11740,65 @@ async def tip_of_day(request: Request):
 
 
 
+# v639: stable kickoff/date contract for Finished Matches, without changing archive rows.
+def _ksn_v639_finished_dates(matches):
+    for match in matches:
+        if not isinstance(match, dict):
+            continue
+        stamp = match.get("datetime") or match.get("kickoff") or match.get("fixtureDate") or match.get("date")
+        if not stamp:
+            match["dateAvailable"] = False
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            sa = parsed.astimezone(timezone(timedelta(hours=2)))
+            match["kickoff"] = parsed.isoformat()
+            match["datetime"] = parsed.isoformat()
+            match["matchDate"] = sa.date().isoformat()
+            match["matchTime"] = sa.strftime("%H:%M")
+            match["timezone"] = "Africa/Johannesburg"
+            match["dateAvailable"] = True
+        except (ValueError, TypeError, OverflowError):
+            match["dateAvailable"] = False
+    return matches
+
 @app.get("/finished-games")
-async def finished_games(request:Request, hours:Optional[int]=Query(None,ge=1,le=168),league:str=Query("ALL"),limit:int=Query(60,ge=1,le=200),days:Optional[int]=Query(None),africa:bool=Query(False),offset:int=Query(0,ge=0)):
+async def finished_games(request:Request, hours:Optional[int]=Query(None,ge=1,le=168),league:str=Query("ALL"),limit:int=Query(60,ge=1,le=200),days:Optional[int]=Query(None),africa:bool=Query(False),offset:int=Query(0,ge=0),match_date:str=Query("")):
     # v519: the default Finished Games view is the permanent results archive.
     # Explicit hours/days retain the legacy recent-results behaviour for clients
     # that request it. No time cutoff is applied to the default archive view.
+    if match_date:
+        try:
+            datetime.strptime(match_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=422, detail="match_date must be YYYY-MM-DD")
+        # Date filtering is on the SA calendar day, converted to an exact UTC interval.
+        sa_start = datetime.strptime(match_date, "%Y-%m-%d").replace(tzinfo=timezone(timedelta(hours=2)))
+        start_utc = sa_start.astimezone(timezone.utc)
+        end_utc = (sa_start + timedelta(days=1) - timedelta(microseconds=1)).astimezone(timezone.utc)
+        archived = await results_history(
+            sport="football", country="", competition="" if league.upper()=="ALL" else league,
+            season="", team="", year=None, date_from=start_utc.isoformat(),
+            date_to=end_utc.isoformat(), limit=limit, offset=offset,
+            priority_order=False, priority_visitor="", competition_id=None)
+        page = _ksn_v639_finished_dates(list(archived.get("matches") or []))
+        return {"count":len(page),"total":archived.get("total",len(page)),"matches":page,
+                "limit":limit,"offset":offset,"matchDate":match_date,
+                "timezone":"Africa/Johannesburg","permanentArchive":True,
+                "source":"permanent results archive","errors":[]}
     if hours is None and days is None:
         # Query the requested archive page directly: do not truncate to the first 500
         # records and then slice, which breaks offsets and reports false totals.
         archived=await results_history(sport="football",country="",
                                        competition="" if league.upper()=="ALL" else league,
                                        season="",team="",year=None,date_from="",date_to="",
-                                       limit=limit,offset=offset,priority_order=True,priority_visitor=_ksn_request_country(request))
-        page=list(archived.get("matches") or [])
-        # Archive query is already ordered by kickoff DESC. Preserve pagination
-        # integrity; sorting only within a page would not establish global Big 5 order.
+                                       limit=limit,offset=offset,priority_order=False,priority_visitor="", competition_id=None)
+        page=_ksn_v639_finished_dates(list(archived.get("matches") or []))
+        # v641: strict global kickoff DESC ordering before LIMIT/OFFSET.
+        # Do not re-rank completed matches by league priority: that caused
+        # older Premier League games to appear before newer other-league games.
         return {"count":len(page),"total":archived.get("total",len(page)),"matches":page,
                 "limit":limit,"offset":offset,"permanentArchive":True,"archiveFirst":True,
                 "source":"permanent PostgreSQL results archive","hours":None,"errors":[]}
@@ -11133,7 +11820,7 @@ async def finished_games(request:Request, hours:Optional[int]=Query(None,ge=1,le
         archived = await results_history(
             sport="football", country="", competition="", season="", team="", year=None,
             date_from=cutoff.date().isoformat(), date_to=now.date().isoformat(),
-            limit=min(500, max(limit * 4, 200)), offset=0,
+            limit=min(500, max(limit * 4, 200)), offset=0, competition_id=None,
         )
         for m in (archived.get("matches") or []):
             stamp=m.get("datetime") or m.get("date")
@@ -11209,6 +11896,7 @@ async def finished_games(request:Request, hours:Optional[int]=Query(None,ge=1,le
             if k not in used: selected.append(m);used.add(k)
         selected.sort(key=lambda m:(_ksn_league_priority_bucket(m),-strength(m)))
     else: selected=rows[:limit]
+    _ksn_v639_finished_dates(selected)
     return {"count":len(selected),"matches":selected,"hours":hours,"africaPriority":bool(africa),
             "windowStart":cutoff.isoformat(),"windowEnd":now.isoformat(),"errors":errors[:3],
             "source":("permanent archive" if archive_sufficient else "permanent archive + API-Football cache/provider"),"archiveFirst":True,"archiveFastPath":archive_sufficient}
@@ -11814,6 +12502,63 @@ async def _v141_existing_api_call(path, params):
             "response": [],
             "error": str(exc.detail),
         }
+
+
+# v651: Render-native compatibility for legacy frontend football widgets.
+# Restricted operations; reuse the existing provider cache and quota controls.
+@app.get("/api-football/legacy")
+async def ksn_v651_legacy_football(
+    path: str = Query(...),
+    search: Optional[str] = Query(None),
+    date: Optional[str] = Query(None),
+    team: Optional[int] = Query(None),
+    season: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    league: Optional[int] = Query(None),
+):
+    if _ksn_staging_seo_test_mode():
+        raise HTTPException(503, "Provider disabled in staging SEO test mode")
+
+    provider_path = "/" + path.strip("/")
+
+    if provider_path not in {
+        "/teams", "/fixtures", "/players/topscorers"
+    }:
+        raise HTTPException(404, "Unsupported football operation")
+
+    if provider_path == "/teams":
+        query = (search or "").strip()
+        if not 2 <= len(query) <= 80:
+            raise HTTPException(422, "Team search must be 2-80 characters")
+        params = {"search": query}
+
+    elif provider_path == "/fixtures":
+        if date is None and team is None:
+            raise HTTPException(422, "Fixture date or team required")
+        if date is not None:
+            import datetime as _dt
+            try:
+                _dt.date.fromisoformat(date)
+            except ValueError:
+                raise HTTPException(422, "Invalid fixture date")
+        if team is not None and team <= 0:
+            raise HTTPException(422, "Invalid team ID")
+        params = {
+            k: v for k, v in {
+                "date": date, "team": team,
+                "season": season, "status": status,
+            }.items() if v is not None
+        }
+
+    else:
+        if league is None or season is None:
+            raise HTTPException(422, "League and season required")
+        if league <= 0:
+            raise HTTPException(422, "Invalid league ID")
+        params = {"league": league, "season": season}
+
+    return await _afoot_get(provider_path, params)
+
 
 async def _v141_cached_provider(path, params):
     key = path + ":" + json.dumps(
@@ -14042,8 +14787,31 @@ async def sports_fixtures_window_v401(sport:str,days:int=Query(7,ge=1,le=14)):
                 ident=str(x.get("id") or x.get("providerFixtureId") or f"{x.get('home')}|{x.get('away')}|{x.get('date')}")
                 if ident in seen: continue
                 seen.add(ident); rows.append(_widget_match_record(x,sport))
+    # Never show an already-started fixture as upcoming merely because its
+    # provider status was stale (e.g. NS). Respect the UTC kickoff timestamp.
+    upcoming=[]
+    for item in rows:
+        stamp=item.get("datetime") or item.get("kickoff") or item.get("fixtureDate") or item.get("date")
+        if not stamp:
+            continue
+        try:
+            kickoff=datetime.fromisoformat(str(stamp).replace("Z","+00:00"))
+            if kickoff.tzinfo is None:
+                kickoff=kickoff.replace(tzinfo=timezone.utc)
+            if kickoff <= now:
+                continue
+        except (TypeError, ValueError, OverflowError):
+            continue
+        upcoming.append(item)
+    rows=upcoming
     rows.sort(key=lambda x:str(x.get("date") or ""))
-    payload={"sport":sport,"count":len(rows),"games":rows,"days":days,"updatedAt":now.isoformat(),"errors":errors[:4]}
+    payload={"sport":sport,"count":len(rows),"games":rows,"days":days,"updatedAt":now.isoformat(),"errors":errors[:4],
+             "providerState":"data_available" if rows else ("request_errors" if errors else "no_data_unverified"),
+             "source":"provider-or-public-fallback" if rows else "none",
+             "apiSportsConfigured":bool(SPORTS_API_KEYS.get("rugby")) if sport=="rugby" else None,
+             "oddsPapiConfigured":bool(ODDSPAPI_ENABLED and ODDSPAPI_API_KEY),
+             "providerAvailabilityVerified":bool(rows),
+             "emptyReason":None if rows else ("provider_request_error" if errors else "no_upcoming_fixtures_returned_provider_state_unknown")}
     if rows:
         _dashboard_snapshot_put(snap_key,{"data":payload}); return payload
     if isinstance(saved,dict) and saved.get("games"):
@@ -14172,6 +14940,14 @@ def _finished_score_pair(m:dict):
     return hs,av
 
 def _scored_finished(m:dict)->bool:
+    """Archive only explicitly confirmed finals with genuine provider scores."""
+    if not isinstance(m, dict): return False
+    raw=m.get('statusShort') or m.get('status') or m.get('matchStatus')
+    if isinstance(raw,dict): raw=raw.get('short') or raw.get('type') or raw.get('description')
+    status=str(raw or '').strip().casefold()
+    if status not in {'ft','aet','pen','finished','final','full time','after extra time',
+                      'after penalties','match finished','completed','complete'}:
+        return False
     hs,av=_finished_score_pair(m)
     if not (_valid_finished_score(hs) and _valid_finished_score(av)): return False
     m['homeScore']=hs;m['awayScore']=av
@@ -14346,7 +15122,8 @@ async def results_history(
     sport:str=Query("all"), country:str=Query(""), competition:str=Query(""),
     season:str=Query(""), team:str=Query(""), year:Optional[int]=Query(None,ge=1900,le=2200),
     date_from:str=Query(""), date_to:str=Query(""), limit:int=Query(100,ge=1,le=500),
-    offset:int=Query(0,ge=0), priority_order:bool=False, priority_visitor:str=""
+    offset:int=Query(0,ge=0), priority_order:bool=False, priority_visitor:str="",
+    competition_id:Optional[str]=Query(None)
 ):
     """Permanent KSN confirmed-results archive. This endpoint never calls an upstream sports provider."""
     _results_archive_init()
@@ -14355,12 +15132,14 @@ async def results_history(
     where=[]; params=[]
     def add(expr,val): where.append(expr.replace("?",ph)); params.append(val)
     if sport.lower() in {"football","rugby","cricket"}: add("sport=?",sport.lower())
-    if competition_id is not None: add("competition_id=?", competition_id)  # v529 exact provider competition filter
     # v457: structured filters are identities, not free-text searches.
     # Exact normalized equality prevents England Premier League from matching Ghana
     # Premier League and senior Bundesliga from matching Frauen/U19 Bundesliga.
     if country.strip(): add("lower(trim(country))=?",country.strip().lower())
-    if competition_id is not None: add("competition_id=?",str(competition_id))
+    # Internal Python calls bypass FastAPI dependency resolution: the default may be a Query object.
+    # Only a concrete, nonempty identifier should activate this SQL filter.
+    if isinstance(competition_id, (str, int)) and str(competition_id).strip():
+        add("competition_id=?",str(competition_id).strip())
     if competition.strip(): add("lower(trim(competition))=?",competition.strip().lower())
     if season.strip(): add("lower(trim(season))=?",season.strip().lower())
     if team.strip():
@@ -14386,6 +15165,7 @@ async def results_history(
           "awayId":v[12],"away":v[13],"awayLogo":v[14],"homeScore":v[15],"awayScore":v[16],
           "status":v[17],"venue":v[18],"referee":v[19],"isFinished":True,"providerFixtureId":v[2] if str(v[0]).lower()=="football" else None})
     cur.close(); conn.close()
+    _ksn_v639_finished_dates(rows)
     return {"matches":rows,"count":len(rows),"total":total,"limit":limit,"offset":offset,
             "permanentArchive":True,"providerCalls":0,"confirmedScoresOnly":True}
 
@@ -14480,6 +15260,7 @@ async def _historical_provider_results(q:str="", sport:str="all", country:str=""
 
 @app.get("/results/search")
 async def results_search(
+    request: Request,
     q:str=Query(""), sport:str=Query("all"), country:str=Query(""), competition:str=Query(""), competition_id:Optional[int]=Query(None,ge=1),
     season:str=Query(""), team:str=Query(""), year:Optional[int]=Query(None,ge=1900,le=2200),
     date_from:str=Query(""), date_to:str=Query(""), limit:int=Query(100,ge=1,le=500),
@@ -14507,7 +15288,7 @@ async def results_search(
             overlap=True
         if overlap:
             try:
-                recent=await sports_finished_all(hours=48,limit=5000)
+                recent=await sports_finished_all(request=request, hours=48, limit=5000)
                 recent_rows=recent.get("matches",[]) if isinstance(recent,dict) else []
                 archived_recent=await asyncio.to_thread(_archive_results_upsert, recent_rows)
                 recent_sync=True
@@ -14717,7 +15498,7 @@ async def sports_live_all(request: Request):
     cached=(snap or {}).get("data") if isinstance(snap,dict) else None
     age=time.time()-float((snap or {}).get("updated_at") or 0) if snap else 10**9
     if _LIVE_TASK is None or _LIVE_TASK.done():
-        if not (isinstance(cached,dict) and age<15):
+        if not (isinstance(cached,dict) and age<30):
             _LIVE_TASK=asyncio.create_task(_sports_live_compute())
     # v451: an empty partial snapshot is not a valid last-good result. It means
     # at least one sport failed, so "zero live games" was never established.
@@ -16242,7 +17023,7 @@ async def _v427_shared_cache_warmer():
                 async with httpx.AsyncClient(transport=transport,base_url="http://ksn.internal",timeout=60.0) as c:
                     await hit(c,"/sports/live")
             except Exception as exc: log.debug("v432 live warm: %s",exc)
-            await asyncio.sleep(15)
+            await asyncio.sleep(30)
     live_task = asyncio.create_task(live_loop(), name="ksn-live-cache-warm")
     try:
       while True:
@@ -17378,7 +18159,8 @@ def _init_growth_db():
         );
         """)
 
-_init_growth_db()
+if not _ksn_staging_seo_test_mode():
+    _init_growth_db()
 
 SEO_PAGE_TYPES = {
     "competition": {"priority": "0.9", "changefreq": "hourly"},
@@ -17497,6 +18279,7 @@ async def seo_pages(page_type: str = Query(""), sport: str = Query(""), limit: i
         rows = [r for r in rows if r["path"].startswith(prefix)]
     return {"count": len(rows[:limit]), "pages": rows[:limit], "generatedAt": datetime.now(timezone.utc).isoformat()}
 
+@app.get("/seo/render", response_class=HTMLResponse)
 @app.get("//render", response_class=HTMLResponse)
 async def seo_render(path: str = Query("/")):
     if not path.startswith("/"):
@@ -17536,7 +18319,7 @@ def _ksn_v483_sitemap_team_rows() -> list[dict]:
     Player URLs are intentionally excluded pending equivalent identity validation.
     """
     verified = {541: "Real Madrid", 1064: "Platense"}
-    if globals().get("SPORTS_DB_ENABLED", False):
+    if globals().get("SPORTS_DB_ENABLED", False) and not _ksn_staging_seo_test_mode():
         try:
             with _sports_db() as db:
                 records = db.execute(
@@ -17558,6 +18341,7 @@ async def _seo_dynamic_rows() -> list[dict]:
     """SEO registry plus durable canonical team URLs; never call upstream APIs."""
     return list(_seo_registry_pages()) + _ksn_v483_sitemap_team_rows()
 
+@app.get("/seo/sitemap.xml", response_class=Response)
 @app.get("//sitemap.xml", response_class=Response)
 async def seo_sitemap():
     rows = await _seo_dynamic_rows()
@@ -20270,6 +21054,9 @@ async def ksn_v602_staging_team_repair(
         # Explicitly discard only the targeted in-memory profile. Persistent
         # snapshots and the permanent results archive remain untouched.
         _team_profile_page_cache.pop(f"team-profile-v480:{team}:{season}", None)
+        # Propagate invalidation to every staging worker through PostgreSQL.
+        _dashboard_snapshot_put(f"team_profile_repair_revision_v646:{team}:{season}",
+            {"data": {"revision": str(uuid.uuid4()), "teamId": team, "season": season}})
         after = _ksn_v590_team_view(_sql_team_profile(team, season), team, season)
         def counts(p):
             return {"recent":len(p.get("past10") or []),
@@ -20294,7 +21081,9 @@ async def ksn_v602_staging_team_repair(
                         "visibleHistoryYears":[int(x.get("season")) for x in (hist.get("seasons") or []) if x.get("season") is not None],
                         "leagueIdFromSync":result.get("leagueId")}
         players_after=after.get("players") or []
-        verified={"players":len(players_after),
+        numbered=sum(p.get("number") is not None for p in players_after if isinstance(p,dict))
+        verified={"players":len(players_after),"playersWithNumbers":numbered,
+                  "playersWithoutNumbers":max(0,len(players_after)-numbered),
                   "nationality":f"{sum(bool(p.get('nationality')) for p in players_after)}/{len(players_after)}",
                   "profileStats":bool(_ksn_valid_team_stats(after.get("teamStats"))),
                   "standings":bool(after.get("standings")),
@@ -20332,6 +21121,113 @@ async def ksn_v602_staging_team_repair(
         return {"teamId":team,"season":season,"sync":result,"historyBackfill":history_backfill,"historyVerification":history_report,"fantasyMapping":fantasy_audit,"verified":verified,"durable":durable,
                 "before":counts(before),"after":counts(after),
                 "note":"Explicit staging-only backfill; no production changes"}
+
+
+# v647: staged Big Five audit and bounded repair; no provider calls in audit mode.
+_KSN_V647_LEAGUES = {39:"Premier League",140:"La Liga",135:"Serie A",78:"Bundesliga",61:"Ligue 1"}
+
+def _ksn_v647_discover(season, league_filter=0):
+    lids=[league_filter] if league_filter else list(_KSN_V647_LEAGUES)
+    snaps=_ksn_v617_snapshots_bulk([f"canonical_standings:{lid}:{season}" for lid in lids])
+    discovered={}; missing=[]
+    for lid in lids:
+        key=f"canonical_standings:{lid}:{season}"
+        data=(snaps.get(key) or {}).get("data") or {}
+        rows=data.get("standings") or []
+        if isinstance(rows,dict):
+            rows=rows.get("league") or rows.get("standings") or []
+            if isinstance(rows,dict): rows=rows.get("standings") or []
+        if isinstance(rows,list) and rows and isinstance(rows[0],list): rows=rows[0]
+        if not isinstance(rows,list) or not rows:
+            missing.append({"leagueId":lid,"league":_KSN_V647_LEAGUES[lid],"reason":"No stored 2026 standings; cannot safely discover teams"})
+            continue
+        for row in rows:
+            if not isinstance(row,dict): continue
+            t=row.get("team") or {}
+            try: tid=int(t.get("id") or 0)
+            except (TypeError,ValueError): continue
+            if tid<=0: continue
+            if tid not in discovered:
+                discovered[tid]={"teamId":tid,"name":t.get("name") or str(tid),"leagueId":lid,"league":_KSN_V647_LEAGUES[lid]}
+    return list(discovered.values()),missing
+
+def _ksn_v647_audit(team,season):
+    tid=team["teamId"]
+    sql=_sql_team_profile(tid,season) if SPORTS_DB_ENABLED else None
+    profile=_ksn_v590_team_view(sql,tid,season) if sql else {}
+    players=[p for p in (profile.get("players") or []) if isinstance(p,dict)]
+    numbered=sum(p.get("number") is not None for p in players)
+    squad_saved=_ksn_v616_pg_has(f"team_verified_squad_v609:{tid}:{season}")
+    fixtures_saved=_ksn_v616_pg_has(f"team_verified_fixtures_v607:{tid}:{season}")
+    # A small/unnumbered squad or missing durable snapshots is evidence of an incomplete profile.
+    # Upcoming fixture count alone is NOT a repair criterion: the season may be ending.
+    reasons=[]
+    if len(players)<15: reasons.append("verified_squad_below_15")
+    if players and numbered<len(players): reasons.append("missing_shirt_numbers")
+    if squad_saved is not True: reasons.append("verified_squad_not_in_postgres")
+    if fixtures_saved is not True: reasons.append("verified_fixtures_not_in_postgres")
+    return {**team,"players":len(players),"numbered":numbered,
+            "recent":len(profile.get("past10") or []),"upcoming":len(profile.get("future") or []),
+            "squadDurable":squad_saved,"fixturesDurable":fixtures_saved,
+            "repairRequired":bool(reasons),"reasons":reasons}
+
+@app.post("/admin/staging/big5-team-rollout")
+async def ksn_v647_big5_team_rollout(
+    request: Request,
+    season: int = Query(0,ge=0),
+    league: int = Query(0,ge=0),
+    offset: int = Query(0,ge=0),
+    limit: int = Query(2,ge=1,le=5),
+    execute: int = Query(0,ge=0,le=1),
+    x_ksn_repair_token: str = Header(default=""),
+):
+    # Same hard staging hostname + secret as the existing single-team repair.
+    secret=os.getenv("KSN_TEAM_REPAIR_TOKEN","")
+    if not (os.getenv("KSN_STAGING_TEAM_REPAIR_ENABLED","0")=="1"
+            and (request.url.hostname or "").lower()=="kasi-sports-news-staging.onrender.com"
+            and len(secret)>=32 and secrets.compare_digest(x_ksn_repair_token,secret)):
+        raise HTTPException(status_code=404,detail="Not found")
+    if not SPORTS_DB_ENABLED or not DATABASE_URL:
+        raise HTTPException(status_code=503,detail="Staging PostgreSQL unavailable")
+    if league and league not in _KSN_V647_LEAGUES:
+        raise HTTPException(status_code=422,detail="Only Big Five league IDs are supported")
+    season=season or _current_season()
+    teams,missing=_ksn_v647_discover(season,league)
+    if not teams:
+        return {"season":season,"discovered":0,"missingLeagueSnapshots":missing,
+                "note":"No team discovery from stored standings; no provider calls made"}
+    teams=sorted(teams,key=lambda t:(t["leagueId"],t["teamId"]))
+    # The offset is a stable index in the discovered teams, NOT the incomplete-only subset.
+    batch=teams[offset:offset+limit]
+    audits=[_ksn_v647_audit(t,season) for t in batch]
+    out={"season":season,"mode":"repair" if execute else "audit_only",
+         "discovered":len(teams),"offset":offset,"limit":limit,
+         "nextOffset":offset+len(batch) if offset+len(batch)<len(teams) else None,
+         "missingLeagueSnapshots":missing,"teams":audits,"repairs":[]}
+    if not execute: return out
+    if _v448_api_football_provider_locked():
+        raise HTTPException(status_code=429,detail="Provider quota reserve protected")
+    # At most two repairs per HTTP request, sequentially. Audit never touches provider.
+    if limit>2:
+        raise HTTPException(status_code=422,detail="execute=1 requires limit<=2")
+    for item in audits:
+        if not item["repairRequired"]:
+            out["repairs"].append({"teamId":item["teamId"],"status":"skipped_healthy"})
+            continue
+        try:
+            repaired=await ksn_v602_staging_team_repair(
+                request=request,team=item["teamId"],season=season,
+                x_ksn_repair_token=x_ksn_repair_token)
+            check=_ksn_v647_audit(item,season)
+            out["repairs"].append({"teamId":item["teamId"],"status":"repaired" if not check["repairRequired"] else "needs_review",
+                "verified":repaired.get("verified"),"durable":repaired.get("durable"),
+                "after":check,"syncErrors":(repaired.get("sync") or {}).get("errors")})
+        except Exception as exc:
+            out["repairs"].append({"teamId":item["teamId"],"status":"error",
+                                   "errorType":type(exc).__name__})
+            # Stop on errors to protect provider quota and avoid repeated failures.
+            break
+    return out
 
 
 @app.get("/team/data-health")
@@ -21129,7 +22025,12 @@ async def rugby_matches(
         "season":      season,
         "count":       len(games),
         "games":       games,
-        "source":      "API-Sports" if (games and games[0].get("source") == "API-Sports") else "ESPN",
+        "source":      ("API-Sports" if games[0].get("source") == "API-Sports" else "ESPN") if games else "none",
+        "providerState": "data_available" if games else "no_data_unverified",
+        "apiSportsConfigured": bool(SPORTS_API_KEYS.get("rugby")),
+        "oddsPapiConfigured": bool(ODDSPAPI_ENABLED and ODDSPAPI_API_KEY),
+        "fallbackScope": "ESPN generic rugby scoreboard is not mapped to a named league",
+        "emptyReason": None if games else ("no_league_verified_data" if league_meta else "no_provider_matches_returned"),
     }
     RUGBY_CACHE[cache_key] = result
     return result
@@ -21322,12 +22223,39 @@ async def rugby_predictions(
     return result
 
 
+@app.get("/sports/provider-health")
+async def sports_provider_health_v640():
+    """Configuration and cached data diagnostics; no external calls or secrets."""
+    snap=_dashboard_snapshot_get("sports_live:last_good")
+    payload=(snap or {}).get("data") if isinstance(snap,dict) else None
+    games=payload.get("games") if isinstance(payload,dict) else []
+    counts={name:sum(1 for g in (games or []) if isinstance(g,dict) and str(g.get("sport") or "").lower()==name)
+            for name in ("football","rugby","cricket")}
+    age=round(max(0,time.time()-float((snap or {}).get("updated_at") or 0))) if snap else None
+    return {
+        "build": KSN_BUILD_VERSION,
+        "providerKeysConfigured": {
+            "rugbyApiSports": bool(SPORTS_API_KEYS.get("rugby")),
+            "oddsPapi": bool(ODDSPAPI_ENABLED and ODDSPAPI_API_KEY),
+        },
+        "cachedLiveCounts": counts,
+        "cachedLiveAgeSeconds": age,
+        "cachePresent": isinstance(payload,dict),
+        "interpretation": "Zero cached fixtures is not proof that no fixtures exist; check provider logs and coverage.",
+        "externalProvidersProbed": False,
+    }
+
 @app.get("/rugby/health")
 async def rugby_health():
     """Rugby intelligence layer status."""
     return {
-        "status":            "ok",
+        "status":            "configured" if SPORTS_API_KEYS.get("rugby") else "degraded",
         "apiSportsConfigured": bool(SPORTS_API_KEYS.get("rugby")),
+        "apiSportsKeyEnvironmentVariable": "RUGBY_API_KEY",
+        "providerAvailabilityVerified": False,
+        "fallbackProvider": "ESPN",
+        "fallbackAvailabilityVerified": False,
+        "note": "Configuration only; HTTP 200 does not confirm live fixture availability",
         "leagues":           list(SA_RUGBY_LEAGUES.keys()),
         "clubs":             list(SA_CLUBS.keys()),
         "predictionEngine":  "KasiScore Rugby AI v1",
@@ -21782,44 +22710,45 @@ async def players_psl(season: int = Query(2025)):
         return {"players": [], "source": "API key not configured", "league": "PSL South Africa", "season": season}
     players: list = []
     page = 1
-    async with httpx.AsyncClient(timeout=30) as client:
-        while True:
-            try:
-                r = await client.get(f"{API_BASE}/players", params={"league": 288, "season": season, "page": page},
-                                     headers={"x-apisports-key": API_KEY})
-                _record_quota(r, "/players/psl")
-                data = r.json()
-                results = data.get("response", [])
-                if not results: break
-                for item in results:
-                    p = item.get("player", {})
-                    stats = item.get("statistics", [{}])[0] if item.get("statistics") else {}
-                    team = stats.get("team", {}).get("name", "")
-                    goals = stats.get("goals", {})
-                    passes = stats.get("passes", {})
-                    games = stats.get("games", {})
-                    players.append({
-                        "id": p.get("id"), "name": p.get("name", ""), "team": team,
-                        "position": games.get("position", ""),
-                        "appearances": games.get("appearences", 0) or 0,
-                        "goals": goals.get("total", 0) or 0,
-                        "assists": goals.get("assists", 0) or 0,
-                        "rating": float(games.get("rating", 0) or 0),
-                        "nationality": p.get("nationality", ""),
-                        "photo": p.get("photo", ""),
-                        "yellow": stats.get("cards", {}).get("yellow", 0) or 0,
-                        "red": stats.get("cards", {}).get("red", 0) or 0,
-                        "minutesPlayed": games.get("minutes", 0) or 0,
-                        "keyPasses": passes.get("key", 0) or 0,
-                        "shotsTotal": stats.get("shots", {}).get("total", 0) or 0,
-                        "dribbles": stats.get("dribbles", {}).get("success", 0) or 0,
-                    })
-                paging = data.get("paging", {})
-                if page >= paging.get("total", 1): break
-                page += 1
-                await asyncio.sleep(0.25)  # respect rate limit
-            except Exception as e:
-                log.warning(f"PSL players page {page}: {e}"); break
+    while True:
+        try:
+            data = await _afoot_get(
+                "/players",
+                {"league": 288, "season": season, "page": page}
+            )
+            results = data.get("response", [])
+            if not results: break
+            for item in results:
+                p = item.get("player", {})
+                stats = item.get("statistics", [{}])[0] if item.get("statistics") else {}
+                team = stats.get("team", {}).get("name", "")
+                goals = stats.get("goals", {})
+                passes = stats.get("passes", {})
+                games = stats.get("games", {})
+                players.append({
+                    "id": p.get("id"), "name": p.get("name", ""), "team": team,
+                    "position": games.get("position", ""),
+                    "appearances": games.get("appearences", 0) or 0,
+                    "goals": goals.get("total", 0) or 0,
+                    "assists": goals.get("assists", 0) or 0,
+                    "rating": float(games.get("rating", 0) or 0),
+                    "nationality": p.get("nationality", ""),
+                    "photo": p.get("photo", ""),
+                    "yellow": stats.get("cards", {}).get("yellow", 0) or 0,
+                    "red": stats.get("cards", {}).get("red", 0) or 0,
+                    "minutesPlayed": games.get("minutes", 0) or 0,
+                    "keyPasses": passes.get("key", 0) or 0,
+                    "shotsTotal": stats.get("shots", {}).get("total", 0) or 0,
+                    "dribbles": stats.get("dribbles", {}).get("success", 0) or 0,
+                })
+            paging = data.get("paging", {})
+            if page >= paging.get("total", 1): break
+            page += 1
+            await asyncio.sleep(0.25)  # respect rate limit
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.warning(f"PSL players page {page}: {e}"); break
     result = {"players": players, "count": len(players), "league": "PSL South Africa", "leagueId": 288, "season": season, "source": "API-Football"}
     PSL_PLAYER_CACHE[cache_key] = result
     PSL_PLAYER_CACHE_TS = time.time()
@@ -22253,6 +23182,8 @@ def _ksn_v482_team_response(token: str):
 
 @app.middleware("http")
 async def ksn_v482_team_seo_guard(request: Request, call_next):
+    if _ksn_staging_seo_test_mode():
+        return await ksn_staging_seo_test_gate(request, call_next)
     match = re.fullmatch(r"/teams/([^/]+)/?", request.url.path)
     if request.method in ("GET", "HEAD") and match:
         try:
@@ -22551,3 +23482,103 @@ def localized_team_page(lang:str,slug:str): return _seo_localized_html(lang,"tea
 def localized_player_page(lang:str,slug:str): return _seo_localized_html(lang,"players",slug,"player")
 @app.get("/{lang}/matches/{slug}",include_in_schema=False)
 def localized_match_page(lang:str,slug:str): return _seo_localized_html(lang,"matches",slug,"match")
+
+
+# v642: explicit, bounded, read-only provider probe. Never called by ordinary
+# fixture traffic; does not expose credentials or modify sports/cache/archive.
+@app.get("/sports/provider-probe", include_in_schema=False)
+async def ksn_v642_provider_probe(sport: str = Query("cricket"), date: str = Query("")):
+    sport = str(sport or "").lower().strip()
+    if sport not in ("cricket", "rugby"):
+        raise HTTPException(400, "Only cricket and rugby can be probed")
+    if date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        raise HTTPException(400, "date must be YYYY-MM-DD")
+    selected = ("icc", "sa20", "odi") if sport == "cricket" else ("rugby/union", "rugby/club")
+    client = await _sports_client()
+    results = []
+    for league in selected:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
+        try:
+            response = await client.get(url, params={"dates": date.replace("-", "")} if date else {}, timeout=8.0)
+            body = response.json() if response.status_code == 200 else {}
+            if not isinstance(body, dict):
+                body = {}
+            events = body.get("events") or []
+            results.append({
+                "leagueSlug": league,
+                "httpStatus": response.status_code,
+                "eventCount": len(events) if isinstance(events, list) else None,
+                "responseKeys": sorted(body.keys())[:15],
+                "sampleEventDate": (events[0].get("date") if events and isinstance(events[0], dict) else None),
+                "sampleEventId": (str(events[0].get("id")) if events and isinstance(events[0], dict) else None),
+            })
+        except Exception as exc:
+            results.append({"leagueSlug": league, "errorType": type(exc).__name__})
+    return {
+        "build": "v642-p0-sport-provider-probe",
+        "sport": sport,
+        "requestedDate": date or None,
+        "probes": results,
+        "rugbyApiSportsConfigured": bool(SPORTS_API_KEYS.get("rugby")),
+        "oddsPapiConfigured": bool(ODDSPAPI_ENABLED and ODDSPAPI_API_KEY),
+        "interpretation": "A zero count or failed HTTP request does not establish that no fixtures exist."
+    }
+
+
+# v643: bounded, read-only direct OddsPapi diagnostics. This does not alter
+# production fixture selection, football odds, snapshots or stored results.
+_KSN_V643_PROBE_LAST = {}
+
+@app.get("/sports/oddspapi-direct-probe", include_in_schema=False)
+async def ksn_v643_oddspapi_direct_probe(sport: str = Query("cricket")):
+    sport = str(sport or "").strip().lower()
+    if sport not in ("cricket", "rugby"):
+        raise HTTPException(400, "Only cricket and rugby can be probed")
+    if not ODDSPAPI_ENABLED or not ODDSPAPI_API_KEY:
+        return {"build":"v643-p0-oddspapi-direct-diagnostics", "sport":sport,
+                "configured":False,"providerQueried":False,"reason":"not_configured"}
+    # Shared 5-minute cooldown: prevent unauthenticated public traffic from
+    # repeatedly spending the provider's paid request allowance.
+    now=time.monotonic()
+    cached=_KSN_V643_PROBE_LAST.get(sport)
+    if cached and now-cached[0]<300:
+        return {**cached[1], "cached":True}
+    sid={"cricket":ODDSPAPI_SPORT_CRICKET,"rugby":ODDSPAPI_SPORT_RUGBY}[sport]
+    start=datetime.now(timezone.utc)
+    end=start+timedelta(days=7)
+    params={"sportId":sid,"startTimeFrom":int(start.timestamp()),
+            "startTimeTo":int(end.timestamp())}
+    result={"build":"v643-p0-oddspapi-direct-diagnostics","sport":sport,
+            "configured":True,"sportId":sid,"providerQueried":True,
+            "provider":"OddsPapi v5","path":"/{language}/fixtures",
+            "requestedDays":7,"cached":False}
+    try:
+        response=await asyncio.wait_for(
+            _oddspapi_get(f"{ODDSPAPI_REST_LANGUAGE}/fixtures",params,
+                          base=ODDSPAPI_REST_BASE),timeout=20.0)
+        rows=_oddspapi_rows(response)
+        result.update({"requestSucceeded":True,"eventCount":len(rows),
+                       "responseType":type(response).__name__,
+                       "responseKeys":sorted(str(k) for k in response.keys())[:20]
+                                      if isinstance(response,dict) else [],
+                       "firstEventKeys":sorted(str(k) for k in rows[0].keys())[:25]
+                                        if rows else [],
+                       "firstEventSportId":rows[0].get("sportId") if rows else None,
+                       "firstEventStatusId":rows[0].get("statusId") if rows else None,
+                       "firstEventStartTime":rows[0].get("startTime") if rows else None})
+    except Exception as exc:
+        # Never return exception text: provider errors may contain sensitive
+        # request details. Report only a recognized HTTP status or error type.
+        message=str(exc)
+        match=re.search(r"OddsPAPI HTTP (\d{3})",message)
+        result.update({"requestSucceeded":False,
+                       "httpStatus":int(match.group(1)) if match else None,
+                       "errorType":type(exc).__name__,
+                       "errorCategory":("budget" if "budget" in message.lower() else
+                                        "auth_cooldown" if "cooldown" in message.lower() else
+                                        "provider_http" if match else "request_failure")})
+    _KSN_V643_PROBE_LAST[sport]=(time.monotonic(),result)
+    return result
+
+# v646 diagnostic build marker (does not modify existing routes or archive)
+# V646 marker superseded by V656
