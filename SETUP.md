@@ -23,7 +23,7 @@ The dashboard detects your environment automatically:
 - **localhost / 127.0.0.1** → connects to `http://127.0.0.1:8000`
 - **LAN IP (192.168.x.x)** → connects to `http://<your-ip>:8000`
 - **file://** → connects to `http://127.0.0.1:8000`
-- **Netlify / cloud** → uses the `/api` proxy (see Netlify section below)
+- **Render / public domain** → uses same-origin FastAPI routes
 
 ### Override the API URL at runtime
 
@@ -35,22 +35,19 @@ setApiBase('')                            // reset to auto-detect
 
 ---
 
-## Deploy to Netlify
+## Deploy with Render and Cloudflare
 
-1. **Deploy the FastAPI server** somewhere public (Render, Railway, Fly.io, VPS, etc.)
-   ```bash
-   python server.py  # or use uvicorn / gunicorn in production
-   ```
+GitHub is the source of truth.
 
-2. **Deploy the frontend** to Netlify:
-   - Go to [app.netlify.com](https://app.netlify.com) → Add new site → Deploy manually
-   - Drag the project folder (everything in this zip) to Netlify
+Render runs the FastAPI application and serves the
+frontend, API, SEO pages, static assets and sitemap.
 
-3. **Set the `BACKENDURL` env var** in Netlify:
-   - Netlify → Site configuration → Environment variables
-   - Add: `BACKENDURL` = `https://your-fastapi-server.com`
+Cloudflare manages DNS, TLS, caching and security.
 
-4. **Redeploy** — the `/api/*` proxy will forward to your FastAPI server.
+Canonical domain: https://kasilivescore.com
+
+Validate changes on Render staging before production.
+No Netlify deployment or proxy is required.
 
 ---
 

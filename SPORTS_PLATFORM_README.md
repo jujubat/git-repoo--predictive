@@ -105,7 +105,7 @@ Added in this build:
 - First-party growth telemetry at `/analytics/event` and `/growth/dashboard`.
 - Weekend content publishing plan at `/content/weekend`.
 - Persistent `kasiscore_growth.sqlite3` event store.
-- Netlify routes for `/today` and `/weekend`.
+- Render FastAPI routes for `/today` and `/weekend`.
 - Expanded competition ID support for major cup competitions already represented in the registry.
 
 ### Production SEO
@@ -130,7 +130,7 @@ The web app now supports server-rendered HTML for high-value discovery routes wh
 Match pages attempt to reuse pending predictions from the learning store first, then fall back to current fixtures. When data is available, the initial HTML includes bookmaker 1X2 availability, KasiScore probability/confidence, recent form, injuries/availability and H2H context. Predictions remain gated by complete current bookmaker 1X2 odds.
 
 ### Deployment
-Set `PUBLIC_SITE_URL` on the FastAPI server to the public HTTPS origin. On Netlify, set `KASISCORE_BACKEND_URL` to the deployed FastAPI server. Netlify routes high-value SEO paths through `netlify/functions/seo.js`, which requests the server-rendered HTML and falls back to the SPA shell if the backend is temporarily unavailable.
+Set `PUBLIC_SITE_URL` to https://kasilivescore.com. Render serves the FastAPI HTML and SEO routes directly; Cloudflare handles the public domain.
 
 The client app hides the server-rendered SEO block after hydration and continues using the same interactive dashboard, so users and crawlers share the same canonical URLs.
 
@@ -163,7 +163,7 @@ KasiScore v161 is the production-oriented SEO/PWA build. Before public launch, c
    - Target Google's recommended Core Web Vitals thresholds in real-user data, not only lab tests.
 
 5. **Security headers**
-   - Netlify sends HSTS, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and a restrictive `Permissions-Policy`.
+   - Render and Cloudflare send HSTS, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and a restrictive `Permissions-Policy`.
    - Keep all API credentials server-side; never place API-Football keys in browser JavaScript.
 
 6. **Traffic / engagement instrumentation**
@@ -176,7 +176,7 @@ KasiScore v161 is the production-oriented SEO/PWA build. Before public launch, c
    - Keep the intelligence/data value visible independently of affiliate calls-to-action.
 
 8. **Operational launch checks**
-   - Load test the FastAPI service and Netlify SSR function.
+   - Load test the Render FastAPI service and SEO routes.
    - Confirm API-Football quotas, caching and rate limiting.
    - Verify that a provider outage degrades gracefully instead of generating incorrect predictions.
    - Confirm current bookmaker 1X2 odds are complete before publishing a qualified pre-match prediction.
