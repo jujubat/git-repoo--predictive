@@ -23581,4 +23581,4 @@ async def ksn_v643_oddspapi_direct_probe(sport: str = Query("cricket")):
     return result
 
 # v646 diagnostic build marker (does not modify existing routes or archive)
-KSN_BUILD_VERSION = "v646-p0-team-profile-cache-coherence"
+# V646 marker superseded by V656
