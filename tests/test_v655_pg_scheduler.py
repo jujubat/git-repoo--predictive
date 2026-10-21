@@ -32,6 +32,12 @@ url = os.getenv("DATABASE_URL", "").strip()
 if not url:
     raise SystemExit("STOP: staging DATABASE_URL missing")
 
+from urllib.parse import urlsplit, unquote
+parts=urlsplit(url)
+host=(parts.hostname or "").lower()
+if not (parts.scheme in ("postgres", "postgresql") and host.startswith("dpg-db9a50e1egvs73efq4g0-a.") and host.endswith(".render.com") and unquote(parts.path.lstrip("/"))=="kasilivescore_staging_db" and (parts.port or 5432)==5432):
+    raise SystemExit("STOP: Wrong staging database endpoint")
+
 import psycopg2
 from psycopg2 import sql
 
@@ -65,6 +71,7 @@ schema = "ksn_v655_test_" + uuid.uuid4().hex[:16]
 class IsolatedDriver:
     @staticmethod
     def connect(*args, **kwargs):
+        kwargs["sslmode"] = "require"
         conn = psycopg2.connect(*args, **kwargs)
         try:
             with conn.cursor() as cur:
@@ -111,7 +118,7 @@ exec(
 cleanup = namespace["_ksn654_ledger_cleanup_sync"]
 run_once = namespace["_ksn655_run_once_sync"]
 
-admin = psycopg2.connect(url, connect_timeout=4)
+admin = psycopg2.connect(url, connect_timeout=4, sslmode="require")
 admin.autocommit = True
 
 # Verify the database independently of the Render
@@ -121,7 +128,7 @@ try:
         cur.execute("SELECT current_database()")
         actual_database_name = cur.fetchone()[0]
 
-    if "staging" not in actual_database_name.lower():
+    if actual_database_name != "kasilivescore_staging_db":
         raise RuntimeError(
             "STOP: connected PostgreSQL database "
             "is not identified as staging"
@@ -229,7 +236,7 @@ try:
 
     # A separate PostgreSQL session holds the scheduler
     # lock. Our v655 worker must skip without cleanup.
-    holder = psycopg2.connect(url, connect_timeout=4)
+    holder = psycopg2.connect(url, connect_timeout=4, sslmode="require")
     holder.autocommit = True
     try:
         with holder.cursor() as cur:
