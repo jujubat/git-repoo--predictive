@@ -5083,6 +5083,39 @@ async def google_sitemap_xml():
 async def ksn_staging_seo_test_gate(request: Request, call_next):
     if _ksn_staging_seo_test_mode():
         path = request.url.path
+        # V657 P0: opt-in, staging-only, authenticated archive smoke test.
+        # Do not permit hours/days/africa: those legacy routes can call providers.
+        # Import inside branch: production requests never depend on this logic.
+        if path == "/finished-games" and request.method == "GET":
+            import secrets
+            staging_identity = " ".join(
+                os.getenv(k, "") for k in
+                ("RENDER_SERVICE_NAME", "RENDER_EXTERNAL_URL", "KSN_ENV")
+            ).lower()
+            configured_secret = os.getenv("KSN_STAGING_TEST_TOKEN", "")
+            supplied_secret = request.headers.get("X-KSN-Staging-Token", "")
+            valid_query = set(request.query_params.keys()).issubset({"limit", "offset"})
+            authorized = (
+                "staging" in staging_identity
+                and os.getenv("KSN_STAGING_P0_READ_ONLY", "0") == "1"
+                and len(configured_secret) >= 32
+                and secrets.compare_digest(supplied_secret, configured_secret)
+                and valid_query
+            )
+            if authorized:
+                # The default /finished-games branch calls only results_history,
+                # which explicitly does not call an upstream sports provider.
+                response = await call_next(request)
+                response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+                response.headers["Cache-Control"] = "no-store"
+                return response
+            return Response(
+                content="Staging SEO test mode: route disabled",
+                status_code=503,
+                media_type="text/plain",
+                headers={"X-Robots-Tag": "noindex, nofollow, noarchive",
+                         "Cache-Control": "no-store"},
+            )
         allowed = path in {
             "/health", "/robots.txt",
             "/sitemap.xml", "/seo/sitemap.xml"
