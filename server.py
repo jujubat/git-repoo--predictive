@@ -11889,7 +11889,35 @@ async def finished_games(request:Request, hours:Optional[int]=Query(None,ge=1,le
                 if key in seen: continue
                 seen.add(key);rows.append(m)
                 try:
-                    await asyncio.to_thread(_archive_results_upsert, [m])
+                    # V658: archive only authenticated fixture identities
+                    # with their original timezone-aware provider kickoff.
+                    # Only use API-Football-origin normalized fixtures.
+                    # The internal provider ID is not a generic match ID.
+                    raw_id = m.get("_afootFixtureId")
+                    if (
+                        isinstance(raw_id, int)
+                        and not isinstance(raw_id, bool)
+                        and 0 < raw_id <= 999999999999
+                        and m.get("oddsSource") == "API-Football"
+                    ):
+                        m["source"] = "API-Football"
+                        m["providerFixtureId"] = raw_id
+                    fixture_id = _ksn_v657_verified_fixture_id(m)
+                    fixture_date = m.get("fixtureDate")
+                    if fixture_id and isinstance(fixture_date, str):
+                        try:
+                            raw_dt = datetime.fromisoformat(
+                                fixture_date.strip().replace("Z", "+00:00")
+                            )
+                            if raw_dt.tzinfo is not None:
+                                m["archiveUtcKickoff"] = (
+                                    raw_dt.astimezone(timezone.utc).isoformat()
+                                )
+                                await asyncio.to_thread(
+                                    _archive_results_upsert, [m]
+                                )
+                        except ValueError:
+                            pass
                 except Exception as archive_exc:
                     log.warning("Finished Games archive upsert failed: %s", archive_exc)
         except Exception as exc: errors.append(f"{ds}: {exc}")
@@ -15121,7 +15149,23 @@ def _archive_result_row(m):
     if not isinstance(m,dict) or not _scored_finished(m): return None
     sport=str(m.get("sport") or "football").lower()
     pid=_ksn_v657_verified_fixture_id(m)
-    kickoff=_archive_text(m,"date","datetime","startTime","fixture.date")
+    if sport=="football" and pid:
+        raw_utc=_archive_text(m,"archiveUtcKickoff")
+        if not raw_utc:
+            return None
+        try:
+            verified_dt=datetime.fromisoformat(
+                raw_utc.replace("Z","+00:00")
+            )
+            if verified_dt.tzinfo is None:
+                return None
+            kickoff=verified_dt.astimezone(timezone.utc).isoformat()
+        except (ValueError,TypeError):
+            return None
+    else:
+        kickoff=_archive_text(
+            m,"date","datetime","startTime","fixture.date"
+        )
     home=_archive_text(m,"home","homeName","homeTeam.name","teams.home.name")
     away=_archive_text(m,"away","awayName","awayTeam.name","teams.away.name")
     hs=m.get("homeScore", m.get("homeGoals"))
@@ -15204,7 +15248,9 @@ def _archive_results_upsert(matches):
                     # Reuse the original hashed key when it exists.
                     r["key"] = existing_key
 
-                # Reject another row claiming this provider ID.
+                # V658: provider identity is authoritative.
+                # Reuse the original archive key even when
+                # the corrected UTC kickoff changes its legacy hash.
                 if incoming_id:
                     cur.execute(
                         "SELECT ksn_key FROM ksn_results_archive "
@@ -15212,13 +15258,25 @@ def _archive_results_upsert(matches):
                         "LIMIT 2",
                         ("football", incoming_id),
                     )
-                    other_keys = {
+                    provider_keys = {
                         str(row[0]) for row in cur.fetchall()
                     }
-                    if other_keys - {r["key"]}:
+
+                    if len(provider_keys) > 1:
                         raise ValueError(
-                            "V657 provider fixture identity collision"
+                            "V658 duplicate provider identity"
                         )
+
+                    if provider_keys:
+                        provider_key = next(iter(provider_keys))
+
+                        if existing and provider_key != r["key"]:
+                            raise ValueError(
+                                "V658 ambiguous archive identity"
+                            )
+
+                        r["key"] = provider_key
+
             vals=(r["key"],r["sport"],r["provider"],r["provider_id"],r["country"],r["competition"],
                   r["competition_id"],r["season"],r["round"],r["kickoff"],r["home_id"],r["home"],r["home_badge"],
                   r["away_id"],r["away"],r["away_badge"],r["home_score"],r["away_score"],r["status"],
@@ -15401,6 +15459,19 @@ async def _historical_provider_results(q:str="", sport:str="all", country:str=""
                 if term and term.lower() not in hay and not team_ids: continue
                 if country and country.lower() not in str(n.get("country") or "").lower() and country.lower() not in hay: continue
                 if competition and competition.lower() not in str(n.get("league") or "").lower(): continue
+                # V658: preserve only verified provider UTC.
+                raw_date = fixture.get("date")
+                if isinstance(raw_date, str) and raw_date.strip():
+                    try:
+                        raw_dt = datetime.fromisoformat(
+                            raw_date.strip().replace("Z", "+00:00")
+                        )
+                        if raw_dt.tzinfo is not None:
+                            n["archiveUtcKickoff"] = (
+                                raw_dt.astimezone(timezone.utc).isoformat()
+                            )
+                    except ValueError:
+                        pass
                 fixtures.append(n)
         uniq={str(x.get("id") or (x.get("date"),x.get("home"),x.get("away"))):x for x in fixtures}
         rows=sorted(uniq.values(),key=lambda x:str(x.get("date") or ""),reverse=True)[:limit]
@@ -15581,6 +15652,22 @@ async def sports_finished_all(request: Request, hours:int=Query(48,ge=1,le=168),
                     m['source']='API-Football'
                     m['providerFixtureId']=raw_fid
                     m['_afootFixtureId']=raw_fid
+                if m.get('providerFixtureId'):
+                    raw_date=fixture_obj.get('date')
+                    raw_stamp=None
+                    if isinstance(raw_date,str) and raw_date.strip():
+                        try:
+                            candidate=datetime.fromisoformat(
+                                raw_date.strip().replace('Z','+00:00')
+                            )
+                            if candidate.tzinfo is not None:
+                                raw_stamp=candidate
+                        except ValueError:
+                            pass
+                    if raw_stamp is not None:
+                        m['archiveUtcKickoff']=raw_stamp.astimezone(
+                            timezone.utc
+                        ).isoformat()
                 stamp=parse_dt(m.get('date') or m.get('datetime'))
                 if not stamp or not cutoff<=stamp<=now or not finished(m):continue
                 if not _scored_finished(m): excluded_missing_score+=1;continue
