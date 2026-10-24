@@ -21320,9 +21320,156 @@ async def ksn_v621_team_overview_diag(team:int=Query(...,ge=1), season:int=Query
 async def build_version():
     return {"version":KSN_BUILD_VERSION,"teamRenderer":"canonical-big5-team-profile-v480","dataPipeline":"canonical-big5-v480"}
 
+def _ksn_v657_archived_match_seo(fixture_id):
+    """Archive-only match SEO. No provider requests or archive writes."""
+    if not re.fullmatch(r"[1-9][0-9]{0,11}", str(fixture_id)):
+        return None
+
+    conn = cur = None
+    try:
+        conn, kind = _results_db()
+        cur = conn.cursor()
+        ph = "%s" if kind == "postgres" else "?"
+        cur.execute(
+            "SELECT provider, provider_id, competition, kickoff, "
+            "home_id, home_name, away_id, away_name, "
+            "home_score, away_score, status "
+            "FROM ksn_results_archive "
+            f"WHERE sport='football' AND provider_id={ph} LIMIT 2",
+            (str(int(fixture_id)),)
+        )
+        rows = cur.fetchall()
+
+        # Never index ambiguous or missing archive identities.
+        if len(rows) != 1:
+            return None
+
+        (provider, pid, league, kickoff, home_id, home,
+         away_id, away, hs, aws, status) = rows[0]
+
+        if str(provider or "").strip().lower() not in (
+            "api-football", "api football"
+        ):
+            return None
+
+        if str(pid) != str(int(fixture_id)):
+            return None
+
+        if str(status or "").upper().strip() not in (
+            "FT", "AET", "PEN", "FINISHED", "FULL TIME"
+        ):
+            return None
+
+        if not all((league, kickoff, home, away)):
+            return None
+
+        if not all(
+            re.fullmatch(r"[1-9][0-9]{0,11}", str(v or ""))
+            for v in (home_id, away_id)
+        ):
+            return None
+
+        try:
+            home_score = int(hs)
+            away_score = int(aws)
+        except (TypeError, ValueError):
+            return None
+
+        if home_score < 0 or away_score < 0:
+            return None
+
+        if str(home).strip().casefold() == str(away).strip().casefold():
+            return None
+
+        return {
+            "home": str(home).strip(),
+            "away": str(away).strip(),
+            "home_id": str(home_id),
+            "away_id": str(away_id),
+            "home_score": home_score,
+            "away_score": away_score,
+            "league": str(league).strip(),
+            "kickoff": str(kickoff),
+            "status": str(status).upper(),
+        }
+
+    except Exception as exc:
+        log.warning(
+            "V657 archive SEO lookup failed: %s",
+            type(exc).__name__
+        )
+        return None
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
+
+
+def _ksn_v657_match_document(fixture_id):
+    from html import escape as html_escape
+
+    document = _ksn_v492_match_seo(
+        _standalone_match_stats_page(fixture_id, "football", ""),
+        fixture_id
+    )
+
+    record = _ksn_v657_archived_match_seo(fixture_id)
+    if not record:
+        return document
+
+    e = lambda value: html_escape(str(value), quote=True)
+
+    title = (
+        f"{record['home']} {record['home_score']}–"
+        f"{record['away_score']} {record['away']}"
+        f" | {record['league']} | KasiScore"
+    )
+
+    summary = (
+        '<section id="ksn-v657-ssr-result" class="card">'
+        f'<h1>{e(record["home"])} {record["home_score"]}–'
+        f'{record["away_score"]} {e(record["away"])}</h1>'
+        f'<p>{e(record["league"])} · '
+        f'{e(record["kickoff"])} · {e(record["status"])}</p>'
+        '<nav aria-label="Match teams">'
+        f'<a href="/teams/{e(record["home_id"])}">'
+        f'{e(record["home"])}</a> · '
+        f'<a href="/teams/{e(record["away_id"])}">'
+        f'{e(record["away"])}</a>'
+        '</nav></section>'
+    )
+
+    document = document.replace(
+        "<title>Match Centre | Kasi Sports News</title>",
+        f"<title>{e(title)}</title>",
+        1
+    )
+
+    document = document.replace(
+        '<meta name="robots" content="noindex,follow">',
+        '<meta name="robots" content="index,follow">',
+        1
+    )
+
+    document = document.replace(
+        '<div id="page">',
+        summary + '<div id="page">',
+        1
+    )
+
+    return document
+
+
 @app.get("/matches/{fixture_id}/stats",response_class=HTMLResponse)
 async def canonical_match_stats_page(fixture_id:str):
-    return HTMLResponse(_ksn_v492_match_seo(_standalone_match_stats_page(fixture_id,"football",""),fixture_id),headers={"Cache-Control":"no-store, max-age=0", "CDN-Cache-Control":"no-store"})
+    return HTMLResponse(
+        _ksn_v657_match_document(fixture_id),
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "CDN-Cache-Control": "no-store"
+        }
+    )
 
 @app.get("/teams/{team_id}",response_class=HTMLResponse)
 async def canonical_team_page(team_id:str):
@@ -21397,8 +21544,14 @@ async def ssr_team(slug:str):
     return RedirectResponse(url=f"/teams/{slug}",status_code=308,headers={"Cache-Control":"no-store","X-KSN-Build":KSN_BUILD_VERSION})
 @app.get("/player/{slug:path}",response_class=HTMLResponse)
 async def ssr_player(slug:str):
-    if not _valid_public_slug(slug,"player"):raise HTTPException(404,"Player not found")
-    return HTMLResponse(_standalone_sports_page("player",slug,"football",""),headers={"Cache-Control":"no-store"})
+    if not _valid_public_slug(slug,"player"):
+        raise HTTPException(404,"Player not found")
+    canonical_id = _public_slug_to_id("player",slug)
+    return RedirectResponse(
+        url=f"/players/{canonical_id}",
+        status_code=308,
+        headers={"Cache-Control":"no-store"}
+    )
 @app.get("/admin",response_class=HTMLResponse)
 async def ssr_admin():
     html=await _render_seo_document("/admin")
