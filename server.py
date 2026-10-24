@@ -21440,26 +21440,28 @@ def _ksn_v657_match_document(fixture_id):
         '</nav></section>'
     )
 
-    document = document.replace(
-        "<title>Match Centre | Kasi Sports News</title>",
-        f"<title>{e(title)}</title>",
-        1
-    )
+    title_marker = '<title>Match Centre | Kasi Sports News</title>'
+    robots_marker = '<meta name="robots" content="noindex,follow">'
+    page_marker = '<div id="page">'
+
+    # Only enable indexing when the SSR insertion markers exist.
+    if not all(marker in document for marker in (
+        title_marker, robots_marker, page_marker
+    )):
+        return document
 
     document = document.replace(
-        '<meta name="robots" content="noindex,follow">',
+        title_marker, f'<title>{e(title)}</title>', 1
+    )
+    document = document.replace(
+        page_marker, summary + page_marker, 1
+    )
+    document = document.replace(
+        robots_marker,
         '<meta name="robots" content="index,follow">',
         1
     )
-
-    document = document.replace(
-        '<div id="page">',
-        summary + '<div id="page">',
-        1
-    )
-
     return document
-
 
 @app.get("/matches/{fixture_id}/stats",response_class=HTMLResponse)
 async def canonical_match_stats_page(fixture_id:str):
