@@ -15053,7 +15053,8 @@ def _results_archive_init():
             "CREATE INDEX IF NOT EXISTS idx_ksn_results_comp ON ksn_results_archive(lower(competition))",
             "CREATE INDEX IF NOT EXISTS idx_ksn_results_home ON ksn_results_archive(lower(home_name))",
             "CREATE INDEX IF NOT EXISTS idx_ksn_results_away ON ksn_results_archive(lower(away_name))",
-            "CREATE INDEX IF NOT EXISTS idx_ksn_results_season ON ksn_results_archive(season)"
+            "CREATE INDEX IF NOT EXISTS idx_ksn_results_season ON ksn_results_archive(season)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_ksn_results_sport_provider_fixture ON ksn_results_archive(sport,provider_id) WHERE provider_id ~ '^[1-9][0-9]{0,11}$'"
         ): cur.execute(sql)
     else:
         cur.execute("""CREATE TABLE IF NOT EXISTS ksn_results_archive(
@@ -15078,10 +15079,48 @@ def _archive_text(x, *keys):
         if cur not in (None,""): return str(cur)
     return ""
 
+
+def _ksn_v657_verified_fixture_id(match):
+    """Extract a positive numeric API-Football fixture ID only.
+
+    Never substitute team IDs, OddsPAPI IDs, hashes, or match names.
+    """
+    if not isinstance(match, dict):
+        return ""
+
+    provider = str(
+        match.get("source") or match.get("provider") or ""
+    ).strip().lower()
+
+    if provider not in ("api-football", "api football"):
+        return ""
+
+    candidates = [
+        match.get("providerFixtureId"),
+        match.get("_afootFixtureId"),
+        match.get("fixtureId"),
+    ]
+
+    fixture = match.get("fixture")
+    if isinstance(fixture, dict):
+        candidates.append(fixture.get("id"))
+
+    valid = set()
+    for value in candidates:
+        if isinstance(value, bool):
+            continue
+        value = str(value or "").strip()
+        if value.isascii() and value.isdecimal():
+            if 0 < int(value) <= 999999999999:
+                valid.add(str(int(value)))
+
+    # Conflicting identities must not be archived as verified.
+    return next(iter(valid)) if len(valid) == 1 else ""
+
 def _archive_result_row(m):
     if not isinstance(m,dict) or not _scored_finished(m): return None
     sport=str(m.get("sport") or "football").lower()
-    pid=_archive_text(m,"id","fixtureId","providerFixtureId","fixture.id")
+    pid=_ksn_v657_verified_fixture_id(m)
     kickoff=_archive_text(m,"date","datetime","startTime","fixture.date")
     home=_archive_text(m,"home","homeName","homeTeam.name","teams.home.name")
     away=_archive_text(m,"away","awayName","awayTeam.name","teams.away.name")
@@ -15113,6 +15152,73 @@ def _archive_results_upsert(matches):
     conn,kind=_results_db(); cur=conn.cursor(); now=datetime.now(timezone.utc).isoformat(); n=0
     try:
         for r in prepared:
+            # V657: resolve the exact original archive identity.
+            # Never infer a match from approximate names or scores.
+            if r["sport"] == "football":
+                legacy_raw = (
+                    f'{r["sport"]}|{r["kickoff"]}|'
+                    f'{r["home"]}|{r["away"]}'
+                )
+                legacy_key = hashlib.sha256(
+                    legacy_raw.encode()
+                ).hexdigest()
+
+                incoming_id = str(r["provider_id"] or "")
+                candidate_keys = list(dict.fromkeys(
+                    [r["key"], legacy_key]
+                ))
+
+                ph = "%s" if kind == "postgres" else "?"
+                placeholders = ",".join([ph] * len(candidate_keys))
+                sql = (
+                    "SELECT ksn_key,provider_id "
+                    "FROM ksn_results_archive "
+                    f"WHERE ksn_key IN ({placeholders})"
+                )
+                if kind == "postgres":
+                    sql += " FOR UPDATE"
+
+                cur.execute(sql, tuple(candidate_keys))
+                existing = {
+                    str(key): str(pid or "")
+                    for key, pid in cur.fetchall()
+                }
+
+                # Two different archive keys already represent
+                # this identity. Refuse an automatic merge.
+                if len(existing) > 1:
+                    raise ValueError(
+                        "V657 ambiguous archive identity"
+                    )
+
+                if existing:
+                    existing_key, old_id = next(
+                        iter(existing.items())
+                    )
+
+                    if old_id and incoming_id and old_id != incoming_id:
+                        raise ValueError(
+                            "V657 conflicting provider fixture IDs"
+                        )
+
+                    # Reuse the original hashed key when it exists.
+                    r["key"] = existing_key
+
+                # Reject another row claiming this provider ID.
+                if incoming_id:
+                    cur.execute(
+                        "SELECT ksn_key FROM ksn_results_archive "
+                        f"WHERE sport={ph} AND provider_id={ph} "
+                        "LIMIT 2",
+                        ("football", incoming_id),
+                    )
+                    other_keys = {
+                        str(row[0]) for row in cur.fetchall()
+                    }
+                    if other_keys - {r["key"]}:
+                        raise ValueError(
+                            "V657 provider fixture identity collision"
+                        )
             vals=(r["key"],r["sport"],r["provider"],r["provider_id"],r["country"],r["competition"],
                   r["competition_id"],r["season"],r["round"],r["kickoff"],r["home_id"],r["home"],r["home_badge"],
                   r["away_id"],r["away"],r["away_badge"],r["home_score"],r["away_score"],r["status"],
@@ -15123,24 +15229,36 @@ def _archive_results_upsert(matches):
                   home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee,source_payload)
                   VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
                   ON CONFLICT(ksn_key) DO UPDATE SET
+                  provider_id=CASE WHEN COALESCE(ksn_results_archive.provider_id,'')='' THEN EXCLUDED.provider_id ELSE ksn_results_archive.provider_id END,
                   country=EXCLUDED.country,competition=EXCLUDED.competition,competition_id=EXCLUDED.competition_id,
                   season=EXCLUDED.season,round_name=EXCLUDED.round_name,kickoff=EXCLUDED.kickoff,
                   home_id=EXCLUDED.home_id,home_name=EXCLUDED.home_name,home_badge=EXCLUDED.home_badge,
                   away_id=EXCLUDED.away_id,away_name=EXCLUDED.away_name,away_badge=EXCLUDED.away_badge,
                   home_score=EXCLUDED.home_score,away_score=EXCLUDED.away_score,status=EXCLUDED.status,
-                  venue=EXCLUDED.venue,referee=EXCLUDED.referee,source_payload=EXCLUDED.source_payload,updated_at=NOW()""", vals)
+                  venue=EXCLUDED.venue,referee=EXCLUDED.referee,source_payload=CASE
+                     WHEN COALESCE(EXCLUDED.provider_id,'')=''
+                      AND COALESCE(ksn_results_archive.provider_id,'')<>''
+                     THEN ksn_results_archive.source_payload
+                     ELSE EXCLUDED.source_payload
+                   END,updated_at=NOW()""", vals)
             else:
                 cur.execute("""INSERT INTO ksn_results_archive(
                   ksn_key,sport,provider,provider_id,country,competition,competition_id,season,round_name,kickoff,
                   home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee,
                   source_payload,collected_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                   ON CONFLICT(ksn_key) DO UPDATE SET
+                  provider_id=CASE WHEN COALESCE(provider_id,'')='' THEN excluded.provider_id ELSE provider_id END,
                   country=excluded.country,competition=excluded.competition,competition_id=excluded.competition_id,
                   season=excluded.season,round_name=excluded.round_name,kickoff=excluded.kickoff,
                   home_id=excluded.home_id,home_name=excluded.home_name,home_badge=excluded.home_badge,
                   away_id=excluded.away_id,away_name=excluded.away_name,away_badge=excluded.away_badge,
                   home_score=excluded.home_score,away_score=excluded.away_score,status=excluded.status,
-                  venue=excluded.venue,referee=excluded.referee,source_payload=excluded.source_payload,updated_at=excluded.updated_at""",
+                  venue=excluded.venue,referee=excluded.referee,source_payload=CASE
+                     WHEN COALESCE(excluded.provider_id,'')=''
+                      AND COALESCE(ksn_results_archive.provider_id,'')<>''
+                     THEN ksn_results_archive.source_payload
+                     ELSE excluded.source_payload
+                   END,updated_at=excluded.updated_at""",
                   vals+(now,now))
             n+=1
         conn.commit()
@@ -15451,6 +15569,18 @@ async def sports_finished_all(request: Request, hours:int=Query(48,ge=1,le=168),
             data=await _afoot_get('/fixtures',{'date':ds,'timezone':TIMEZONE})
             for raw in data.get('response',[]) or []:
                 m=_widget_match_record(_normalise_fixture(raw,''),'football')
+                # Preserve the authoritative API-Football fixture identity.
+                fixture_obj=raw.get('fixture') if isinstance(raw,dict) else {}
+                fixture_obj=fixture_obj if isinstance(fixture_obj,dict) else {}
+                raw_fid=fixture_obj.get('id')
+                if (
+                    isinstance(raw_fid,int)
+                    and not isinstance(raw_fid,bool)
+                    and 0 < raw_fid <= 999999999999
+                ):
+                    m['source']='API-Football'
+                    m['providerFixtureId']=raw_fid
+                    m['_afootFixtureId']=raw_fid
                 stamp=parse_dt(m.get('date') or m.get('datetime'))
                 if not stamp or not cutoff<=stamp<=now or not finished(m):continue
                 if not _scored_finished(m): excluded_missing_score+=1;continue
