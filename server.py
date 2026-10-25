@@ -2053,9 +2053,16 @@ async def _oddspapi_take_budget():
 
 
 
-async def _oddspapi_get(path: str, params: Optional[dict] = None, base: Optional[str] = None) -> Any:
+async def _oddspapi_get(path: str, params: Optional[dict] = None, base: Optional[str] = None, *, max_attempts: int = 2) -> Any:
     """Rate-safe OddsPAPI GET. Serializes requests, spaces them, and retries one 429."""
     global _oddspapi_last_request_at
+
+    # V659: Never perform external OddsPAPI requests while
+    # staging SEO test mode is enabled.
+    if os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1":
+        raise RuntimeError(
+            "OddsPAPI external requests disabled in staging SEO test mode"
+        )
     if not ODDSPAPI_ENABLED or not ODDSPAPI_API_KEY:
         raise RuntimeError("ODDSPAPI_API_KEY is not configured")
     auth_token = _ksn535_odds_auth_token()
@@ -2067,7 +2074,7 @@ async def _oddspapi_get(path: str, params: Optional[dict] = None, base: Optional
     root = (base or ODDSPAPI_REST_BASE).rstrip("/")
 
     async with _oddspapi_request_lock:
-        for attempt in range(2):
+        for attempt in range(max_attempts):
             now_loop = asyncio.get_running_loop().time()
             wait_for = ODDSPAPI_MIN_REQUEST_INTERVAL - (now_loop - _oddspapi_last_request_at)
             if wait_for > 0:
@@ -2087,7 +2094,7 @@ async def _oddspapi_get(path: str, params: Optional[dict] = None, base: Optional
                 _KSN535_ODDS_AUTH_BLOCKED[auth_token] = time.monotonic() + _KSN535_ODDS_AUTH_COOLDOWN
                 raise RuntimeError("OddsPAPI HTTP 401: invalid credentials (cooldown active)")
 
-            if response.status_code == 429 and attempt == 0:
+            if response.status_code == 429 and attempt + 1 < max_attempts:
                 retry_after = 0.0
                 try:
                     retry_after = float(response.headers.get("Retry-After") or 0)
@@ -6290,15 +6297,7 @@ async def fixture_live_bundle(fixture_id: int):
     )
     f=((fd.get("response") or [{}])[0] if isinstance(fd,dict) else {})
     # v362: completed/live matches should not stay blank because an early empty stats snapshot was cached.
-    if isinstance(sd,dict) and not sd.get("statistics"):
-        try:
-            raw_stats=await _afoot_get("/fixtures/statistics",{"fixture":fixture_id},force_fresh=True)
-            fresh_stats=[]
-            for row in raw_stats.get("response") or []:
-                fresh_stats.append({"team":row.get("team") or {},"statistics":row.get("statistics") or []})
-            if fresh_stats: sd={"fixtureId":fixture_id,"statistics":fresh_stats,"available":True,"source":"API-Football"}
-        except Exception as fresh_stats_exc:
-            log.debug("Fresh statistics retry unavailable fixture=%s: %s",fixture_id,fresh_stats_exc)
+    # Empty-statistics recovery is owned by fixture_stats().
     return {
         "fixture":f,
         "statistics":sd.get("statistics",[]) if isinstance(sd,dict) else [],
@@ -11744,11 +11743,36 @@ async def tip_of_day(request: Request):
         except Exception as exc:
             log.warning("tip snapshot fallback read failed: %s",exc)
 
+    # V659: Football + Rugby Tip of the Day response contract.
+    # Cricket is intentionally excluded from featured tips.
+    # Rugby remains unavailable until verified bookmaker eligibility
+    # and provider fixture identity have been implemented.
+    football_tip = tips[0] if tips else None
+
+    sport_tips = {
+        "football": football_tip,
+        "rugby": None,
+    }
+
+    sport_tip_status = {
+        "football": (
+            "qualified" if football_tip else "no-qualified-tip"
+        ),
+        "rugby": "no-qualified-tip",
+    }
+
     payload={"state":state,"tips":tips,"count":len(tips),"comparisonFallback":comparison_fallback[:3],
             "comparisonCount":len(comparison_fallback[:3]),"originalDateRequired":False,
             "yesterdayDate":yesterday,"yesterday":yesterday_rows,
             "error":None,"refreshError":provider_error if state.startswith("comparison") else None,
             "generatedAt":datetime.now(timezone.utc).isoformat()}
+    payload["sportTips"] = sport_tips
+    payload["sportTipStatus"] = sport_tip_status
+    payload["sportTipCount"] = sum(
+        tip is not None for tip in sport_tips.values()
+    )
+    payload["sportTipVersion"] = "v659"
+
     # Persist the last non-empty Tip payload so a provider refresh can never blank the widget.
     if (tips or comparison_fallback) and "_dashboard_snapshot_put" in globals():
         _dashboard_snapshot_put("tip-of-day:last_good", {"data": payload})
@@ -11968,8 +11992,24 @@ async def cricket_predictions(date:str=Query(""),limit:int=Query(20,ge=1,le=50))
     games=await _sports_scores("cricket",date or None,False,None)
     out=[]
     for g in games:
-        st=str(g.get("statusShort") or "").lower()
-        if st in {"post","final","ft"}: continue
+        # V659: fail closed unless the fixture is verified as upcoming.
+        st = str(
+            g.get("statusShort") or g.get("status") or ""
+        ).strip().lower()
+        if st not in {"ns", "not started", "scheduled", "upcoming"}:
+            continue
+
+        kickoff = g.get("date")
+        if not isinstance(kickoff, str):
+            continue
+        try:
+            dt = datetime.fromisoformat(
+                kickoff.strip().replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        if dt.tzinfo is None or dt <= datetime.now(timezone.utc):
+            continue
         o=g.get("odds") or {}
         hp=float(o.get("homeWin") or 0); ap=float(o.get("awayWin") or 0)
         if hp>0 and ap>0:
@@ -11983,9 +12023,9 @@ async def cricket_predictions(date:str=Query(""),limit:int=Query(20,ge=1,le=50))
     out.sort(key=lambda x:float((x.get("prediction") or {}).get("confidence") or 0),reverse=True)
     state="ok" if out else ("provider-error" if not games else "no-qualified-predictions")
     return {"sport":"cricket","count":len(out[:limit]),"predictions":out[:limit],
-            "state":state,"provider":"ESPN normalized cricket feed",
-            "oddsConfigured":bool(ODDS_API_ENABLED and ODDS_API_KEY),
-            "source":"normalized cricket feed + subscribed bookmaker odds",
+            "state":state,"provider":"OddsPAPI",
+            "oddsConfigured":bool(ODDSPAPI_ENABLED and ODDSPAPI_API_KEY),
+            "source":"OddsPAPI cricket fixtures and bookmaker odds",
             "message":None if out else ("Cricket provider returned no games." if not games else "Games are available but no subscribed bookmaker odds currently qualify.")}
 
 @app.get("/prediction-markets")
@@ -13352,6 +13392,102 @@ def _oddspapi_cached_afoot_candidates() -> list[dict]:
     return sorted(unique.values(), key=key)
 
 
+
+@app.get("/admin/rugby-market-catalog")
+async def ksn_v659_rugby_market_catalog(request: Request):
+    """Read-only, administrator-only Rugby market inspection."""
+    if not _ks_admin_authorized(request):
+        raise HTTPException(403, "Admin access required")
+
+    catalog = []
+    seen = set()
+    cache = globals().get("_ksn_v659_rugby_odds_cache", {})
+
+    if isinstance(cache, dict):
+        for entry in list(cache.values())[:100]:
+            if not isinstance(entry, dict):
+                continue
+
+            # Never assume an unlabelled cache entry is Rugby.
+            if str(entry.get("sport") or "").lower() != "rugby":
+                continue
+
+            snapshot = entry.get("data") or entry
+            if not isinstance(snapshot, dict):
+                continue
+
+            safe = _oddspapi_safe_market_structure(snapshot)
+
+            # V659: v5 active selections are stored under snapshot["odds"].
+            # Existing v4-style parsing remains unchanged.
+            v5_markets = _ksn_v659_rugby_v5_market_summary(snapshot)
+
+            for market in v5_markets:
+                mid = market.get("marketId")
+                outcomes = [
+                    {
+                        "outcomeId": o.get("outcomeId"),
+                        "name": o.get("outcomeName"),
+                    }
+                    for o in market.get("outcomes", [])
+                ]
+
+                identity = (
+                    str(mid),
+                    str(market.get("marketName")),
+                    tuple(sorted(
+                        str(o["outcomeId"]) for o in outcomes
+                    )),
+                )
+
+                if identity not in seen:
+                    seen.add(identity)
+                    catalog.append({
+                        "marketId": mid,
+                        "marketName": market.get("marketName"),
+                        "outcomes": outcomes,
+                    })
+
+            for book in safe.get("bookmakers", []):
+                for market in book.get("markets", []):
+                    mid = market.get("marketId")
+                    outcomes = [
+                        {
+                            "outcomeId": o.get("outcomeId"),
+                            "name": o.get("name"),
+                        }
+                        for o in market.get("outcomes", [])
+                    ]
+                    identity = (
+                        str(mid),
+                        str(market.get("name")),
+                        tuple(str(o["outcomeId"]) for o in outcomes),
+                    )
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    catalog.append({
+                        "marketId": mid,
+                        "marketName": market.get("name"),
+                        "outcomes": outcomes,
+                    })
+
+    return {
+        "sport": "rugby",
+        "source": "OddsPAPI cached records only",
+        "providerCalls": 0,
+        "markets": catalog[:100],
+        "count": len(catalog[:100]),
+        "verifiedMatchWinnerMapping": False,
+        "message": (
+            "Market identifiers are diagnostic only. "
+            "Outcome semantics require provider confirmation."
+            if catalog else
+            "No explicitly tagged Rugby odds snapshots available."
+        ),
+    }
+
+
 async def _oddspapi_diagnostics_impl():
     """
     Safe production diagnostic for the REST fallback.
@@ -13768,7 +13904,7 @@ NEWS_CACHE = TTLCache(maxsize=100, ttl=300)
 SPORTS_HTTP: Optional[httpx.AsyncClient] = None
 
 SPORTS_API_KEYS = {
-    "rugby": os.getenv("RUGBY_API_KEY", ""),
+    "rugby": API_KEY,
     "basketball": "",
     "football": API_KEY,
 }
@@ -13797,6 +13933,19 @@ async def _sports_client():
     return SPORTS_HTTP
 
 async def _sports_get(url: str, params: dict | None = None, headers: dict | None = None):
+    # V659: Block external sports providers in staging SEO test mode.
+    if os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1":
+        from urllib.parse import urlsplit
+        target = urlsplit(str(url))
+        host = (target.hostname or "").lower()
+
+        if target.scheme not in {"http", "https"} or host not in {
+            "localhost", "127.0.0.1", "::1"
+        }:
+            raise RuntimeError(
+                "External sports provider requests disabled in staging SEO test mode"
+            )
+
     c = await _sports_client()
     r = await c.get(url, params=params or {}, headers=headers or {})
     r.raise_for_status()
@@ -13831,9 +13980,25 @@ def _apisports_event(g: dict, sport: str):
     scores = g.get("scores") or {}
     fixture = g.get("fixture") or g.get("game") or {}
     status = fixture.get("status") or g.get("status") or {}
+    # V659: retain a verified UTC kickoff, never guess a missing timezone.
+    raw_date = fixture.get("date") or g.get("date")
+    kickoff_utc = None
+    if isinstance(raw_date, str):
+        try:
+            parsed = datetime.fromisoformat(
+                raw_date.strip().replace("Z", "+00:00")
+            )
+            if parsed.tzinfo is not None:
+                kickoff_utc = parsed.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            pass
+
     return {
         "id": str(fixture.get("id") or g.get("id") or ""), "sport": sport,
-        "league": (g.get("league") or {}).get("name", ""), "leagueSlug": str((g.get("league") or {}).get("id") or ""), "leagueLogo": (g.get("league") or {}).get("logo", ""), "leagueFlag": (g.get("country") or {}).get("flag", "") if isinstance(g.get("country"), dict) else "", "date": fixture.get("date") or g.get("date"),
+        "date": kickoff_utc,
+        "providerFixtureId": str(fixture.get("id") or g.get("id") or ""),
+        "providerName": "API-Sports",
+        "league": (g.get("league") or {}).get("name", ""), "leagueSlug": str((g.get("league") or {}).get("id") or ""), "leagueLogo": (g.get("league") or {}).get("logo", ""), "leagueFlag": (g.get("country") or {}).get("flag", "") if isinstance(g.get("country"), dict) else "",
         "home": (teams.get("home") or {}).get("name", "Home"), "away": (teams.get("away") or {}).get("name", "Away"),
         "homeId": (teams.get("home") or {}).get("id"), "awayId": (teams.get("away") or {}).get("id"),
         "homeLogo": (teams.get("home") or {}).get("logo", ""), "awayLogo": (teams.get("away") or {}).get("logo", ""),
@@ -13844,6 +14009,10 @@ def _apisports_event(g: dict, sport: str):
     }
 
 async def _apisports_scores(sport: str, date: str | None = None, live: bool = False):
+    # V659: Block API-Sports requests in staging SEO test mode.
+    if os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1":
+        return []
+
     key = SPORTS_API_KEYS.get(sport)
     if not key or sport not in SPORTS_API_BASES:
         return []
@@ -14278,35 +14447,56 @@ async def _sports_scores(sport: str, date: str | None = None, live: bool = False
                 fs=f.get("fixture") or {}; ts=f.get("teams") or {}; goals=f.get("goals") or {}; st=fs.get("status") or {}
                 out.append({"id":str(fs.get("id") or ""),"sport":"football","league":(f.get("league") or {}).get("name") or "Football","leagueSlug":str((f.get("league") or {}).get("id") or ""),"leagueId":(f.get("league") or {}).get("id"),"country":(f.get("league") or {}).get("country") or "","countryName":(f.get("league") or {}).get("country") or "","leagueLogo":(f.get("league") or {}).get("logo") or "","leagueFlag":(f.get("league") or {}).get("flag") or "","date":fs.get("date"),"home":(ts.get("home") or {}).get("name") or "Home","away":(ts.get("away") or {}).get("name") or "Away","homeId":(ts.get("home") or {}).get("id"),"awayId":(ts.get("away") or {}).get("id"),"homeLogo":(ts.get("home") or {}).get("logo") or "","awayLogo":(ts.get("away") or {}).get("logo") or "","homeScore":goals.get("home"),"awayScore":goals.get("away"),"status":st.get("long") or st.get("short") or "Scheduled","statusShort":st.get("short") or "","elapsed":st.get("elapsed") or 0,"venue":(fs.get("venue") or {}).get("name") or "","source":"API-Football"})
         except Exception as exc: log.warning("API-Football live/scores failed: %s", exc)
-    elif sport in {"rugby","cricket"}:
-        # Paid OddsPapi subscription is the primary cross-sport feed.
+    elif sport == "rugby":
+        # V659: API-Sports Rugby is primary; OddsPAPI supplies fallback.
+        if SPORTS_API_KEYS.get("rugby"):
+            try:
+                out = await _apisports_scores(sport, date, live)
+            except Exception as exc:
+                log.warning("V659 rugby primary unavailable: %s", exc)
+        if not out:
+            try:
+                out = await _oddspapi_sport_fixtures(sport, date, live)
+                if live and out:
+                    out = await _oddspapi_enrich_scores(out, 40)
+            except Exception as exc:
+                log.warning("V659 rugby fallback unavailable: %s", exc)
+
+    elif sport == "cricket":
+        # V659: OddsPAPI is the sole configured cricket provider.
         try:
-            out=await _oddspapi_sport_fixtures(sport,date,live)
+            out = await _oddspapi_sport_fixtures(sport, date, live)
+            if live and out:
+                out = await _oddspapi_enrich_scores(out, 40)
         except Exception as exc:
-            log.warning("OddsPapi %s fixtures failed: %s",sport,exc)
-        # Rugby can additionally use API-Sports when its separate key is configured.
-        if not out and sport=="rugby" and SPORTS_API_KEYS.get("rugby"):
-            try: out=await _apisports_scores(sport,date,live)
-            except Exception as exc: log.warning("API-Sports rugby failed: %s",exc)
-    if not out and not live:
-        if sport in {"rugby","cricket"} and not date and not league:
-            out=await _multiday_public_sport_fallback(sport,7)
-        else:
-            out=await _espn_scores(sport, date, league)
-    elif not out and live:
-        out=await _espn_scores(sport, date, league)
-        out=[x for x in out if str(x.get("statusShort") or "").lower() in ("in","live") or re.search(r"live|progress|halftime|period|quarter|inning|1h|2h|ht|et", str(x.get("status") or ""), re.I)]
-    if sport in {"rugby","cricket"} and out and live:
+            log.warning("V659 cricket provider unavailable: %s", exc)
+
+    if sport == "football" and not out:
+        # V659: Only verified OddsPAPI fixtures may serve as fallback.
         try:
-            out=await _oddspapi_enrich_scores(out,40)
-            out=await _oddspapi_attach_live_odds(out,sport,20)
+            out = await _oddspapi_sport_fixtures(sport, date, live)
+            if live and out:
+                out = await _oddspapi_enrich_scores(out, 40)
         except Exception as exc:
-            log.debug("%s live score/odds enrichment failed: %s",sport,exc)
-    if sport == "cricket" and out:
-        try:
-            out = await _attach_odds_api_to_sport_games(out, sport)
-        except Exception as exc:
-            log.debug("Cricket odds enrichment failed: %s", exc)
+            log.warning("V659 football fallback unavailable: %s", exc)
+
+    if sport in {"rugby", "cricket"} and out and live:
+        # Only OddsPAPI-origin fixtures may use OddsPAPI fixture IDs.
+        odds_rows = [
+            row for row in out
+            if str(row.get("source") or "").lower()
+            .replace(" ", "") in {"oddspapi", "odds-papi"}
+            and (row.get("providerFixtureId") or row.get("id"))
+        ]
+        if odds_rows:
+            try:
+                await _oddspapi_attach_live_odds(
+                    odds_rows, sport, 20
+                )
+            except Exception as exc:
+                log.debug(
+                    "V659 %s odds unavailable: %s", sport, exc
+                )
     # Newest/live first, then kickoff.
     out=sorted(out, key=lambda x: (x.get("statusShort") != "in", x.get("date") or ""))
     SPORTS_CACHE[key]=out
@@ -15326,6 +15516,631 @@ def _archive_results_upsert(matches):
         cur.close(); conn.close()
     return n
 
+
+# KSN V659 PROVIDER-FREE ARCHIVE DETAIL
+@app.get("/results/archive-detail/{archive_key}")
+async def ksn_v659_archive_detail(archive_key: str):
+    """Read an archived result without provider calls or database writes."""
+    if not archive_key or len(archive_key) > 512:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid archive key"
+        )
+
+    conn = None
+    cur = None
+
+    columns = [
+        "ksn_key", "sport", "provider", "provider_id",
+        "country", "competition", "competition_id", "season",
+        "round_name", "kickoff", "home_id", "home_name",
+        "home_badge", "away_id", "away_name", "away_badge",
+        "home_score", "away_score", "status", "venue", "referee"
+    ]
+
+    try:
+        conn, kind = _results_db()
+        cur = conn.cursor()
+
+        placeholder = "%s" if kind == "postgres" else "?"
+
+        sql = (
+            "SELECT " + ", ".join(columns) +
+            " FROM ksn_results_archive WHERE ksn_key=" +
+            placeholder + " LIMIT 1"
+        )
+
+        cur.execute(sql, (archive_key,))
+        record = cur.fetchone()
+
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Archived match not found"
+            )
+
+        row = dict(zip(columns, record))
+        row["date"] = str(row.pop("kickoff"))
+        row["archiveKey"] = row.pop("ksn_key")
+        row["providerFixtureId"] = None
+        row["isFinished"] = True
+        row["permanentArchive"] = True
+        row["providerCalls"] = 0
+        row["dataSource"] = "permanent-results-archive"
+
+        return row
+
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.rollback()
+            conn.close()
+
+
+
+
+# KSN V659 PROVIDER-FREE LIVE H2H
+@app.get("/results/live-h2h")
+async def ksn_v659_live_h2h(
+    home_id: str = Query(...),
+    away_id: str = Query(...),
+    before: str = Query(...),
+    limit: int = Query(20, ge=1, le=50)
+):
+    """Read confirmed earlier Football meetings without provider requests."""
+    import re
+    from datetime import datetime, timezone
+
+    home_id = str(home_id).strip()
+    away_id = str(away_id).strip()
+
+    if not re.fullmatch(r"[1-9][0-9]{0,11}", home_id):
+        raise HTTPException(status_code=400, detail="Invalid home team ID")
+    if not re.fullmatch(r"[1-9][0-9]{0,11}", away_id):
+        raise HTTPException(status_code=400, detail="Invalid away team ID")
+    if home_id == away_id:
+        raise HTTPException(status_code=400, detail="Team IDs must differ")
+
+    try:
+        cutoff = datetime.fromisoformat(
+            before.strip().replace("Z", "+00:00")
+        )
+        if cutoff.tzinfo is None:
+            raise ValueError("Timezone required")
+        cutoff = cutoff.astimezone(timezone.utc).isoformat()
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=400,
+            detail="Valid timezone-aware kickoff required"
+        )
+
+    conn = None
+    cur = None
+    try:
+        conn, kind = _results_db()
+        cur = conn.cursor()
+        ph = "%s" if kind == "postgres" else "?"
+
+        sql = (
+            "SELECT kickoff,competition,home_id,away_id,"
+            "home_name,away_name,home_score,away_score,status "
+            "FROM ksn_results_archive "
+            "WHERE sport='football' AND kickoff<" + ph +
+            " AND ((home_id=" + ph + " AND away_id=" + ph +
+            ") OR (home_id=" + ph + " AND away_id=" + ph + ")) "
+            "ORDER BY kickoff DESC LIMIT " + ph
+        )
+
+        cur.execute(
+            sql,
+            (cutoff, home_id, away_id, away_id, home_id, limit)
+        )
+
+        result = {
+            "homeId": home_id,
+            "awayId": away_id,
+            "played": 0,
+            "homeWins": 0,
+            "awayWins": 0,
+            "draws": 0,
+            "meetings": [],
+            "available": False,
+            "source": "permanent-results-archive",
+            "providerCalls": 0
+        }
+
+        finals = {
+            "FT", "AET", "PEN", "FINISHED", "FULL TIME", "FINAL"
+        }
+
+        for record in cur.fetchall():
+            date, league, hid, aid, hn, an, hs, aws, status = record
+
+            if str(status or "").upper() not in finals:
+                continue
+
+            try:
+                hs, aws = int(hs), int(aws)
+            except (ValueError, TypeError):
+                continue
+
+            if hs < 0 or aws < 0:
+                continue
+
+            result["meetings"].append({
+                "date": str(date),
+                "league": league,
+                "homeTeam": hn,
+                "awayTeam": an,
+                "homeScore": hs,
+                "awayScore": aws,
+                "status": status
+            })
+
+            selected_home = hs if str(hid) == home_id else aws
+            selected_away = aws if str(hid) == home_id else hs
+
+            if selected_home > selected_away:
+                result["homeWins"] += 1
+            elif selected_home < selected_away:
+                result["awayWins"] += 1
+            else:
+                result["draws"] += 1
+
+        result["played"] = len(result["meetings"])
+        result["available"] = result["played"] > 0
+        if not result["available"]:
+            result["reason"] = "No verified previous meetings in archive"
+
+        return result
+
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.rollback()
+            conn.close()
+
+# KSN V659 PROVIDER-FREE ARCHIVE H2H
+@app.get("/results/archive-h2h/{archive_key}")
+async def ksn_v659_archive_h2h(archive_key: str):
+    """Earlier confirmed Football meetings from permanent archive only."""
+    if not archive_key or len(archive_key) > 512:
+        raise HTTPException(status_code=400, detail="Invalid archive key")
+
+    conn = None
+    cur = None
+    try:
+        conn, kind = _results_db()
+        cur = conn.cursor()
+        ph = "%s" if kind == "postgres" else "?"
+
+        cur.execute(
+            "SELECT sport,home_id,away_id,home_name,away_name,kickoff "
+            "FROM ksn_results_archive WHERE ksn_key=" + ph,
+            (archive_key,)
+        )
+        target = cur.fetchone()
+        if target is None:
+            raise HTTPException(
+                status_code=404, detail="Archived match not found"
+            )
+
+        sport, home_id, away_id, home_name, away_name, kickoff = target
+
+        result = {
+            "archiveKey": archive_key,
+            "homeTeam": home_name,
+            "awayTeam": away_name,
+            "played": 0,
+            "homeWins": 0,
+            "awayWins": 0,
+            "draws": 0,
+            "meetings": [],
+            "source": "permanent-results-archive",
+            "providerCalls": 0,
+            "available": False
+        }
+
+        if str(sport).lower() != "football":
+            return {**result, "reason": "Football archive only"}
+
+        home_id, away_id = str(home_id or "").strip(), str(away_id or "").strip()
+        if not home_id or not away_id or home_id == away_id:
+            return {**result, "reason": "Verified team IDs unavailable"}
+
+        sql = (
+            "SELECT ksn_key,kickoff,competition,home_id,away_id,"
+            "home_name,away_name,home_score,away_score,status "
+            "FROM ksn_results_archive "
+            "WHERE sport='football' AND kickoff<" + ph +
+            " AND ("
+            "(home_id=" + ph + " AND away_id=" + ph + ") OR "
+            "(home_id=" + ph + " AND away_id=" + ph + ")"
+            ") ORDER BY kickoff DESC LIMIT 100"
+        )
+        cur.execute(sql, (kickoff, home_id, away_id, away_id, home_id))
+
+        finished = {"FT", "AET", "PEN", "FINISHED", "FULL TIME", "FINAL"}
+        for row in cur.fetchall():
+            key, date, league, hid, aid, hn, an, hs, aws, status = row
+            if str(key) == archive_key:
+                continue
+            if str(status or "").upper() not in finished:
+                continue
+
+            try:
+                hs, aws = int(hs), int(aws)
+            except (TypeError, ValueError):
+                continue
+            if hs < 0 or aws < 0:
+                continue
+
+            item = {
+                "date": str(date),
+                "league": league,
+                "homeTeam": hn,
+                "awayTeam": an,
+                "homeScore": hs,
+                "awayScore": aws,
+                "status": status
+            }
+            result["meetings"].append(item)
+
+            # Wins refer to the teams in the selected archived fixture,
+            # even when historical home/away positions were reversed.
+            selected_home_goals = hs if str(hid) == home_id else aws
+            selected_away_goals = aws if str(hid) == home_id else hs
+
+            if selected_home_goals > selected_away_goals:
+                result["homeWins"] += 1
+            elif selected_home_goals < selected_away_goals:
+                result["awayWins"] += 1
+            else:
+                result["draws"] += 1
+
+        result["played"] = len(result["meetings"])
+        result["available"] = bool(result["meetings"])
+        if not result["available"]:
+            result["reason"] = "No verified previous meetings in archive"
+        return result
+
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.rollback()
+            conn.close()
+
+# KSN V659 ARCHIVE MATCH CENTRE PAGE
+
+@app.get("/results/sport-archive-view", response_class=HTMLResponse)
+async def ksn_v659_sport_archive_view():
+    """Read-only historical Rugby/Cricket Match Centre shell."""
+    return HTMLResponse("""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Historical Match Centre | KasiScore</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0b111b;color:#eef3f9;font:15px Arial,sans-serif}
+main{max-width:900px;margin:0 auto;padding:22px}
+a{color:#80bdff}
+header{display:flex;justify-content:space-between;gap:12px;align-items:center}
+.card{background:#172231;border:1px solid #304156;border-radius:14px;padding:22px;margin:20px 0}
+.teams{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;text-align:center}
+.team{font-weight:700;overflow-wrap:anywhere}
+.score{font-size:28px;font-weight:800}
+.muted{color:#a8b8cc;line-height:1.7}
+#error{color:#ffadb1}
+@media(max-width:520px){main{padding:12px}.score{font-size:21px}.card{padding:12px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<strong>KasiScore · Historical Match Centre</strong>
+<a href="/#live">Back to Results</a>
+</header>
+<h1 id="heading">Archived match</h1>
+<p id="error" role="alert"></p>
+<section class="card">
+<div class="teams">
+<div class="team" id="home">—</div>
+<div class="score" id="score">—</div>
+<div class="team" id="away">—</div>
+</div>
+<p id="status" class="muted"></p>
+</section>
+<section class="card">
+<h2>Match details</h2>
+<p id="details" class="muted">Loading archived match…</p>
+<p id="note" class="muted"></p>
+</section>
+</main>
+<script>
+(async function(){
+'use strict';
+const params=new URLSearchParams(location.search);
+const key=params.get('archive_key');
+const requestedSport=String(params.get('sport')||'').toLowerCase();
+const el=id=>document.getElementById(id);
+
+if(!key||!['rugby','cricket'].includes(requestedSport)){
+ el('error').textContent='Invalid historical match link.';
+ return;
+}
+
+try{
+ const response=await fetch(
+  '/results/archive-detail/'+encodeURIComponent(key),
+  {headers:{Accept:'application/json'},cache:'no-store'}
+ );
+ if(!response.ok)throw Error('Archive record unavailable');
+
+ const m=await response.json();
+ const sport=String(m.sport||'').toLowerCase();
+
+ if(sport!==requestedSport){
+  throw Error('Archived sport does not match the link');
+ }
+
+ el('heading').textContent=
+  sport==='rugby'?'Rugby — archived result':'Cricket — archived result';
+
+ el('home').textContent=m.home_name||'Home team unavailable';
+ el('away').textContent=m.away_name||'Away team unavailable';
+
+ const home=m.home_score;
+ const away=m.away_score;
+ const available=v=>v!==null&&v!==undefined&&String(v).trim()!=='';
+
+ el('score').textContent=
+  available(home)&&available(away)
+   ?String(home)+' – '+String(away)
+   :'Score unavailable';
+
+ el('status').textContent=String(m.status||'Status unavailable');
+
+ const details=[
+  m.competition,
+  m.country,
+  m.season?'Season '+m.season:'',
+  m.round_name,
+  m.date,
+  m.venue?'Venue: '+m.venue:'',
+  m.referee?'Referee: '+m.referee:''
+ ].filter(Boolean);
+
+ el('details').textContent=
+  details.length?details.join(' · '):'Additional match details unavailable.';
+
+ el('note').textContent=sport==='cricket'
+  ?'Scores are displayed as stored in the archive. Wickets, overs and innings are not inferred when unavailable.'
+  :'Final points are displayed as stored in the archive. Unverified tries, conversions and events are not shown.';
+
+}catch(error){
+ el('error').textContent='Historical match details unavailable.';
+ el('details').textContent='The archived record could not be verified.';
+}
+})();
+</script>
+</body>
+</html>""")
+
+@app.get("/results/archive-view", response_class=HTMLResponse)
+async def ksn_v659_archive_view():
+    """Static archived-match shell. Detail data comes only from the archive."""
+    return HTMLResponse("""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Historical Match Centre | KasiScore</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0b111b;color:#eef3f9;font:15px Arial,sans-serif}
+main{max-width:1050px;margin:auto;padding:20px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px}
+a{color:#80bdff}
+.meta{color:#a8b8cc;font-size:13px;margin:14px 0}
+.scoreboard{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:15px;margin:18px 0;padding:24px 12px;background:#172231;border-radius:12px;text-align:center}
+.score{font-size:32px;font-weight:800}
+.team{overflow-wrap:anywhere;font-weight:700}
+.tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid #35445a}
+.tabs button{flex:none;padding:13px;border:0;background:transparent;color:#abc0d5;cursor:pointer}
+.tabs button[aria-selected=true]{color:white;border-bottom:3px solid #499dfa}
+.panel{padding:20px 4px;line-height:1.7}
+.panel[hidden]{display:none}
+.row{display:flex;justify-content:space-between;gap:12px;padding:10px;border-bottom:1px solid #28384c}
+.muted{color:#a8b8cc}
+#error{color:#ffadb1}
+@media(max-width:500px){main{padding:12px}.score{font-size:25px}.tabs button{padding:10px}}
+</style>
+</head>
+<body>
+<main>
+<header><strong>KasiScore · Match Centre</strong><a href="/#live">Back to Results</a></header>
+<p class="meta" id="meta">Loading archived match…</p>
+<section class="scoreboard" aria-label="Final result">
+<div class="team" id="home">—</div>
+<div><div class="score" id="score">—</div><strong id="status">FT</strong></div>
+<div class="team" id="away">—</div>
+</section>
+<p id="error" role="alert"></p>
+<nav class="tabs" aria-label="Match details" id="tabs"></nav>
+<div id="panels"></div>
+<p class="meta">Source: KasiScore permanent results archive. Missing historical details are not estimated.</p>
+</main>
+<script>
+(async function(){
+'use strict';
+const names=[
+ ['match','Match'],['lineups','Lineups'],['stats','Stats'],
+ ['trends','Trends'],['news','News'],['h2h','Head to Head'],
+ ['commentary','Commentary']
+];
+const el=id=>document.getElementById(id);
+const tabBar=el('tabs'),panelArea=el('panels'),panels={};
+function text(tag,value){const n=document.createElement(tag);n.textContent=String(value??'—');return n}
+function line(parent,label,value){
+ const r=document.createElement('div');r.className='row';
+ r.append(text('span',label),text('span',value));
+ parent.append(r);
+}
+names.forEach(([key,label])=>{
+ const b=text('button',label);b.type='button';
+ b.setAttribute('aria-selected',String(key==='match'));
+ const p=document.createElement('section');p.className='panel';p.hidden=key!=='match';
+ panels[key]=p;
+ b.addEventListener('click',()=>{
+  tabBar.querySelectorAll('button').forEach(x=>x.setAttribute('aria-selected',String(x===b)));
+  names.forEach(([k])=>panels[k].hidden=k!==key);
+ });
+ tabBar.append(b);panelArea.append(p);
+});
+const key=new URLSearchParams(location.search).get('archive_key');
+if(!key){el('error').textContent='Missing archive match identifier.';return}
+try{
+ const response=await fetch('/results/archive-detail/'+encodeURIComponent(key),{
+  headers:{Accept:'application/json'},cache:'no-store'
+ });
+ if(!response.ok)throw Error('Archive lookup failed (HTTP '+response.status+').');
+ const m=await response.json();
+ if(String(m.sport).toLowerCase()!=='football')throw Error('This historical view currently supports Football only.');
+ el('home').textContent=m.home_name||'Home team unavailable';
+ el('away').textContent=m.away_name||'Away team unavailable';
+ el('score').textContent=String(m.home_score??'—')+' – '+String(m.away_score??'—');
+ el('status').textContent=m.status||'FT';
+ el('meta').textContent=[m.country,m.competition,m.season,m.date].filter(Boolean).join(' · ');
+ line(panels.match,'Home',m.home_name);
+ line(panels.match,'Away',m.away_name);
+ line(panels.match,'Final score',el('score').textContent);
+ line(panels.match,'Competition',m.competition);
+ line(panels.match,'Round',m.round_name);
+ line(panels.match,'Venue',m.venue);
+ line(panels.match,'Referee',m.referee);
+ const unavailable={
+  lineups:'Historical lineup data was not preserved in this archive record.',
+  stats:'Detailed final-match statistics are not available in this archive record.',
+  trends:'Verified match momentum data is unavailable.',
+  news:'Fixture-specific news has not been linked to this archived record.',
+  h2h:'Verified previous meetings have not yet been integrated.',
+  commentary:'Detailed recorded match events are unavailable.'
+ };
+ Object.entries(unavailable).forEach(([k,v])=>{
+  const p=text('p',v);p.className='muted';panels[k].append(p);
+ });
+}catch(e){
+ el('error').textContent=e.message;
+ el('meta').textContent='Historical match unavailable';
+}
+})();
+</script>
+
+<script id="ksn-v659-archive-h2h-ui">
+(function(){
+'use strict';
+
+const tabs=document.getElementById('tabs');
+const panels=document.querySelectorAll('#panels .panel');
+const h2hPanel=panels[5];
+if(!tabs||!h2hPanel)return;
+
+const buttons=Array.from(tabs.querySelectorAll('button'));
+const h2hButton=buttons.find(b=>b.textContent.trim()==='Head to Head');
+if(!h2hButton)return;
+
+let loaded=false;
+let busy=false;
+
+function add(tag,value,parent=h2hPanel){
+ const node=document.createElement(tag);
+ node.textContent=String(value??'—');
+ parent.append(node);
+ return node;
+}
+
+async function loadH2H(){
+ if(loaded||busy)return;
+
+ const key=new URLSearchParams(location.search).get('archive_key');
+ if(!key){
+  h2hPanel.replaceChildren();
+  add('p','Archived match identifier unavailable.');
+  return;
+ }
+
+ busy=true;
+ h2hPanel.replaceChildren();
+ add('p','Loading recorded previous meetings…');
+
+ try{
+  const response=await fetch(
+   '/results/archive-h2h/'+encodeURIComponent(key),
+   {headers:{Accept:'application/json'},cache:'no-store'}
+  );
+
+  if(!response.ok)throw Error('HTTP '+response.status);
+
+  const data=await response.json();
+  h2hPanel.replaceChildren();
+
+  if(!data.available||!Array.isArray(data.meetings)||!data.meetings.length){
+   add('p',data.reason||'No verified previous meetings in the archive.');
+   loaded=true;
+   return;
+  }
+
+  add('h3','Archived previous meetings');
+
+  add('p',[
+   data.played+' recorded meetings',
+   (data.homeTeam||'Home')+': '+data.homeWins+' wins',
+   'Draws: '+data.draws,
+   (data.awayTeam||'Away')+': '+data.awayWins+' wins'
+  ].join(' · '));
+
+  data.meetings.forEach(m=>{
+   const row=document.createElement('div');
+   row.className='row';
+
+   add('span',[
+    String(m.date||'').slice(0,10),
+    m.league||''
+   ].filter(Boolean).join(' · '),row);
+
+   add('span',[
+    m.homeTeam||'Home',
+    m.homeScore+' – '+m.awayScore,
+    m.awayTeam||'Away'
+   ].join(' '),row);
+
+   h2hPanel.append(row);
+  });
+
+  add('p','Results reflect only verified games stored in the KasiScore archive.');
+  loaded=true;
+
+ }catch(error){
+  h2hPanel.replaceChildren();
+  add('p','Historical meetings temporarily unavailable.');
+ }finally{
+  busy=false;
+ }
+}
+
+h2hButton.addEventListener('click',loadH2H);
+})();
+</script>
+
+</body></html>""")
+
 @app.get("/results/history")
 async def results_history(
     sport:str=Query("all"), country:str=Query(""), competition:str=Query(""),
@@ -15363,7 +16178,7 @@ async def results_history(
     count_sql="SELECT COUNT(*) FROM ksn_results_archive"+wc
     cur.execute(count_sql,tuple(params)); total=int(cur.fetchone()[0])
     sql=("SELECT sport,provider,provider_id,country,competition,competition_id,season,round_name,kickoff,"
-         "home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee "
+         "home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee,ksn_key "
          "FROM ksn_results_archive"+wc+ (" ORDER BY CASE " + " ".join(f"WHEN competition_id='{lid}' AND lower(trim(country))='{nation}' THEN {rank}" for rank,(lid,nation) in enumerate(((39,"england"),(140,"spain"),(78,"germany"),(135,"italy"),(61,"france")))) + " WHEN competition_id='203' AND lower(trim(country)) IN ('turkey','türkiye') THEN 5" + (" WHEN lower(trim(country))='"+_ksn_safe_priority_country(priority_visitor)+"' THEN 6" if _ksn_safe_priority_country(priority_visitor) else "") + " ELSE 7 END, kickoff DESC" if priority_order else " ORDER BY kickoff DESC") + f" LIMIT {ph} OFFSET {ph}")
     cur.execute(sql,tuple(params+[limit,offset])); raw=cur.fetchall()
     rows=[]
@@ -15372,7 +16187,7 @@ async def results_history(
         rows.append({"sport":v[0],"source":v[1],"id":v[2],"country":v[3],"league":v[4],"leagueId":v[5],
           "season":v[6],"round":v[7],"date":str(v[8]),"homeId":v[9],"home":v[10],"homeLogo":v[11],
           "awayId":v[12],"away":v[13],"awayLogo":v[14],"homeScore":v[15],"awayScore":v[16],
-          "status":v[17],"venue":v[18],"referee":v[19],"isFinished":True,"providerFixtureId":v[2] if str(v[0]).lower()=="football" else None})
+          "status":v[17],"venue":v[18],"referee":v[19],"archiveKey":v[20],"isFinished":True,"providerFixtureId":v[2] if str(v[0]).lower()=="football" else None})
     cur.close(); conn.close()
     _ksn_v639_finished_dates(rows)
     return {"matches":rows,"count":len(rows),"total":total,"limit":limit,"offset":offset,
@@ -15564,14 +16379,14 @@ async def results_search(
     wc=(" WHERE "+" AND ".join(where)) if where else ""
     cur.execute("SELECT COUNT(*) FROM ksn_results_archive"+wc,tuple(params)); total=int(cur.fetchone()[0])
     sql=("SELECT sport,provider,provider_id,country,competition,competition_id,season,round_name,kickoff,"
-         "home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee "
+         "home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee,ksn_key "
          "FROM ksn_results_archive"+wc+f" ORDER BY kickoff DESC LIMIT {ph} OFFSET {ph}")
     cur.execute(sql,tuple(params+[limit,offset])); raw=cur.fetchall(); rows=[]
     for r in raw:
         v=list(r); rows.append({"sport":v[0],"source":v[1],"id":v[2],"country":v[3],"league":v[4],"leagueId":v[5],
           "season":v[6],"round":v[7],"date":str(v[8]),"homeId":v[9],"home":v[10],"homeLogo":v[11],
           "awayId":v[12],"away":v[13],"awayLogo":v[14],"homeScore":v[15],"awayScore":v[16],
-          "status":v[17],"venue":v[18],"referee":v[19],"isFinished":True,"providerFixtureId":v[2] if str(v[0]).lower()=="football" else None})
+          "status":v[17],"venue":v[18],"referee":v[19],"archiveKey":v[20],"isFinished":True,"providerFixtureId":v[2] if str(v[0]).lower()=="football" else None})
     cur.close(); conn.close()
 
     provider_meta={"attempted":False,"providerCalls":0}; archived_provider=0
@@ -16022,7 +16837,7 @@ function show(data){
   const name=entity.displayName||entity.name||entity.fullName||'Profile';
   add(root,'h1',name);
   const src=entity.logo||entity.badge||entity.photo||entity.flag;
-  if(typeof src==='string'&&/^https:\/\//.test(src)){const img=document.createElement('img');img.src=src;img.alt='';root.append(img)}
+  if(typeof src==='string'&&/^https:\\/\\//.test(src)){const img=document.createElement('img');img.src=src;img.alt='';root.append(img)}
   for(const key of ['country','nationality','position','role','league']){
     if(entity[key])add(root,'p',key[0].toUpperCase()+key.slice(1)+': '+entity[key]);
   }
@@ -17806,6 +18621,14 @@ async def sports_standings(sport: str = Query("rugby"), league: int = Query(0, g
 
 
 
+
+# V659: Isolated Rugby bookmaker metadata cache.
+# Do not mix Rugby fixture IDs with Football odds.
+_ksn_v659_rugby_odds_cache = TTLCache(
+    maxsize=300,
+    ttl=300,
+)
+
 @app.get("/sports/rugby/odds")
 async def rugby_odds(limit:int=Query(20,ge=1,le=50)):
     rows=await _oddspapi_sport_fixtures("rugby",None,False)
@@ -17818,41 +18641,90 @@ async def rugby_odds(limit:int=Query(20,ge=1,le=50)):
                                             {"fixtureId":str(fid),"oddsFormat":"decimal"})
             snap=(_oddspapi_rows(data) or ([data] if isinstance(data,dict) else []))
             active=_oddspapi_v5_active_prices(snap[0] if snap else {})
-            if active:out.append({"fixtureId":f.get("id"),"home":f.get("home"),"away":f.get("away"),
-                                  "markets":active,"marketRule":"provider-returned-only"})
+            if active:
+                _ksn_v659_rugby_odds_cache[str(fid)] = {
+                    "sport": "rugby",
+                    "providerFixtureId": str(fid),
+                    "data": snap[0] if snap else {},
+                }
+                out.append({
+                    "fixtureId": str(fid),
+                    "home": f.get("home"),
+                    "away": f.get("away"),
+                    "markets": active,
+                    "marketRule": "provider-returned-only",
+                    "source": "OddsPapi",
+                })
         except Exception as exc:log.debug("Rugby odds fixture=%s unavailable: %s",fid,exc)
     return {"sport":"rugby","count":len(out),"items":out,"source":"OddsPapi",
             "marketRule":"provider-returned-only"}
 
 @app.get("/sports/cricket/odds")
 async def cricket_odds():
-    """Cricket bookmaker markets: return only markets/prices actually supplied by The Odds API."""
-    if not ODDS_API_ENABLED or not ODDS_API_KEY:
-        return {"status":"degraded","items":[],"message":"No current cricket odds available."}
-    requested=os.getenv("CRICKET_ODDS_MARKETS","h2h").strip() or "h2h"
-    items=[]
-    for sport_key in ("cricket_test_match","cricket_odi","cricket_international_t20","cricket_t20"):
+    """V659: Cricket odds exclusively from verified OddsPAPI fixtures."""
+    if not ODDSPAPI_ENABLED or not ODDSPAPI_API_KEY:
+        return {
+            "sport": "cricket", "status": "degraded",
+            "count": 0, "items": [], "source": "OddsPapi",
+            "message": "OddsPAPI cricket provider unavailable.",
+        }
+
+    try:
+        fixtures = await _oddspapi_sport_fixtures(
+            "cricket", None, False
+        )
+    except Exception as exc:
+        log.warning("V659 cricket fixture lookup failed: %s", exc)
+        fixtures = []
+
+    items = []
+    seen = set()
+    for fixture in fixtures[:12]:
+        if str(fixture.get("source") or "").lower() != "oddspapi":
+            continue
+        fid = str(fixture.get("providerFixtureId") or "").strip()
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+
         try:
-            rows=await _odds_api_get(f"/sports/{sport_key}/odds",
-                {"regions":ODDS_API_REGIONS,"markets":requested,"oddsFormat":"decimal"})
+            data, version = await _oddspapi_v5_or_v4(
+                f"{ODDSPAPI_REST_LANGUAGE}/fixtures/odds",
+                "odds",
+                {"fixtureId": fid, "oddsFormat": "decimal"},
+            )
+            snapshots = _oddspapi_rows(data)
+            if not snapshots and isinstance(data, dict):
+                snapshots = [data]
+            markets = _oddspapi_v5_active_prices(
+                snapshots[0] if snapshots else {}
+            )
+            if markets:
+                items.append({
+                    "fixtureId": fid,
+                    "home": fixture.get("home"),
+                    "away": fixture.get("away"),
+                    "commenceTime": fixture.get("date"),
+                    "markets": markets,
+                    "source": "OddsPapi",
+                    "providerVersion": version,
+                    "marketRule": "provider-returned-only",
+                })
         except Exception as exc:
-            log.debug("Cricket odds %s unavailable: %s",sport_key,exc);continue
-        for ev in rows if isinstance(rows,list) else []:
-            normalized=[]
-            for book in ev.get("bookmakers") or []:
-                markets=[]
-                for m in book.get("markets") or []:
-                    selections=[{"name":o.get("name"),"price":o.get("price"),"point":o.get("point")}
-                                for o in m.get("outcomes") or [] if o.get("price") is not None]
-                    if selections:markets.append({"key":m.get("key"),"selections":selections})
-                if markets:normalized.append({"name":book.get("title") or book.get("key") or "Bookmaker","markets":markets})
-            if normalized:
-                items.append({"id":ev.get("id"),"sportKey":sport_key,"home":ev.get("home_team") or "Home",
-                              "away":ev.get("away_team") or "Away","commenceTime":ev.get("commence_time"),
-                              "bookmakers":normalized})
-    return {"status":"online" if items else "degraded","count":len(items),"items":items,
-            "requestedMarkets":requested,"marketRule":"provider-returned-only",
-            "message":None if items else "No current cricket odds available."}
+            log.warning(
+                "V659 cricket odds unavailable fixture=%s: %s",
+                fid, exc
+            )
+
+    return {
+        "sport": "cricket",
+        "status": "online" if items else "degraded",
+        "count": len(items),
+        "items": items,
+        "source": "OddsPapi",
+        "marketRule": "provider-returned-only",
+        "message": None if items else "No verified cricket odds available.",
+    }
 
 @app.get("/platform/status")
 async def platform_status():
@@ -20763,7 +21635,7 @@ async function team(){{
   const cleanMatches=(rows,upcoming)=>{{const seen=new Set();return (Array.isArray(rows)?rows:[]).filter(x=>verifiedMatch(x,upcoming)).sort((a,b)=>upcoming?Date.parse(a.date)-Date.parse(b.date):Date.parse(b.date)-Date.parse(a.date)).filter(x=>{{const key=x.id?'id:'+x.id:[x.homeId,x.awayId,String(x.date).slice(0,16),x.homeScore,x.awayScore].join('|');if(seen.has(key))return false;seen.add(key);return true;}}).slice(0,10)}};
   d.past10=cleanMatches([...(d.past10||[]),...(ti.past10||[])],false);
   d.future=cleanMatches([...(d.future||[]),...(ti.future||[])],true);
-  const t=d.team||{{}};if((!t.name||/^\d+$/.test(String(t.name)))&&window.KSN_SSR_NAME)t.name=window.KSN_SSR_NAME;const players=d.players||[],theme=teamTheme(id,t.name),hist=h.seasons||[],sum=ti.summary||{{}},inj=(()=>{{const seen=new Set();return ((ti.injuries||{{}}).players||[]).filter(x=>{{if(String(x.teamId||x.team?.id||'')!==String(id))return false;const key=String(x.id||'');if(!key||seen.has(key))return false;seen.add(key);return true;}})}})(),forms=ti.recentFormations||[],cov=ti.coverage||{{}},fp=ti.fantasyPlayers||[];
+  const t=d.team||{{}};if((!t.name||/^\\d+$/.test(String(t.name)))&&window.KSN_SSR_NAME)t.name=window.KSN_SSR_NAME;const players=d.players||[],theme=teamTheme(id,t.name),hist=h.seasons||[],sum=ti.summary||{{}},inj=(()=>{{const seen=new Set();return ((ti.injuries||{{}}).players||[]).filter(x=>{{if(String(x.teamId||x.team?.id||'')!==String(id))return false;const key=String(x.id||'');if(!key||seen.has(key))return false;seen.add(key);return true;}})}})(),forms=ti.recentFormations||[],cov=ti.coverage||{{}},fp=ti.fantasyPlayers||[];
   document.documentElement.style.setProperty('--accent',theme.primary);
   const seasonLabel=(v)=>v?`${{E(v)}}/${{String((Number(v)||0)+1).slice(-2)}}`:'Current';
   const rank=(d.standings||[]).find(r=>String(r.team?.id||'')===String(id));
@@ -20942,29 +21814,110 @@ async def multisport_finished(sport:str,limit:int=Query(100,ge=1,le=200)):
         try:
             when=datetime.fromisoformat(str(x.get("date") or "").replace("Z","+00:00"))
             in_window=cutoff <= when <= now+timedelta(minutes=5)
-        except Exception:in_window=True
+            in_window = (
+                when.tzinfo is not None
+                and cutoff <= when.astimezone(timezone.utc)
+                <= now + timedelta(minutes=5)
+            )
+        except (ValueError, TypeError, OverflowError):
+            in_window = False
         if confirmed and scored and in_window:done.append(x)
     done.sort(key=lambda x:str(x.get("date") or ""),reverse=True)
     done=done[:limit]
     return {"sport":sport,"matches":done,"count":len(done),"source":"OddsPapi","windowHours":48,"confirmedScoresOnly":True}
 
 @app.get("/sports/{sport}/predictions")
+
+def _ksn_v659_history_qualified(home_form, away_form, minimum=5):
+    """Require verified completed-match counts for both teams."""
+    if not isinstance(home_form, dict) or not isinstance(away_form, dict):
+        return False
+
+    def played(form):
+        value = form.get("played")
+        if isinstance(value, bool):
+            return -1
+        try:
+            number = int(value)
+            if str(value).strip() != str(number):
+                return -1
+            return number
+        except (TypeError, ValueError):
+            return -1
+
+    return played(home_form) >= minimum and played(away_form) >= minimum
+
+
 async def multisport_predictions(sport:str,limit:int=Query(12,ge=1,le=30)):
     sport=sport.lower().strip()
     if sport not in {"rugby","cricket"}:raise HTTPException(400,"Supported sports: rugby, cricket")
     snap_key=f"v363:predictions:{sport}:{limit}"
     snap=_dashboard_snapshot_get(snap_key)
-    if isinstance(snap,dict) and isinstance(snap.get("data"),dict) and (snap.get("data",{}).get("predictions") or []):
-        cached=dict(snap["data"]); cached["fromPersistentCache"]=True
-        # A cached prediction response is intentionally returned immediately; normal
-        # browser/dashboard refresh will replace it on the next provider cycle.
-        return cached
+    # V659: short-lived cache, with response-time eligibility checks.
+    # Do not return old persistent snapshots without a freshness timestamp.
+    if isinstance(snap, dict) and isinstance(snap.get("data"), dict):
+        saved = snap["data"]
+        try:
+            generated = datetime.fromisoformat(
+                str(saved.get("updatedAt") or "").replace("Z", "+00:00")
+            )
+        except ValueError:
+            generated = None
+
+        if generated is not None and generated.tzinfo is not None:
+            age = (datetime.now(timezone.utc) - generated).total_seconds()
+            if 0 <= age <= 120:
+                now_check = datetime.now(timezone.utc)
+                valid_rows = []
+
+                for item in saved.get("predictions") or []:
+                    if not isinstance(item, dict):
+                        continue
+
+                    if item.get("statusId") != 0:
+                        continue
+
+                    raw = item.get("date")
+                    try:
+                        kickoff = datetime.fromisoformat(
+                            str(raw).replace("Z", "+00:00")
+                        )
+                    except ValueError:
+                        continue
+
+                    if kickoff.tzinfo is None or kickoff <= now_check:
+                        continue
+
+                    valid_rows.append(item)
+
+                cached = dict(saved)
+                cached["predictions"] = valid_rows[:limit]
+                cached["count"] = len(cached["predictions"])
+                cached["fromPersistentCache"] = True
+                return cached
     now=datetime.now(timezone.utc)
     # One upcoming snapshot + one shared history snapshot. This replaces the
     # previous N+1 design that could spend ~50 provider calls for 12 picks.
     upcoming=await _oddspapi_sport_range(sport,now-timedelta(minutes=30),now+timedelta(days=7),0)
     history=await _oddspapi_sport_range(sport,now-timedelta(days=14),now+timedelta(minutes=5),2)
-    future=[x for x in upcoming if x.get("statusId") in (0,None) and not _multi_outcome(x)]
+    # V659: only explicitly scheduled future fixtures qualify.
+    def _valid_future(x):
+        if not isinstance(x, dict):
+            return False
+        if x.get("statusId") != 0 or _multi_outcome(x):
+            return False
+        raw = x.get("date")
+        if not isinstance(raw, str):
+            return False
+        try:
+            kickoff = datetime.fromisoformat(
+                raw.strip().replace("Z", "+00:00")
+            )
+        except ValueError:
+            return False
+        return kickoff.tzinfo is not None and kickoff > now
+
+    future = [x for x in upcoming if _valid_future(x)]
     future.sort(key=lambda x:str(x.get("date") or ""))
     by_team={}
     for g in history:
@@ -20979,8 +21932,8 @@ async def multisport_predictions(sport:str,limit:int=Query(12,ge=1,le=30)):
         hf=_multi_team_form(hr,x.get("homeId"));af=_multi_team_form(ar,x.get("awayId"))
         hscore=(hf["wins"]+0.5*hf["draws"])/max(1,hf["played"])
         ascore=(af["wins"]+0.5*af["draws"])/max(1,af["played"])
-        if hf["played"]==0 and af["played"]==0:
-            # Keep the fixture visible but do not invent confidence from absent history.
+        if not _ksn_v659_history_qualified(hf, af, 5):
+            # Keep insufficient-history fixtures visible but never qualify their predictions.
             pick="NO_FORM_DATA";conf=0.0;qualified=False
         else:
             pick="DRAW" if abs(hscore-ascore)<0.08 else ("HOME" if hscore>ascore else "AWAY")
@@ -22629,8 +23582,10 @@ async def rugby_predictions(
 
 
 @app.get("/sports/provider-health")
-async def sports_provider_health_v640():
+async def sports_provider_health_v640(request: Request):
     """Configuration and cached data diagnostics; no external calls or secrets."""
+    if not _ks_admin_authorized(request):
+        raise HTTPException(403, "Admin access required")
     snap=_dashboard_snapshot_get("sports_live:last_good")
     payload=(snap or {}).get("data") if isinstance(snap,dict) else None
     games=payload.get("games") if isinstance(payload,dict) else []
@@ -23987,3 +24942,797 @@ async def ksn_v643_oddspapi_direct_probe(sport: str = Query("cricket")):
 
 # v646 diagnostic build marker (does not modify existing routes or archive)
 # V646 marker superseded by V656
+
+def _ksn_v659_rugby_tip_eligible(
+    fixture, markets, market_mapping, home_form, away_form
+):
+    """Fail-closed Rugby Tip of the Day eligibility gate."""
+    from datetime import datetime, timezone
+    from math import isfinite
+
+    if not isinstance(fixture, dict):
+        return False
+
+    if str(fixture.get("sport", "")).lower() != "rugby":
+        return False
+
+    if str(fixture.get("source", "")).lower().replace(" ", "") not in {
+        "oddspapi", "odds-papi"
+    }:
+        # No verified API-Sports to OddsPAPI fixture crosswalk yet.
+        return False
+
+    fid = str(fixture.get("providerFixtureId") or "").strip()
+    if not fid or not isinstance(markets, list):
+        return False
+
+    if fixture.get("statusId") != 0:
+        return False
+
+    try:
+        kickoff = datetime.fromisoformat(
+            str(fixture.get("date") or "").replace("Z", "+00:00")
+        )
+    except ValueError:
+        return False
+
+    if kickoff.tzinfo is None or kickoff <= datetime.now(timezone.utc):
+        return False
+
+    for form in (home_form, away_form):
+        if not isinstance(form, dict):
+            return False
+        count = form.get("played")
+        if type(count) is not int or count < 5:
+            return False
+
+    # Market and outcomes require provider-confirmed identifiers.
+    if not isinstance(market_mapping, dict):
+        return False
+
+    market_id = market_mapping.get("marketId")
+    home_id = market_mapping.get("homeOutcomeId")
+    away_id = market_mapping.get("awayOutcomeId")
+
+    if any(x is None or isinstance(x, bool) or str(x) == ""
+           for x in (market_id, home_id, away_id)):
+        return False
+
+    if str(home_id) == str(away_id):
+        return False
+
+    found = {}
+    for selection in markets:
+        if not isinstance(selection, dict):
+            continue
+        if str(selection.get("marketId")) != str(market_id):
+            continue
+
+        outcome = str(selection.get("outcomeId"))
+        if outcome not in {str(home_id), str(away_id)}:
+            continue
+
+        try:
+            price = float(selection.get("price"))
+        except (TypeError, ValueError):
+            continue
+
+        if not isfinite(price) or price <= 1:
+            continue
+
+        # Both outcomes must come from the same bookmaker.
+        book = selection.get("bookmaker")
+        if not book:
+            continue
+
+        found.setdefault(str(book), {})[outcome] = price
+
+    return any(
+        str(home_id) in selections and str(away_id) in selections
+        for selections in found.values()
+    )
+
+
+# V659: Controlled single-fixture Rugby market inspection.
+# Admin only. Never bypasses provider quota or staging safety guards.
+@app.get("/admin/rugby-market-single")
+async def ksn_v659_rugby_market_single(
+    request: Request,
+    fixture_id: str = "",
+):
+    from fastapi import HTTPException
+
+    if not _ks_admin_authorized(request):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    fixture_id = str(fixture_id).strip()
+
+    if (
+        not fixture_id
+        or len(fixture_id) > 80
+        or not all(c.isalnum() or c in "-_" for c in fixture_id)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid fixture ID",
+        )
+
+    # Reuse verified cached provider data whenever available.
+    cached = _ksn_v659_rugby_odds_cache.get(fixture_id)
+
+    if cached:
+        snapshot = cached.get("data") or {}
+        provider_version = "cached"
+    else:
+        # Do not consume quota when staging provider calls are blocked.
+        if os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1":
+            raise HTTPException(
+                status_code=503,
+                detail="External provider calls disabled in staging SEO test mode",
+            )
+
+        # Require separate explicit authorization for a live diagnostic.
+        if os.getenv("KSN_V659_RUGBY_MARKET_PROBE_APPROVED", "0") != "1":
+            raise HTTPException(
+                status_code=403,
+                detail="Rugby market probe not approved",
+            )
+
+        # The existing helper enforces OddsPAPI quotas and provider cooldowns.
+        # Important: v5-to-v4 fallback can consume an additional API request.
+        try:
+            raw = await _oddspapi_get(
+                "en/fixtures/odds",
+                {
+                    "sportId": ODDSPAPI_SPORT_RUGBY,
+                    "fixtureId": fixture_id,
+                },
+                max_attempts=1,
+            )
+            provider_version = "v5"
+        except Exception:
+            raise HTTPException(
+                status_code=503,
+                detail="Rugby market provider unavailable",
+            )
+
+        if isinstance(raw, list):
+            snapshot = raw[0] if raw and isinstance(raw[0], dict) else {}
+        elif isinstance(raw, dict):
+            snapshot = raw
+        else:
+            snapshot = {}
+
+        if snapshot:
+            _ksn_v659_rugby_odds_cache[fixture_id] = {
+                "sport": "rugby",
+                "providerFixtureId": fixture_id,
+                "data": snapshot,
+            }
+
+    active = _oddspapi_v5_active_prices(snapshot)
+
+    # Return only allowlisted fields, never raw provider payloads.
+    items = []
+
+    for entry in active[:100]:
+        if not isinstance(entry, dict):
+            continue
+
+        items.append({
+            "marketId": entry.get("marketId"),
+            "outcomeId": entry.get("outcomeId"),
+            "bookmaker": entry.get("bookmaker"),
+            "price": entry.get("price"),
+            "mainLine": entry.get("mainLine"),
+        })
+
+    return {
+        "sport": "rugby",
+        "fixtureId": fixture_id,
+        "provider": "OddsPapi",
+        "providerVersion": provider_version,
+        "marketSummary": _ksn_v659_rugby_v5_market_summary(snapshot),
+        "activeSelections": items,
+        "activeSelectionCount": len(active),
+        "verifiedMatchWinnerMapping": False,
+        "tipEligible": False,
+        "note": (
+            "Market and outcome IDs are diagnostic only. "
+            "They do not establish match-winner semantics."
+        ),
+    }
+
+
+def _ksn_v659_rugby_v5_market_summary(snapshot: dict) -> list[dict]:
+    """Group active Rugby v5 selections without assigning market semantics."""
+    if not isinstance(snapshot, dict):
+        return []
+
+    selections = _oddspapi_v5_active_prices(snapshot)
+    grouped = {}
+
+    for item in selections:
+        if not isinstance(item, dict):
+            continue
+
+        market_id = item.get("marketId")
+        outcome_id = item.get("outcomeId")
+
+        if market_id is None or outcome_id is None:
+            continue
+
+        key = str(market_id)
+
+        if key not in grouped:
+            grouped[key] = {
+                "marketId": market_id,
+                "marketName": None,
+                "outcomes": [],
+                "verifiedMatchWinner": False,
+            }
+
+        outcome = {
+            "outcomeId": outcome_id,
+            "outcomeName": None,
+            "bookmaker": item.get("bookmaker"),
+            "price": item.get("price"),
+        }
+
+        if outcome not in grouped[key]["outcomes"]:
+            grouped[key]["outcomes"].append(outcome)
+
+    return list(grouped.values())[:100]
+
+
+def _ksn_v659_multisport_identity(match):
+    """Verified Rugby/Cricket identity; never infer IDs from names or scores."""
+    if not isinstance(match, dict):
+        return None
+
+    sport = str(match.get("sport") or "").strip().lower()
+    raw_provider = str(
+        match.get("source") or match.get("provider") or ""
+    ).strip().lower()
+
+    providers = {
+        ("rugby", "api-sports"): "api-sports",
+        ("rugby", "api sports"): "api-sports",
+        ("rugby", "oddspapi"): "oddspapi",
+        ("rugby", "odds papi"): "oddspapi",
+        ("cricket", "oddspapi"): "oddspapi",
+        ("cricket", "odds papi"): "oddspapi",
+    }
+
+    provider = providers.get((sport, raw_provider))
+    if provider is None:
+        return None
+
+    fixture_id = match.get("providerFixtureId")
+
+    if isinstance(fixture_id, bool) or fixture_id is None:
+        return None
+
+    fixture_id = str(fixture_id).strip()
+
+    if (
+        not fixture_id
+        or len(fixture_id) > 80
+        or not fixture_id.isascii()
+        or not all(c.isalnum() or c in "-_" for c in fixture_id)
+    ):
+        return None
+
+    return {
+        "sport": sport,
+        "provider": provider,
+        "provider_id": fixture_id,
+        "ksn_key": f"v659:{sport}:{provider}:{fixture_id}",
+    }
+
+
+def _ksn_v659_multisport_archive_schema(kind="postgres"):
+    """Return isolated V659 archive DDL; never execute migrations here."""
+    if kind not in ("postgres", "sqlite"):
+        raise ValueError("Unsupported database engine")
+
+    timestamp_type = "TIMESTAMPTZ" if kind == "postgres" else "TEXT"
+    payload_type = "JSONB" if kind == "postgres" else "TEXT"
+
+    return f"""
+    CREATE TABLE IF NOT EXISTS ksn_multisport_results_v659 (
+        ksn_key TEXT PRIMARY KEY,
+        sport TEXT NOT NULL CHECK (sport IN ('rugby', 'cricket')),
+        provider TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        kickoff {timestamp_type} NOT NULL,
+        home_name TEXT NOT NULL,
+        away_name TEXT NOT NULL,
+        home_score INTEGER NOT NULL CHECK (home_score >= 0),
+        away_score INTEGER NOT NULL CHECK (away_score >= 0),
+        status TEXT NOT NULL,
+        competition TEXT,
+        country TEXT,
+        season TEXT,
+        source_payload {payload_type} NOT NULL,
+        UNIQUE (sport, provider, provider_id)
+    )
+    """
+
+
+def _ksn_v659_multisport_archive_row(match):
+    """Validate one completed Rugby/Cricket result for permanent storage."""
+    from datetime import datetime, timezone
+
+    identity = _ksn_v659_multisport_identity(match)
+    if identity is None:
+        return None
+
+    status = str(
+        match.get("statusShort") or match.get("status") or ""
+    ).strip().upper()
+
+    final_text = status in {
+        "FT", "AET", "AP", "FINISHED", "COMPLETED", "FINAL"
+    }
+
+    odds_provider = identity["provider"] == "oddspapi"
+    final_status_id = (
+        odds_provider
+        and not isinstance(match.get("statusId"), bool)
+        and str(match.get("statusId")) == "2"
+    )
+
+    # A numeric final ID must not override an explicitly live,
+    # scheduled, postponed or cancelled status.
+    non_final = {
+        "LIVE", "IN", "1H", "2H", "HT", "ET",
+        "NS", "NOT STARTED", "SCHEDULED", "UPCOMING",
+        "PST", "POSTPONED", "CANC", "CANCELLED",
+        "CANCELED", "ABD", "ABANDONED",
+    }
+    reported = {
+        str(match.get(field) or "").strip().upper()
+        for field in ("statusShort", "status")
+    }
+    if reported & non_final:
+        return None
+
+    if not (final_text or final_status_id):
+        return None
+
+    home = str(match.get("home") or match.get("homeName") or "").strip()
+    away = str(match.get("away") or match.get("awayName") or "").strip()
+
+    if not home or not away:
+        return None
+
+    try:
+        home_score = match.get("homeScore")
+        away_score = match.get("awayScore")
+
+        if isinstance(home_score, bool) or isinstance(away_score, bool):
+            return None
+
+        for value in (home_score, away_score):
+            if not isinstance(value, (int, str)):
+                return None
+            if not str(value).isascii() or not str(value).isdecimal():
+                return None
+
+        home_score = int(home_score)
+        away_score = int(away_score)
+
+    except (ValueError, TypeError):
+        return None
+
+    raw_date = str(
+        match.get("archiveUtcKickoff") or match.get("date") or ""
+    ).strip()
+
+    try:
+        kickoff = datetime.fromisoformat(
+            raw_date.replace("Z", "+00:00")
+        )
+        if kickoff.tzinfo is None:
+            return None
+        kickoff = kickoff.astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError):
+        return None
+
+    return {
+        **identity,
+        "kickoff": kickoff,
+        "home_name": home,
+        "away_name": away,
+        "home_score": home_score,
+        "away_score": away_score,
+        "status": str(
+            match.get("statusShort") or match.get("status")
+        ).upper(),
+        "competition": str(match.get("league") or ""),
+        "country": str(match.get("country") or ""),
+        "season": str(match.get("season") or ""),
+        "source_payload": __import__("json").dumps(
+            match, ensure_ascii=False, default=str
+        ),
+    }
+
+
+def _ksn_v659_multisport_archive_upsert_sqlite(connection, matches):
+    """Offline SQLite writer; not the PostgreSQL production writer."""
+    rows = [
+        row for row in (
+            _ksn_v659_multisport_archive_row(m)
+            for m in matches
+        ) if row is not None
+    ]
+
+    sql = """
+        INSERT INTO ksn_multisport_results_v659 (
+            ksn_key, sport, provider, provider_id, kickoff,
+            home_name, away_name, home_score, away_score,
+            status, competition, country, season, source_payload
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(sport, provider, provider_id)
+        DO UPDATE SET
+            kickoff=excluded.kickoff,
+            home_name=excluded.home_name,
+            away_name=excluded.away_name,
+            home_score=excluded.home_score,
+            away_score=excluded.away_score,
+            status=excluded.status,
+            competition=excluded.competition,
+            country=excluded.country,
+            season=excluded.season,
+            source_payload=excluded.source_payload
+    """
+
+    count = 0
+    for row in rows:
+        connection.execute(sql, (
+            row["ksn_key"],
+            row["sport"],
+            row["provider"],
+            row["provider_id"],
+            row["kickoff"],
+            row["home_name"],
+            row["away_name"],
+            row["home_score"],
+            row["away_score"],
+            row["status"],
+            row["competition"],
+            row["country"],
+            row["season"],
+            row["source_payload"],
+        ))
+        count += 1
+
+    connection.commit()
+    return count
+
+
+def _ksn_v659_multisport_archive_upsert_postgres(connection, matches):
+    """Write validated multisport results using caller-owned transaction.
+
+    Requires the V659 table to exist. Never creates tables,
+    commits, rolls back, or opens a connection.
+    """
+    rows = [
+        row
+        for row in (
+            _ksn_v659_multisport_archive_row(match)
+            for match in (matches or [])
+        )
+        if row is not None
+    ]
+
+    if not rows:
+        return 0
+
+    sql = """
+        INSERT INTO ksn_multisport_results_v659 (
+            ksn_key, sport, provider, provider_id,
+            kickoff, home_name, away_name,
+            home_score, away_score, status,
+            competition, country, season, source_payload
+        )
+        VALUES (
+            %s, %s, %s, %s,
+            %s, %s, %s,
+            %s, %s, %s,
+            %s, %s, %s, %s::jsonb
+        )
+        ON CONFLICT (sport, provider, provider_id)
+        DO UPDATE SET
+            kickoff = EXCLUDED.kickoff,
+            home_name = EXCLUDED.home_name,
+            away_name = EXCLUDED.away_name,
+            home_score = EXCLUDED.home_score,
+            away_score = EXCLUDED.away_score,
+            status = EXCLUDED.status,
+            competition = EXCLUDED.competition,
+            country = EXCLUDED.country,
+            season = EXCLUDED.season,
+            source_payload = EXCLUDED.source_payload
+        WHERE ksn_multisport_results_v659.ksn_key = EXCLUDED.ksn_key
+    """
+
+    cursor = connection.cursor()
+
+    try:
+        count = 0
+
+        for row in rows:
+            values = (
+                row["ksn_key"],
+                row["sport"],
+                row["provider"],
+                row["provider_id"],
+                row["kickoff"],
+                row["home_name"],
+                row["away_name"],
+                row["home_score"],
+                row["away_score"],
+                row["status"],
+                row["competition"],
+                row["country"],
+                row["season"],
+                row["source_payload"],
+            )
+
+            cursor.execute(sql, values)
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    "V659 conflicting multisport archive identity"
+                )
+            count += 1
+
+        return count
+
+    finally:
+        cursor.close()
+
+
+def _ksn_v659_ingest_confirmed_multisport(connection, matches):
+    """Validate confirmed multisport results; caller owns transaction.
+
+    Requires the isolated V659 archive table to exist.
+    Does not connect, migrate, commit, or fetch provider data.
+    """
+    if matches is None:
+        return 0
+    if not isinstance(matches, (list, tuple)):
+        raise ValueError("Expected a sequence of provider matches")
+
+    approved = []
+    identities = {}
+
+    for match in matches:
+        if not isinstance(match, dict):
+            continue
+
+        # V659: Normalize supported Cricket scores before validation.
+        candidate = match
+        if str(match.get("sport") or "").strip().lower() == "cricket":
+            candidate = _ksn_v659_cricket_archive_normalize(match)
+            if candidate is None:
+                continue
+
+        row = _ksn_v659_multisport_archive_row(candidate)
+        if row is None:
+            continue
+
+        key = (
+            row["sport"],
+            row["provider"],
+            row["provider_id"],
+        )
+
+        # Compare material result fields, not arbitrary JSON ordering.
+        signature = (
+            row["ksn_key"],
+            row["kickoff"],
+            row["home_name"],
+            row["away_name"],
+            row["home_score"],
+            row["away_score"],
+            row["status"],
+        )
+
+        if key in identities:
+            if identities[key] != signature:
+                raise ValueError(
+                    "V659 conflicting results for provider fixture"
+                )
+            continue
+
+        identities[key] = signature
+        approved.append(candidate)
+
+    if not approved:
+        return 0
+
+    return _ksn_v659_multisport_archive_upsert_postgres(
+        connection, approved
+    )
+
+
+def _ksn_v659_staging_archive_transaction(
+    connection,
+    matches,
+    *,
+    approved=False,
+    database_kind="",
+):
+    """Explicitly approved staging-only V659 archive transaction.
+
+    Caller must supply an isolated staging PostgreSQL connection.
+    Never opens connections or executes schema migrations.
+    """
+    import os
+
+    if not approved:
+        raise PermissionError("V659 staging archive approval required")
+
+    if os.getenv("KSN_V659_ARCHIVE_WRITE_APPROVED", "0") != "1":
+        raise PermissionError("V659 archive write flag disabled")
+
+    if os.getenv("KSN_ENVIRONMENT", "").lower() != "staging":
+        raise PermissionError("V659 archive runner requires staging")
+
+    if database_kind != "postgres":
+        raise ValueError("V659 archive requires PostgreSQL")
+
+    if connection is None:
+        raise ValueError("Missing staging PostgreSQL connection")
+
+    try:
+        count = _ksn_v659_ingest_confirmed_multisport(
+            connection, matches
+        )
+        connection.commit()
+        return count
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _ksn_v659_staging_db_preflight(connection, *, database_kind=""):
+    """Read-only V659 database inspection. Never owns the connection."""
+    import os
+
+    if os.getenv("KSN_ENVIRONMENT", "").strip().lower() != "staging":
+        raise PermissionError("V659 preflight requires staging")
+
+    if database_kind != "postgres" or connection is None:
+        raise ValueError("V659 preflight requires PostgreSQL")
+
+    cursor = connection.cursor()
+
+    try:
+        # Fail closed: PostgreSQL rejects writes in this transaction.
+        cursor.execute("SET TRANSACTION READ ONLY")
+
+        cursor.execute(
+            "SELECT current_database(), "
+            "current_setting('server_version')"
+        )
+        database_name, version = cursor.fetchone()
+
+        # The expected name must be established independently
+        # from Render's staging database configuration.
+        expected_name = os.getenv(
+            "KSN_V659_EXPECTED_STAGING_DB_NAME", ""
+        ).strip()
+
+        if not expected_name:
+            raise PermissionError(
+                "Expected staging database name is not configured"
+            )
+
+        if database_name != expected_name:
+            raise PermissionError(
+                "Database identity does not match approved staging target"
+            )
+
+        cursor.execute(
+            "SELECT to_regclass("
+            "'public.ksn_multisport_results_v659'"
+            ") IS NOT NULL"
+        )
+        table_exists = bool(cursor.fetchone()[0])
+
+        return {
+            "environment": "staging",
+            "databaseName": database_name,
+            "postgresVersion": version,
+            "multisportArchiveTableExists": table_exists,
+            "databaseIdentityVerified": True,
+            "writeOperations": 0,
+        }
+
+    finally:
+        try:
+            connection.rollback()
+        finally:
+            cursor.close()
+
+
+def _ksn_v659_cricket_score_parse(value):
+    """Parse runs/wickets for one innings, preserving the original score."""
+    import re
+
+    if value is None or isinstance(value, bool):
+        return None
+
+    if isinstance(value, int):
+        if value < 0:
+            return None
+        return {
+            "runs": value,
+            "wickets": None,
+            "raw": str(value),
+        }
+
+    if not isinstance(value, str):
+        return None
+
+    raw = value.strip()
+
+    # Simple one-innings representation only.
+    match = re.fullmatch(r"([0-9]+)(?:/([0-9]+))?", raw)
+
+    if match is None:
+        return None
+
+    runs = int(match.group(1))
+    wickets = (
+        int(match.group(2))
+        if match.group(2) is not None
+        else None
+    )
+
+    if wickets is not None and wickets > 10:
+        return None
+
+    return {
+        "runs": runs,
+        "wickets": wickets,
+        "raw": raw,
+    }
+
+
+def _ksn_v659_cricket_archive_normalize(match):
+    """Normalize simple Cricket scores while preserving original values."""
+    if not isinstance(match, dict):
+        return None
+
+    if str(match.get("sport") or "").strip().lower() != "cricket":
+        return None
+
+    provider = str(
+        match.get("source") or match.get("provider") or ""
+    ).strip().lower().replace(" ", "")
+
+    if provider != "oddspapi":
+        return None
+
+    home = _ksn_v659_cricket_score_parse(match.get("homeScore"))
+    away = _ksn_v659_cricket_score_parse(match.get("awayScore"))
+
+    if home is None or away is None:
+        return None
+
+    normalized = dict(match)
+
+    normalized["cricketOriginalScores"] = {
+        "home": home,
+        "away": away,
+    }
+
+    normalized["homeScore"] = home["runs"]
+    normalized["awayScore"] = away["runs"]
+
+    return normalized

@@ -2055,6 +2055,50 @@ ${M.map((m,i)=>`<div style="padding:8px 8px;border-right:1px solid rgba(255,255,
 <div class="card"><div class="l">Last successful refresh</div><div class="n" id="adminOddsRefresh" style="font-size:14px">—</div></div>
 </div>
 <div class="sub" id="adminOddsError" style="margin-top:8px">No current error.</div>
+
+<div id="ksn659ProviderDashboard" class="ksn659-providers">
+  <div class="ksn659-provider-head">
+    <div>
+      <h3>V659 Sports Provider Monitoring</h3>
+      <p>Cached configuration and coverage. No live provider probes.</p>
+    </div>
+    <button type="button"
+      onclick="window.ksn659RefreshProviderDashboard()">
+      Refresh provider snapshot
+    </button>
+  </div>
+
+  <div class="ksn659-provider-grid">
+    <div class="ksn659-provider-card">
+      <strong>Football</strong>
+      <span>Primary: API-Football</span>
+      <span>Fallback: OddsPAPI</span>
+      <b id="ksn659FootballState">Not verified</b>
+      <small id="ksn659FootballCount">Cached matches: unknown</small>
+    </div>
+
+    <div class="ksn659-provider-card">
+      <strong>Rugby</strong>
+      <span>Primary: API-Sports Rugby</span>
+      <span>Fallback: OddsPAPI</span>
+      <b id="ksn659RugbyState">Not verified</b>
+      <small id="ksn659RugbyCount">Cached matches: unknown</small>
+    </div>
+
+    <div class="ksn659-provider-card">
+      <strong>Cricket</strong>
+      <span>Primary: OddsPAPI</span>
+      <span>Fallback: None configured</span>
+      <b id="ksn659CricketState">Not verified</b>
+      <small id="ksn659CricketCount">Cached matches: unknown</small>
+    </div>
+  </div>
+
+  <p id="ksn659ProviderNote" role="status" aria-live="polite">
+    Select Refresh provider snapshot to read cached diagnostics.
+  </p>
+</div>
+
 </div>
 <div class="card"><h2>Server log</h2><div class="log" id="log"></div></div>
 </section>
@@ -7022,6 +7066,7 @@ window.loadMatchStatsPage = async function(id){
   try{
     // One backend request keeps the match page from creating an avoidable request burst.
     const bundle=await get('/fixtures/'+encodeURIComponent(id)+'/live-bundle');
+    window.__ksn659MatchBundle = {id:String(id), data:bundle};
     const fd={response:bundle.fixture?[bundle.fixture]:[]};
     const sd={statistics:bundle.statistics||[]};
     const ld={teams:bundle.lineups||[]}; const playerRows=bundle.players||[]; const events=bundle.events||[];
@@ -11673,6 +11718,124 @@ window.__KASI_NEWS_WARM_FIX__=true;
  .match-stats-btn{padding:6px 8px;font-size:10px}
 }
 </style>
+
+<style id="ksn-v659-finished-responsive">
+/* V659: Finished Games archive only. Preserve Live Matches styling. */
+
+#ks363ResultsHub {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 12px 0 16px;
+}
+
+#ks363ResultsHub .ks363-filterbar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+#ks363ResultsHub .ks363-filterbar > label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+#ks363ResultsHub input,
+#ks363ResultsHub select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+#ks363ResultsHub .ks363-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+#ks363ResultsHub .ks363-actions button {
+  min-height: 38px;
+  white-space: normal;
+}
+
+#ks363ResultsHub #ks363ArchiveStatus {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+#ks307FinishedGrid,
+#ks307FinishedGrid .ks340-group,
+#ks307FinishedGrid .ks340-match {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+#ks307FinishedGrid .ks340-team,
+#ks307FinishedGrid .ks340-teams,
+#ks307FinishedGrid .ks340-status,
+#ks307FinishedGrid .ks340-head {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#ks307FinishedGrid .ks340-score {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  #ks363ResultsHub .ks363-filterbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  #ks363ResultsHub .ks363-filterbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  #ks363ResultsHub .ks363-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  #ks363ResultsHub .ks363-actions button {
+    width: 100%;
+    min-height: 42px;
+  }
+
+  #ks307FinishedGrid .ks340-match {
+    padding: 12px 10px;
+  }
+
+  #ks307FinishedGrid .ks340-teams {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  #ks307FinishedGrid .ks340-score {
+    font-size: 13px;
+  }
+}
+</style>
+
 <style id="kasi-fixture-odds-visible">
 .ks-fixture-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.ks-inline-odds{display:flex;gap:4px;flex-wrap:wrap}.ks-inline-odds span{border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:10px;white-space:nowrap}.ks-inline-odds b{color:#38bdf8}
 @media(max-width:700px){.ks-fixture-actions{justify-content:flex-end}.ks-inline-odds{grid-column:1/-1}.ks-inline-odds span{padding:4px 5px}}
@@ -15640,6 +15803,534 @@ body.ksn549-open{overflow:hidden}
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
 </script>
+
+<style id="ksn-v659-provider-dashboard-css">
+#ksn659ProviderDashboard {
+  margin-top:16px;
+  padding-top:16px;
+  border-top:1px solid var(--line);
+  min-width:0;
+}
+.ksn659-provider-head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.ksn659-provider-head h3 {
+  margin:0 0 5px;
+  font-size:16px;
+}
+.ksn659-provider-head p,
+#ksn659ProviderNote {
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.5;
+}
+.ksn659-provider-grid {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:12px;
+  margin-top:14px;
+}
+.ksn659-provider-card {
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-width:0;
+  padding:14px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:var(--panel);
+  overflow-wrap:anywhere;
+}
+.ksn659-provider-card strong {
+  font-size:15px;
+}
+.ksn659-provider-card span,
+.ksn659-provider-card small {
+  font-size:12px;
+  color:var(--muted);
+}
+.ksn659-provider-card b {
+  font-size:12px;
+  color:var(--accent);
+}
+@media(max-width:900px){
+  .ksn659-provider-grid {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+@media(max-width:600px){
+  .ksn659-provider-grid {
+    grid-template-columns:minmax(0,1fr);
+  }
+  .ksn659-provider-head button {
+    width:100%;
+    min-height:42px;
+  }
+}
+</style>
+
+
+<script id="ksn-v659-provider-dashboard-js">
+(function(){
+  "use strict";
+
+  function update(id, value){
+    const element = document.getElementById(id);
+    if(element) element.textContent = String(value);
+  }
+
+  function count(value){
+    return Number.isSafeInteger(value) && value >= 0
+      ? String(value) : "unknown";
+  }
+
+  window.ksn659RefreshProviderDashboard = async function(){
+    const root = document.getElementById("ksn659ProviderDashboard");
+    if(!root) return;
+
+    update("ksn659ProviderNote", "Reading cached diagnostics...");
+
+    try {
+      const token = localStorage.getItem("kasiscore_session");
+
+      if (!token) {
+        throw new Error("ADMIN_SESSION_REQUIRED");
+      }
+
+      const response = await fetch("/sports/provider-health", {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+          "Authorization": "Bearer " + token
+        },
+        cache: "no-store",
+        credentials: "same-origin"
+      });
+
+      if (response.status === 401 || response.status === 403) {
+        throw new Error("ADMIN_ACCESS_DENIED");
+      }
+
+      if(!response.ok) throw new Error("HTTP " + response.status);
+
+      const data = await response.json();
+
+      if(!data || typeof data !== "object" ||
+         !data.providerKeysConfigured ||
+         !data.cachedLiveCounts) {
+        throw new Error("Unexpected diagnostic response");
+      }
+
+      const keys = data.providerKeysConfigured;
+      const counts = data.cachedLiveCounts;
+
+      // Key configuration and cache presence are NOT health checks.
+      update("ksn659FootballState", "Availability not verified");
+
+      update(
+        "ksn659RugbyState",
+        keys.rugbyApiSports === true
+          ? "Rugby key flag present; availability unverified"
+          : "Rugby key flag absent; availability unverified"
+      );
+
+      update(
+        "ksn659CricketState",
+        keys.oddsPapi === true
+          ? "OddsPAPI configured; availability unverified"
+          : "OddsPAPI not confirmed; availability unverified"
+      );
+
+      for(const sport of ["football","rugby","cricket"]){
+        const id = "ksn659" +
+          sport.charAt(0).toUpperCase() +
+          sport.slice(1) + "Count";
+
+        update(id, "Cached matches: " + count(counts[sport]));
+      }
+
+      const age = data.cachedLiveAgeSeconds;
+      const ageText = Number.isFinite(age) && age >= 0
+        ? Math.round(age) + " seconds"
+        : "unknown";
+
+      const probed = data.externalProvidersProbed === true;
+
+      update(
+        "ksn659ProviderNote",
+        "Last-known-good cache age: " + ageText +
+        ". External provider probes: " +
+        (probed ? "reported" : "not performed") +
+        ". Cache counts do not prove current provider availability."
+      );
+
+    } catch(error) {
+      for(const sport of ["Football","Rugby","Cricket"]){
+        update("ksn659" + sport + "State", "Diagnostics unavailable");
+        update("ksn659" + sport + "Count", "Cached matches: unknown");
+      }
+      const message =
+        error.message === "ADMIN_SESSION_REQUIRED"
+          ? "Administrator login required."
+          : error.message === "ADMIN_ACCESS_DENIED"
+          ? "Administrator session expired or access denied."
+          : "Cached provider diagnostics unavailable. No provider probe attempted.";
+
+      update("ksn659ProviderNote", message);
+    }
+  };
+})();
+</script>
+
+
+<style id="ksn-v659-match-tabs-css">
+#ksn659MatchTabs {
+  display:flex;
+  gap:6px;
+  overflow-x:auto;
+  border-bottom:1px solid var(--line,#263240);
+  padding:8px 0;
+}
+#ksn659MatchTabs button {
+  flex:none;
+  background:transparent;
+  border:0;
+  border-bottom:2px solid transparent;
+  color:var(--muted,#9fb7cb);
+  padding:11px 13px;
+  cursor:pointer;
+}
+#ksn659MatchTabs button[aria-selected="true"] {
+  border-bottom-color:#329eff;
+  color:var(--text,#eef3f9);
+}
+.ksn659Panel {padding:14px 2px;}
+.ksn659Panel[hidden] {display:none!important;}
+.ksn659DataRow {
+  display:flex;
+  justify-content:space-between;
+  gap:14px;
+  padding:10px 0;
+  border-bottom:1px solid var(--line,#263240);
+}
+.ksn659DataRow span {min-width:0;overflow-wrap:anywhere;}
+.ksn659Empty {color:var(--muted,#9fb7cb);}
+@media(max-width:600px) {
+  #ksn659MatchTabs button {padding:10px;font-size:12px;}
+  .ksn659DataRow {font-size:13px;}
+}
+</style>
+<script id="ksn-v659-match-tabs-js">
+(function(){
+'use strict';
+
+const TABS=[
+ ['match','Match'],
+ ['lineups','Lineups'],
+ ['stats','Stats'],
+ ['trends','Trends'],
+ ['news','News'],
+ ['h2h','Head to Head'],
+ ['commentary','Commentary']
+];
+
+function element(tag,content){
+ const node=document.createElement(tag);
+ if(content!==undefined)node.textContent=String(content);
+ return node;
+}
+
+function addRow(panel,label,value){
+ const row=element('div');
+ row.className='ksn659DataRow';
+ row.append(element('span',label),element('span',value??'—'));
+ panel.append(row);
+}
+
+function message(panel,text){
+ const p=element('p',text);
+ p.className='ksn659Empty';
+ panel.append(p);
+}
+
+function renderLineups(panel,bundle){
+ const teams=Array.isArray(bundle.lineups)?bundle.lineups:[];
+ if(!teams.length){
+  message(panel,'Confirmed lineups unavailable.');
+  return;
+ }
+ teams.forEach(team=>{
+  panel.append(element('h3',team.team?.name||'Team'));
+  if(team.formation)panel.append(element('p','Formation: '+team.formation));
+  const players=Array.isArray(team.players)?team.players:[];
+  const starters=team.startingXI||players.filter(p=>p.starter===true);
+  const subs=team.substitutes||players.filter(p=>p.starter===false);
+  for(const [label,list] of [['Starting XI',starters],['Substitutes',subs]]){
+   panel.append(element('h4',label));
+   if(!list.length)message(panel,'Not supplied');
+   list.forEach(item=>{
+    const p=item.player||item;
+    addRow(panel,(p.number??'')+' '+(p.name||'Player'),p.pos||p.position||'');
+   });
+  }
+ });
+}
+
+function renderStats(panel,bundle){
+ const teams=Array.isArray(bundle.statistics)?bundle.statistics:[];
+ if(!teams.length){
+  message(panel,'Match statistics unavailable.');
+  return;
+ }
+ teams.forEach(team=>{
+  panel.append(element('h3',team.team?.name||'Team'));
+  (team.statistics||[]).forEach(s=>addRow(panel,s.type||'Statistic',s.value));
+ });
+}
+
+function renderEvents(panel,bundle){
+ const events=Array.isArray(bundle.events)?bundle.events:[];
+ if(!events.length){
+  message(panel,'No verified match events available.');
+  return;
+ }
+ events.forEach(event=>{
+  const minute=event.time?.elapsed!=null
+   ?event.time.elapsed+"'"
+   :'—';
+  const description=[
+   event.type,event.detail,event.player?.name,event.comments
+  ].filter(Boolean).join(' · ');
+  addRow(panel,minute,description||'Match event');
+ });
+}
+
+
+// KSN_V659_VERIFIED_TRENDS
+function renderVerifiedTrends(panel,bundle){
+ const teams=Array.isArray(bundle.statistics)
+  ?bundle.statistics.filter(t=>t&&Array.isArray(t.statistics))
+  :[];
+
+ if(teams.length!==2){
+  message(panel,'Verified comparative match statistics unavailable.');
+  return;
+ }
+
+ const supported=[
+  'Ball Possession',
+  'Total Shots',
+  'Shots on Goal',
+  'Corner Kicks',
+  'Fouls',
+  'Yellow Cards',
+  'Red Cards'
+ ];
+
+ function lookup(team,type){
+  const item=team.statistics.find(s=>
+   String(s?.type||'').toLowerCase()===type.toLowerCase()
+  );
+  const value=item?.value;
+  if(value===null||value===undefined||value==='')return null;
+  if(typeof value!=='number'&&typeof value!=='string')return null;
+  const text=String(value).trim();
+  return text&&/^\d+(?:\.\d+)?%?$/.test(text)?text:null;
+ }
+
+ const rows=supported.map(type=>({
+  type,
+  home:lookup(teams[0],type),
+  away:lookup(teams[1],type)
+ })).filter(r=>r.home!==null&&r.away!==null);
+
+ if(!rows.length){
+  message(panel,'No verified comparative indicators available for this fixture.');
+  return;
+ }
+
+ panel.append(element('h3','Verified match indicators'));
+
+ const homeName=teams[0].team?.name||'First team';
+ const awayName=teams[1].team?.name||'Second team';
+
+ panel.append(element('p',homeName+' vs '+awayName));
+
+ rows.forEach(r=>{
+  addRow(panel,r.type,r.home+' | '+r.away);
+ });
+
+ message(panel,
+  'Values are recorded match statistics in the displayed team order, not a live momentum timeline.');
+}
+
+function installMatchTabs(id){
+ const body=document.getElementById('matchStatsPageBody');
+ const current=window.__ksn659MatchBundle;
+ if(!body||!current||current.id!==String(id))return;
+ if(body.querySelector('#ksn659MatchTabs'))return;
+
+ const bundle=current.data||{};
+ const nav=element('nav');
+ nav.id='ksn659MatchTabs';
+ nav.setAttribute('aria-label','Match Centre tabs');
+ const container=element('div');
+ const panels={};
+
+ TABS.forEach(([key,label])=>{
+  const button=element('button',label);
+  button.type='button';
+  button.setAttribute('aria-selected',key==='match'?'true':'false');
+  button.addEventListener('click',()=>{
+   nav.querySelectorAll('button').forEach(b=>
+    b.setAttribute('aria-selected',String(b===button))
+   );
+   Object.entries(panels).forEach(([k,p])=>p.hidden=k!==key);
+  });
+  nav.append(button);
+
+  const panel=element('section');
+  panel.className='ksn659Panel';
+  panel.hidden=key!=='match';
+  panels[key]=panel;
+ });
+
+ while(body.firstChild)panels.match.append(body.firstChild);
+ body.append(nav,container);
+ TABS.forEach(([key])=>container.append(panels[key]));
+
+ renderLineups(panels.lineups,bundle);
+ renderStats(panels.stats,bundle);
+ renderEvents(panels.commentary,bundle);
+
+ renderVerifiedTrends(panels.trends,bundle);
+ message(panels.news,'Fixture-specific news integration pending.');
+ message(panels.h2h,'Verified previous meetings not loaded.');
+
+ // KSN_V659_LIVE_H2H
+ {
+  const button=Array.from(nav.querySelectorAll('button'))
+   .find(b=>b.textContent.trim()==='Head to Head');
+
+  let loaded=false;
+  let busy=false;
+
+  if(button){
+   button.addEventListener('click',async()=>{
+    if(loaded||busy)return;
+
+    const fixture=bundle.fixture||{};
+    const homeId=fixture.teams?.home?.id;
+    const awayId=fixture.teams?.away?.id;
+    const kickoff=fixture.fixture?.date||fixture.date;
+
+    const validId=v=>/^[1-9][0-9]*$/.test(String(v??''));
+
+    if(!validId(homeId)||!validId(awayId)||!kickoff){
+     panels.h2h.replaceChildren();
+     message(panels.h2h,'Verified team IDs or fixture date unavailable.');
+     return;
+    }
+
+    const parsed=new Date(kickoff);
+    if(Number.isNaN(parsed.getTime())){
+     panels.h2h.replaceChildren();
+     message(panels.h2h,'Verified fixture kickoff unavailable.');
+     return;
+    }
+
+    const params=new URLSearchParams({
+     home_id:String(homeId),
+     away_id:String(awayId),
+     before:parsed.toISOString(),
+     limit:'20'
+    });
+
+    busy=true;
+    panels.h2h.replaceChildren();
+    message(panels.h2h,'Loading archived previous meetings…');
+
+    try{
+     const response=await fetch('/results/live-h2h?'+params,{
+      headers:{Accept:'application/json'},
+      cache:'no-store'
+     });
+
+     if(!response.ok)throw Error('HTTP '+response.status);
+     const data=await response.json();
+
+     panels.h2h.replaceChildren();
+
+     if(!data.available||!Array.isArray(data.meetings)||
+        !data.meetings.length){
+      message(panels.h2h,data.reason||
+       'No verified previous meetings in the archive.');
+      loaded=true;
+      return;
+     }
+
+     panels.h2h.append(element('h3','Archived previous meetings'));
+
+     panels.h2h.append(element('p',[
+      data.played+' recorded meetings',
+      'Home wins: '+data.homeWins,
+      'Draws: '+data.draws,
+      'Away wins: '+data.awayWins
+     ].join(' · ')));
+
+     data.meetings.forEach(m=>{
+      const teams=[
+       m.homeTeam||'Home',
+       String(m.homeScore)+' – '+String(m.awayScore),
+       m.awayTeam||'Away'
+      ].join(' ');
+
+      addRow(
+       panels.h2h,
+       [String(m.date||'').slice(0,10),m.league||'']
+        .filter(Boolean).join(' · '),
+       teams
+      );
+     });
+
+     message(panels.h2h,
+      'Records include only previous meetings stored in the KasiScore archive.');
+     loaded=true;
+
+    }catch(error){
+     panels.h2h.replaceChildren();
+     message(panels.h2h,
+      'Archived previous meetings temporarily unavailable.');
+    }finally{
+     busy=false;
+    }
+   });
+  }
+ }
+
+}
+
+const original=window.loadMatchStatsPage;
+if(typeof original!=='function')return;
+
+window.loadMatchStatsPage=async function(id){
+ window.__ksn659MatchBundle=null;
+ const result=await original.apply(this,arguments);
+ installMatchTabs(id);
+ return result;
+};
+})();
+</script>
+
+
+
+
+
+
 </body>
 </html>
 
@@ -15674,6 +16365,92 @@ body.ksn549-open{overflow:hidden}
  decorate();new MutationObserver(ms=>ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1)decorate(n)}))).observe(document.documentElement,{childList:true,subtree:true});
 })();
 </script>
+<script id="ksn-v659-finished-match-centre-routing">
+(function(){
+'use strict';
+
+const previous=window.ksnMatchStatsHref;
+
+function validId(value){
+ const id=String(value??'').trim();
+ return /^[1-9][0-9]*$/.test(id)?id:'';
+}
+
+window.ksnMatchStatsHref=function(x,opt={}){
+ const sport=String(opt.sport||x?.sport||'football').toLowerCase();
+
+ if(!opt.finished){
+  return typeof previous==='function'
+   ?previous(x,opt)
+   :'';
+ }
+
+
+ // KSN_V659_SPORT_ARCHIVE_ROUTING
+ // Completed Rugby/Cricket: use permanent archive identity.
+ const sportArchiveKey=String(
+  x?.archiveKey??x?.archive_key??''
+ ).trim();
+
+ if(opt.finished &&
+    (sport==='rugby'||sport==='cricket') &&
+    sportArchiveKey){
+  return '/results/sport-archive-view?'+new URLSearchParams({
+   archive_key:sportArchiveKey,
+   sport:sport
+  }).toString();
+ }
+
+if(sport!=='football'){
+  return typeof previous==='function'
+   ?previous(x,opt)
+   :'';
+ }
+
+ // Permanent archive identity takes priority for finished Football.
+ // Never interpret an internal archive key as a provider fixture ID.
+ const archiveKey=String(x?.archiveKey??x?.archive_key??'').trim();
+
+ if(archiveKey){
+  return '/results/archive-view?'+new URLSearchParams({
+   archive_key:archiveKey
+  }).toString();
+ }
+
+ const provider=String(x?.provider||x?.sourceProvider||'').toLowerCase();
+ const explicitId=validId(
+  x?.providerFixtureId||
+  x?.provider_fixture_id||
+  x?._afootFixtureId
+ );
+
+ const verifiedProvider=/api.football|api-sports|afoot/.test(provider);
+
+ if(explicitId && verifiedProvider){
+  return '/matches/'+encodeURIComponent(explicitId)+'/stats';
+ }
+
+ const home=opt.home||x?.home||x?.homeName||x?.homeTeam?.name||x?.teams?.home?.name||'';
+ const away=opt.away||x?.away||x?.awayName||x?.awayTeam?.name||x?.teams?.away?.name||'';
+
+ if(!home||!away)return '';
+
+ const date=opt.date||x?.date||x?.datetime||x?.kickoff||'';
+ const competition=opt.competition||
+  (typeof x?.league==='object'?x.league?.name:x?.league)||
+  x?.competition||'';
+
+ return '/results/open-stats?'+new URLSearchParams({
+  fixture_id:explicitId,
+  home,
+  away,
+  date,
+  competition
+ }).toString();
+};
+})();
+</script>
+
 
 <!-- KSN v472: final Tip of the Day owner consumes shared Stats + team-theme architecture. -->
 <style id="ksn-v472-tip-shared-owner-css">
