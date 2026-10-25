@@ -3944,12 +3944,33 @@ function renderAll(){
   _txt('kServer','LOCAL');_txt('kServerNote',base());
 }
 function toggleAuto(){S.auto=!S.auto;if($('autoBtn'))$('autoBtn').textContent=`Auto refresh: ${S.auto?'On':'Off'}`;if($('adminAutoBtn'))$('adminAutoBtn').textContent=`Auto refresh: ${S.auto?'On':'Off'}`;if(S.auto)startTimers();else stopTimers();}
-function stopTimers(){clearInterval(S.timer);clearInterval(S.fixtureTimer);clearInterval(S.learningTimer);clearInterval(S.playerTimer);clearInterval(S.finishedTimer);}
+function stopTimers(){clearInterval(S.timer);clearInterval(S.fixtureTimer);clearInterval(S.learningTimer);clearInterval(S.playerTimer);clearInterval(S.finishedTimer);clearInterval(S.uiTimer);}
+
+// V660: browser-memory-only UI refresh.
+// Never request the backend or rerun heavy dashboard rendering here.
+function v660RefreshCachedDashboardUI(){
+  if(document.visibilityState!=='visible') return;
+  if(!S || typeof kpiSet!=='function') return;
+
+  const football=Array.isArray(S.live)?S.live.length:0;
+  const cachedTotal=S.sportLiveCount;
+  const total=(
+    cachedTotal!==null &&
+    cachedTotal!==undefined &&
+    Number.isFinite(Number(cachedTotal))
+  )?Number(cachedTotal):football;
+
+  kpiSet('kLive',football);
+  kpiSet('kSportLive',total);
+}
+
 function startTimers(){
   stopTimers();
   if(!S.auto) return;
   // v185: dashboard/live refresh standard — every 3 minutes
   S.timer=setInterval(()=>refreshAll(false),180000);
+  // V660: refresh lightweight indicators from browser cache only.
+  S.uiTimer=setInterval(v660RefreshCachedDashboardUI,5000);
   // Fixture cache refresh — every 30 minutes; always fetch today + next 2 days
   S.fixtureTimer=setInterval(async()=>{
     log('⏱ 30-min fixture cache refresh (today + 2 days ahead)…');
@@ -3963,7 +3984,7 @@ function startTimers(){
   S.finishedTimer=setInterval(async()=>{
     log('⏱ 75-min finished games refresh…');
     if(typeof loadFinishedGames==='function') await loadFinishedGames(true).catch(e=>log('Finished games err: '+e.message));
-  },75*60*1000);
+  },30*60*1000);
   // Learning sync — every 4 hrs
   S.learningTimer=setInterval(async()=>{
     log('⏱ 4-hr learning sync…');
@@ -3975,7 +3996,7 @@ function startTimers(){
     log('⏱ 24-hr player stats refresh…');
     PS._loading = false; // force refresh even if previous load stalled
     psLoad();
-  },86400000);
+  },3600000);
 }
 const V141_BASE_WEIGHTS={odds:0.015,ai:0.012,table:0.009,injuriesH2H:0.011,lastSeason:0.015,currentSeason:0.020};
 async function triggerLearning(){
@@ -6844,7 +6865,7 @@ calcRevenue();
    Free key at: https://www.Football data.com/register
 ──────────────────────────────────────────────────────────── */
 const LIVE_API_KEY = ''; // provider credentials are server-side only
-const REFRESH_MS   = 180000; // v185: live score + live matches every 3 minutes
+const REFRESH_MS   = 30000; // v185: live score + live matches every 3 minutes
 let widgetView     = 'live'; // 'live' | 'scheduled'
 var liveMatches    = [];
 let schedMatches   = [];
@@ -6960,7 +6981,22 @@ async function fetchLiveData() {
   try {
     // Football live source is the verified FastAPI /live endpoint.
     const d = await get('/live',{league:'ALL',refresh:0});
-    const games = d.matches || [];
+    // V660: /live may fail softly with HTTP 200 and providerError.
+    // Preserve last-good scores on failure, but accept genuine zero-live results.
+    if(!d || d.providerError || !Array.isArray(d.matches)){
+      throw new Error('Football live provider response unavailable');
+    }
+    const games = d.matches;
+    // Keep the dashboard's shared live state aligned with the fresh response.
+    if(window.S){
+      S.live=games;
+      S.sportLiveBreakdown=Object.assign(
+        {},S.sportLiveBreakdown||{},{football:games.length}
+      );
+      S.sportLiveCount=games.length+
+        Number(S.sportLiveBreakdown.rugby||0)+
+        Number(S.sportLiveBreakdown.cricket||0);
+    }
     liveMatches = games.map(g => ({
       ...g, id:g._afootFixtureId||g.fixtureId||g.id, sport:'football', league:g.league||'Worldwide',
       home:g.home||g.homeTeam||'Home', away:g.away||g.awayTeam||'Away',
@@ -6977,7 +7013,10 @@ async function fetchLiveData() {
     // That caused a burst of /fixtures/{id}/stats requests and provider 429s.
     // Detailed statistics are fetched on demand only when the user clicks Stats.
     window.liveMatches = liveMatches;
-  } catch(e) { liveMatches=[]; schedMatches=[]; window.liveMatches=[]; console.warn('Live data failed:',e.message); }
+  } catch(e) {
+    // A transient backend failure must not erase previously valid results.
+    console.warn('Live data failed:',e.message);
+  }
 }
 
 // ── Render live grid ───────────────────────────────────────
@@ -7554,10 +7593,15 @@ window.liveWidgetRefresh = async function() {
   if (tc) tc.textContent = (liveMatches.length > 0 ? liveMatches.length + ' live' : 'No matches live');
   const countEl = document.getElementById('liveWidgetCount');
   if (countEl) countEl.textContent = 'Refreshing…';
-  if(window.S && Array.isArray(S.live) && S.live.length){
-    liveMatches=S.live; window.liveMatches=liveMatches;
-  } else {
+  // V660: use a real 30-second backend refresh, not the older S.live array.
+  // Skip hidden tabs and deduplicate overlapping requests in this browser.
+  if(document.visibilityState!=='visible') return;
+  if(window.__v660LiveFetchInFlight) return;
+  window.__v660LiveFetchInFlight=true;
+  try {
     await fetchLiveData();
+  } finally {
+    window.__v660LiveFetchInFlight=false;
   }
   if(typeof renderTicker==='function') renderTicker(liveMatches);
   if(typeof renderLiveGrid==="function")renderLiveGrid(liveMatches);
@@ -10649,7 +10693,7 @@ img{max-width:100%}
     }finally{loading=false}
   };
   document.addEventListener('DOMContentLoaded',()=>setTimeout(window.loadKasiCountryNews,400));
-  if(!window.__ksNewsRefreshTimer)window.__ksNewsRefreshTimer=setInterval(()=>{if(document.visibilityState==='visible')window.loadKasiCountryNews()},300000);
+  if(!window.__ksNewsRefreshTimer)window.__ksNewsRefreshTimer=setInterval(()=>{if(document.visibilityState==='visible')window.loadKasiCountryNews()},180000);
 })();
 </script>
 <script id="kasi-v20-news-dedicated-pages">
@@ -12617,7 +12661,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
    // produce the Page Unresponsive dialog. Reconcile only at bounded times.
    setTimeout(()=>{lockHomeOrder();remove48hLanguage();vetMedia();enhanceTipStats();saveHomeSnapshot();},1200);
    setTimeout(()=>{lockHomeOrder();remove48hLanguage();vetMedia();enhanceTipStats();saveHomeSnapshot();},4000);
-   setInterval(()=>{saveHomeSnapshot();vetMedia();enhanceTipStats();},30000);
+   setInterval(()=>{saveHomeSnapshot();vetMedia();enhanceTipStats();},10000);
  }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();

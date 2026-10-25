@@ -286,24 +286,43 @@ def _migrate_sqlite_users_to_postgres(pg_conn):
         src.close()
 
 
+# V660: Run auth DDL/migration once per application process, not per login.
+# The lock prevents concurrent first-use connections repeating schema work.
+_V660_AUTH_SCHEMA_LOCK = threading.Lock()
+_V660_AUTH_SCHEMA_READY = False
+
+
 def _postgres_auth_connection():
+    global _V660_AUTH_SCHEMA_READY
     if psycopg2 is None:
         raise RuntimeError(
             "DATABASE_URL is configured but psycopg2 is not installed. "
             "Add psycopg2-binary to requirements.txt."
         )
-    conn=psycopg2.connect(DATABASE_URL, connect_timeout=10)
-    conn.autocommit=False
-    _ensure_postgres_auth_schema(conn)
+    conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+    conn.autocommit = False
+    try:
+        if not _V660_AUTH_SCHEMA_READY:
+            with _V660_AUTH_SCHEMA_LOCK:
+                if not _V660_AUTH_SCHEMA_READY:
+                    _ensure_postgres_auth_schema(conn)
 
-    # Migrate legacy SQLite users only when PostgreSQL is still empty.
-    cur=conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM users")
-    count=int(cur.fetchone()[0])
-    cur.close()
-    if count == 0:
-        _migrate_sqlite_users_to_postgres(conn)
-    return conn
+                    # Preserve the existing one-time legacy migration.
+                    cur = conn.cursor()
+                    try:
+                        cur.execute("SELECT COUNT(*) FROM users")
+                        count = int(cur.fetchone()[0])
+                    finally:
+                        cur.close()
+
+                    if count == 0:
+                        _migrate_sqlite_users_to_postgres(conn)
+
+                    _V660_AUTH_SCHEMA_READY = True
+        return conn
+    except Exception:
+        conn.close()
+        raise
 
 
 def _auth_db():
@@ -767,12 +786,12 @@ SCAN_LEAGUES = (
 
 _fixtures_cache = TTLCache(maxsize=200, ttl=1800)
 _fixtures_last_good = TTLCache(maxsize=200, ttl=21600)  # v51: 6h stale-good protection
-_live_cache = TTLCache(maxsize=50, ttl=180)  # v184: one upstream live refresh per minute
+_live_cache = TTLCache(maxsize=50, ttl=30)  # v184: one upstream live refresh per minute
 _odds_cache = TTLCache(maxsize=500, ttl=1800)       # v184: pre-match odds every 30 min
 _team_cache = TTLCache(maxsize=500, ttl=604800)
 _live_stats_cache = TTLCache(maxsize=500, ttl=180)  # v184: live stats every 3 min
 _players_cache = TTLCache(maxsize=100, ttl=86400)   # 24-hour cache for player stats
-_standings_cache = TTLCache(maxsize=100, ttl=10800) # 3-hr (was 1 hr) — standings update after matchday
+_standings_cache = TTLCache(maxsize=100, ttl=180) # 3-hr (was 1 hr) — standings update after matchday
 _form_cache = TTLCache(maxsize=500, ttl=10800)      # 3-hr (was 1 hr) — last-5 form is stable intra-day
 _prematch_odds_batch_cache = TTLCache(maxsize=100, ttl=1800)  # v184: cache even empty odds scans for 30 min
 _odds_api_events_cache = TTLCache(maxsize=100, ttl=1800)  # v217: The Odds API feed, shared across widgets
@@ -828,7 +847,8 @@ _PERSISTENT_TTL: dict[str, int] = {
     "/players":              7 * 86400,  # 7 days — profile doesn't change mid-season
     "/fixtures/headtohead":    86400,    # 24 hrs — history doesn't change
     "/injuries":            3 * 3600,    # 3 hrs  — injury lists update on training days
-    "/standings":           3 * 3600,    # 3 hrs  — standings update after matchday only
+    "/standings":                 180,    # 3 hrs  — standings update after matchday only
+    "/teams/statistics":          180,
     "/fixtures/lineups":       3600,     # 1 hr   — lineups confirmed ~1 hr before KO
     "/fixtures/statistics":    3600,     # 1 hr   — stats don't change once fetched post-match
     "/fixtures/players":       3600,     # 1 hr   — same as statistics
@@ -869,7 +889,17 @@ def _v486_api_pg_conn():
                     raise
     return conn
 
-def _v486_api_pg_get(key):
+def _v660_effective_provider_ttl(path, params, stored_ttl):
+    """Honor newer freshness limits even for legacy persistent rows."""
+    ttl = max(0, int(stored_ttl))
+    if path == "/fixtures" and str(params.get("live") or "").lower() == "all":
+        return min(ttl, 30)
+    if path in ("/standings", "/teams/statistics"):
+        return min(ttl, 180)
+    return ttl
+
+
+def _v486_api_pg_get(key, path, params):
     conn = _v486_api_pg_conn()
     if conn is None:
         return None
@@ -883,7 +913,7 @@ def _v486_api_pg_get(key):
         fetched = row[1]
         if fetched.tzinfo is None:
             fetched = fetched.replace(tzinfo=timezone.utc)
-        if (datetime.now(timezone.utc) - fetched).total_seconds() >= int(row[2]):
+        if (datetime.now(timezone.utc) - fetched).total_seconds() >= _v660_effective_provider_ttl(path, params, row[2]):
             return None
         return json.loads(row[0])
     finally:
@@ -914,7 +944,7 @@ def _persistent_cache_get(path: str, params: dict) -> dict | None:
     key = _persist_cache_key(path, params)
     try:
         if DATABASE_URL and psycopg2 is not None:
-            stored = _v486_api_pg_get(key)
+            stored = _v486_api_pg_get(key, path, params)
             if stored is not None:
                 return stored
     except Exception as exc:
@@ -931,7 +961,7 @@ def _persistent_cache_get(path: str, params: dict) -> dict | None:
             if fetched.tzinfo is None:
                 fetched = fetched.replace(tzinfo=timezone.utc)
             age = (datetime.now(timezone.utc) - fetched).total_seconds()
-            if age < row["ttl_seconds"]:
+            if age < _v660_effective_provider_ttl(path, params, row["ttl_seconds"]):
                 cached_data = json.loads(row["response"])
                 # v307: an empty fixture response is a VALID cached result.
                 # This is critical for live=all: "nothing live" must not spend
@@ -948,7 +978,7 @@ def _persistent_cache_set(path: str, params: dict, data: dict):
     # Live is intentionally short; historical finished dates are effectively immutable.
     if path == "/fixtures":
         if str(params.get("live") or "").lower() == "all":
-            ttl = 180
+            ttl = 30
         elif params.get("date"):
             try:
                 qd = datetime.strptime(str(params.get("date")), "%Y-%m-%d").date()
@@ -3280,8 +3310,8 @@ def _normalise_odds(bookmakers: list[dict], live: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 
 V141_CACHE_TTL_SECONDS = 300
-V141_FIXTURE_REFRESH_SECONDS = int(os.getenv("FIXTURE_REFRESH_SECONDS", "7200"))  # 1 hr (was 30 min)
-V141_PREDICTION_REFRESH_SECS = 300
+V141_FIXTURE_REFRESH_SECONDS = int(os.getenv("FIXTURE_REFRESH_SECONDS", "1800"))  # 1 hr (was 30 min)
+V141_PREDICTION_REFRESH_SECS = 120
 V141_LEARNING_CYCLE_SECS = int(os.getenv("LEARNING_CYCLE_SECS", str(6 * 3600)))  # 6 hours (was 3 hrs)
 V141_MODEL_VERSION = os.getenv("MODEL_VERSION", "KasiScore AI Model")
 V141_LEARNING_DB_PATH = Path(
@@ -11734,7 +11764,13 @@ async def tip_of_day(request: Request):
             db=_oddspapi_budget_db_path()
             if db.exists():
                 con=sqlite3.connect(str(db),timeout=10); con.row_factory=sqlite3.Row
-                row=con.execute("SELECT payload FROM dashboard_snapshots WHERE key='tip-of-day' LIMIT 1").fetchone(); con.close()
+                table_exists=con.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dashboard_snapshots'"
+                ).fetchone()
+                row=(con.execute(
+                    "SELECT payload FROM dashboard_snapshots WHERE key='tip-of-day' LIMIT 1"
+                ).fetchone() if table_exists else None)
+                con.close()
                 if row:
                     snap=json.loads(row["payload"] or "{}")
                     saved_cmp=[x for x in (snap.get("comparisonFallback") or []) if _upcoming(x) and x.get("home") and x.get("away") and x.get("bookmakerPick") not in (None,"","—")]
@@ -15248,46 +15284,59 @@ def _results_db():
 
 def _results_archive_init():
     conn, kind = _results_db()
-    cur = conn.cursor()
-    if kind == "postgres":
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS ksn_results_archive(
-          ksn_key TEXT PRIMARY KEY,
-          sport TEXT NOT NULL, provider TEXT, provider_id TEXT,
-          country TEXT, competition TEXT, competition_id TEXT,
-          season TEXT, round_name TEXT, kickoff TIMESTAMPTZ NOT NULL,
-          home_id TEXT, home_name TEXT NOT NULL, home_badge TEXT,
-          away_id TEXT, away_name TEXT NOT NULL, away_badge TEXT,
-          home_score TEXT NOT NULL, away_score TEXT NOT NULL,
-          status TEXT NOT NULL, venue TEXT, referee TEXT,
-          source_payload JSONB NOT NULL,
-          collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )""")
-        for sql in (
-            "CREATE INDEX IF NOT EXISTS idx_ksn_results_kickoff ON ksn_results_archive(kickoff DESC)",
-            "CREATE INDEX IF NOT EXISTS idx_ksn_results_sport ON ksn_results_archive(sport)",
-            "CREATE INDEX IF NOT EXISTS idx_ksn_results_country ON ksn_results_archive(lower(country))",
-            "CREATE INDEX IF NOT EXISTS idx_ksn_results_comp ON ksn_results_archive(lower(competition))",
-            "CREATE INDEX IF NOT EXISTS idx_ksn_results_home ON ksn_results_archive(lower(home_name))",
-            "CREATE INDEX IF NOT EXISTS idx_ksn_results_away ON ksn_results_archive(lower(away_name))",
-            "CREATE INDEX IF NOT EXISTS idx_ksn_results_season ON ksn_results_archive(season)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_ksn_results_sport_provider_fixture ON ksn_results_archive(sport,provider_id) WHERE provider_id ~ '^[1-9][0-9]{0,11}$'"
-        ): cur.execute(sql)
-    else:
-        cur.execute("""CREATE TABLE IF NOT EXISTS ksn_results_archive(
-          ksn_key TEXT PRIMARY KEY, sport TEXT NOT NULL, provider TEXT, provider_id TEXT,
-          country TEXT, competition TEXT, competition_id TEXT, season TEXT, round_name TEXT,
-          kickoff TEXT NOT NULL, home_id TEXT, home_name TEXT NOT NULL, home_badge TEXT,
-          away_id TEXT, away_name TEXT NOT NULL, away_badge TEXT,
-          home_score TEXT NOT NULL, away_score TEXT NOT NULL, status TEXT NOT NULL,
-          venue TEXT, referee TEXT, source_payload TEXT NOT NULL,
-          collected_at TEXT NOT NULL, updated_at TEXT NOT NULL
-        )""")
-        for name,col in (("kickoff","kickoff"),("sport","sport"),("country","country"),
-                         ("comp","competition"),("home","home_name"),("away","away_name"),("season","season")):
-            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_ksn_results_{name} ON ksn_results_archive({col})")
-    conn.commit(); cur.close(); conn.close()
+    cur = None
+    try:
+        cur = conn.cursor()
+        if kind == "postgres":
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS ksn_results_archive(
+              ksn_key TEXT PRIMARY KEY,
+              sport TEXT NOT NULL, provider TEXT, provider_id TEXT,
+              country TEXT, competition TEXT, competition_id TEXT,
+              season TEXT, round_name TEXT, kickoff TIMESTAMPTZ NOT NULL,
+              home_id TEXT, home_name TEXT NOT NULL, home_badge TEXT,
+              away_id TEXT, away_name TEXT NOT NULL, away_badge TEXT,
+              home_score TEXT NOT NULL, away_score TEXT NOT NULL,
+              status TEXT NOT NULL, venue TEXT, referee TEXT,
+              source_payload JSONB NOT NULL,
+              collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )""")
+            for sql in (
+                "CREATE INDEX IF NOT EXISTS idx_ksn_results_kickoff ON ksn_results_archive(kickoff DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_ksn_results_sport ON ksn_results_archive(sport)",
+                "CREATE INDEX IF NOT EXISTS idx_ksn_results_country ON ksn_results_archive(lower(country))",
+                "CREATE INDEX IF NOT EXISTS idx_ksn_results_comp ON ksn_results_archive(lower(competition))",
+                "CREATE INDEX IF NOT EXISTS idx_ksn_results_home ON ksn_results_archive(lower(home_name))",
+                "CREATE INDEX IF NOT EXISTS idx_ksn_results_away ON ksn_results_archive(lower(away_name))",
+                "CREATE INDEX IF NOT EXISTS idx_ksn_results_season ON ksn_results_archive(season)",
+            ): cur.execute(sql)
+        else:
+            cur.execute("""CREATE TABLE IF NOT EXISTS ksn_results_archive(
+              ksn_key TEXT PRIMARY KEY, sport TEXT NOT NULL, provider TEXT, provider_id TEXT,
+              country TEXT, competition TEXT, competition_id TEXT, season TEXT, round_name TEXT,
+              kickoff TEXT NOT NULL, home_id TEXT, home_name TEXT NOT NULL, home_badge TEXT,
+              away_id TEXT, away_name TEXT NOT NULL, away_badge TEXT,
+              home_score TEXT NOT NULL, away_score TEXT NOT NULL, status TEXT NOT NULL,
+              venue TEXT, referee TEXT, source_payload TEXT NOT NULL,
+              collected_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )""")
+            for name,col in (("kickoff","kickoff"),("sport","sport"),("country","country"),
+                             ("comp","competition"),("home","home_name"),("away","away_name"),("season","season")):
+                cur.execute(f"CREATE INDEX IF NOT EXISTS idx_ksn_results_{name} ON ksn_results_archive({col})")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            if cur is not None:
+                cur.close()
+        finally:
+            conn.close()
 
 def _archive_text(x, *keys):
     for k in keys:
@@ -16295,6 +16344,77 @@ async def _historical_provider_results(q:str="", sport:str="all", country:str=""
         log.warning("Historical provider fallback failed q=%r: %s",q,exc)
         return [],{"attempted":True,"providerCalls":calls,"error":str(exc)[:240]}
 
+def _v660_archive_query_rows(
+    q, sport, country, competition, competition_id, season,
+    team, year, date_from, date_to, limit, offset
+):
+    """Execute existing archive search SQL off the event loop."""
+    conn = None
+    cur = None
+    try:
+        conn,kind=_results_db(); cur=conn.cursor(); ph="%s" if kind=="postgres" else "?"
+        where=[]; params=[]
+        def add(expr,val): where.append(expr.replace("?",ph)); params.append(val)
+        if sport.lower() in {"football","rugby","cricket"}: add("sport=?",sport.lower())
+        if competition_id is not None: add("competition_id=?", competition_id)  # v529 exact provider competition filter
+        # v457: named fields are canonical structured filters. Keep q broad below.
+        if country.strip(): add("lower(trim(country))=?",country.strip().lower())
+        if competition.strip(): add("lower(trim(competition))=?",competition.strip().lower())
+        if season.strip(): add("lower(trim(season))=?",season.strip().lower())
+        if team.strip():
+            where.append(f"(lower(home_name) LIKE {ph} OR lower(away_name) LIKE {ph})")
+            tq=f"%{team.strip().lower()}%"; params.extend([tq,tq])
+        if year:
+            if kind=="postgres": where.append(f"EXTRACT(YEAR FROM kickoff)={ph}"); params.append(year)
+            else: where.append(f"substr(kickoff,1,4)={ph}"); params.append(str(year))
+        if date_from.strip(): add("kickoff>=?",date_from.strip())
+        if date_to.strip(): add("kickoff<=?",date_to.strip()+"T23:59:59+00:00" if len(date_to.strip())==10 else date_to.strip())
+        if q.strip():
+            qq=f"%{q.strip().lower()}%"
+            # kickoff is TIMESTAMPTZ on PostgreSQL, so it must be cast before
+            # LOWER/LIKE.  The old COALESCE(kickoff,'') expression raises a
+            # PostgreSQL datatype error and made every broad historical search
+            # return HTTP 500 on Render.
+            if kind == "postgres":
+                text_exprs=(
+                    "lower(COALESCE(home_name,''))",
+                    "lower(COALESCE(away_name,''))",
+                    "lower(COALESCE(country,''))",
+                    "lower(COALESCE(competition,''))",
+                    "lower(COALESCE(season,''))",
+                    "lower(COALESCE(kickoff::text,''))",
+                )
+            else:
+                text_exprs=(
+                    "lower(COALESCE(home_name,''))",
+                    "lower(COALESCE(away_name,''))",
+                    "lower(COALESCE(country,''))",
+                    "lower(COALESCE(competition,''))",
+                    "lower(COALESCE(season,''))",
+                    "lower(COALESCE(kickoff,''))",
+                )
+            where.append("("+" OR ".join([f"{expr} LIKE {ph}" for expr in text_exprs])+")")
+            params.extend([qq]*len(text_exprs))
+        wc=(" WHERE "+" AND ".join(where)) if where else ""
+        cur.execute("SELECT COUNT(*) FROM ksn_results_archive"+wc,tuple(params)); total=int(cur.fetchone()[0])
+        sql=("SELECT sport,provider,provider_id,country,competition,competition_id,season,round_name,kickoff,"
+             "home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee,ksn_key "
+             "FROM ksn_results_archive"+wc+f" ORDER BY kickoff DESC LIMIT {ph} OFFSET {ph}")
+        cur.execute(sql,tuple(params+[limit,offset])); raw=cur.fetchall(); rows=[]
+        for r in raw:
+            v=list(r); rows.append({"sport":v[0],"source":v[1],"id":v[2],"country":v[3],"league":v[4],"leagueId":v[5],
+              "season":v[6],"round":v[7],"date":str(v[8]),"homeId":v[9],"home":v[10],"homeLogo":v[11],
+              "awayId":v[12],"away":v[13],"awayLogo":v[14],"homeScore":v[15],"awayScore":v[16],
+              "status":v[17],"venue":v[18],"referee":v[19],"archiveKey":v[20],"isFinished":True,"providerFixtureId":v[2] if str(v[0]).lower()=="football" else None})
+        return total, rows
+    finally:
+        try:
+            if cur is not None:
+                cur.close()
+        finally:
+            if conn is not None:
+                conn.close()
+
 @app.get("/results/search")
 async def results_search(
     request: Request,
@@ -16332,62 +16452,22 @@ async def results_search(
             except Exception as exc:
                 recent_error=str(exc)[:240]
 
-    _results_archive_init()
-    conn,kind=_results_db(); cur=conn.cursor(); ph="%s" if kind=="postgres" else "?"
-    where=[]; params=[]
-    def add(expr,val): where.append(expr.replace("?",ph)); params.append(val)
-    if sport.lower() in {"football","rugby","cricket"}: add("sport=?",sport.lower())
-    if competition_id is not None: add("competition_id=?", competition_id)  # v529 exact provider competition filter
-    # v457: named fields are canonical structured filters. Keep q broad below.
-    if country.strip(): add("lower(trim(country))=?",country.strip().lower())
-    if competition.strip(): add("lower(trim(competition))=?",competition.strip().lower())
-    if season.strip(): add("lower(trim(season))=?",season.strip().lower())
-    if team.strip():
-        where.append(f"(lower(home_name) LIKE {ph} OR lower(away_name) LIKE {ph})")
-        tq=f"%{team.strip().lower()}%"; params.extend([tq,tq])
-    if year:
-        if kind=="postgres": where.append(f"EXTRACT(YEAR FROM kickoff)={ph}"); params.append(year)
-        else: where.append(f"substr(kickoff,1,4)={ph}"); params.append(str(year))
-    if date_from.strip(): add("kickoff>=?",date_from.strip())
-    if date_to.strip(): add("kickoff<=?",date_to.strip()+"T23:59:59+00:00" if len(date_to.strip())==10 else date_to.strip())
-    if q.strip():
-        qq=f"%{q.strip().lower()}%"
-        # kickoff is TIMESTAMPTZ on PostgreSQL, so it must be cast before
-        # LOWER/LIKE.  The old COALESCE(kickoff,'') expression raises a
-        # PostgreSQL datatype error and made every broad historical search
-        # return HTTP 500 on Render.
-        if kind == "postgres":
-            text_exprs=(
-                "lower(COALESCE(home_name,''))",
-                "lower(COALESCE(away_name,''))",
-                "lower(COALESCE(country,''))",
-                "lower(COALESCE(competition,''))",
-                "lower(COALESCE(season,''))",
-                "lower(COALESCE(kickoff::text,''))",
-            )
-        else:
-            text_exprs=(
-                "lower(COALESCE(home_name,''))",
-                "lower(COALESCE(away_name,''))",
-                "lower(COALESCE(country,''))",
-                "lower(COALESCE(competition,''))",
-                "lower(COALESCE(season,''))",
-                "lower(COALESCE(kickoff,''))",
-            )
-        where.append("("+" OR ".join([f"{expr} LIKE {ph}" for expr in text_exprs])+")")
-        params.extend([qq]*len(text_exprs))
-    wc=(" WHERE "+" AND ".join(where)) if where else ""
-    cur.execute("SELECT COUNT(*) FROM ksn_results_archive"+wc,tuple(params)); total=int(cur.fetchone()[0])
-    sql=("SELECT sport,provider,provider_id,country,competition,competition_id,season,round_name,kickoff,"
-         "home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee,ksn_key "
-         "FROM ksn_results_archive"+wc+f" ORDER BY kickoff DESC LIMIT {ph} OFFSET {ph}")
-    cur.execute(sql,tuple(params+[limit,offset])); raw=cur.fetchall(); rows=[]
-    for r in raw:
-        v=list(r); rows.append({"sport":v[0],"source":v[1],"id":v[2],"country":v[3],"league":v[4],"leagueId":v[5],
-          "season":v[6],"round":v[7],"date":str(v[8]),"homeId":v[9],"home":v[10],"homeLogo":v[11],
-          "awayId":v[12],"away":v[13],"awayLogo":v[14],"homeScore":v[15],"awayScore":v[16],
-          "status":v[17],"venue":v[18],"referee":v[19],"archiveKey":v[20],"isFinished":True,"providerFixtureId":v[2] if str(v[0]).lower()=="football" else None})
-    cur.close(); conn.close()
+    # V660: PostgreSQL schema/index checks must not block the event loop.
+    try:
+        await asyncio.to_thread(_results_archive_init)
+    except Exception:
+        log.exception("V660 results archive initialization failed")
+        raise
+    # V660: archive SQL is synchronous; execute it outside the event loop.
+    try:
+        total, rows = await asyncio.to_thread(
+            _v660_archive_query_rows,
+            q, sport, country, competition, competition_id, season,
+            team, year, date_from, date_to, limit, offset
+        )
+    except Exception:
+        log.exception("V660 results archive query failed")
+        raise
 
     provider_meta={"attempted":False,"providerCalls":0}; archived_provider=0
     # v372: always allow provider gap-fill on the first page of a constrained historical
@@ -16416,17 +16496,36 @@ async def results_search(
             "historicalRowsArchived":archived_provider,"confirmedScoresOnly":True}
 
 
+def _v660_archive_filters_sync():
+    """Load existing archive filters without blocking the ASGI event loop."""
+    _results_archive_init()
+    conn = None
+    cur = None
+    try:
+        conn,kind = _results_db()
+        cur = conn.cursor()
+        out = {}
+        for key,col in (("countries","country"),("competitions","competition"),("seasons","season")):
+            cur.execute(f"SELECT {col}, COUNT(*) FROM ksn_results_archive WHERE COALESCE({col},'')<>'' GROUP BY {col} ORDER BY {col}")
+            out[key] = [{"value":r[0],"count":int(r[1])} for r in cur.fetchall()]
+        return out
+    finally:
+        try:
+            if cur is not None:
+                cur.close()
+        finally:
+            if conn is not None:
+                conn.close()
+
+
 @app.get("/results/filters")
 async def results_filters():
     """Small archive discovery payload for Country / Competition / Season filters."""
-    _results_archive_init()
-    conn,kind=_results_db(); cur=conn.cursor()
-    out={}
-    for key,col in (("countries","country"),("competitions","competition"),("seasons","season")):
-        cur.execute(f"SELECT {col}, COUNT(*) FROM ksn_results_archive WHERE COALESCE({col},'')<>'' GROUP BY {col} ORDER BY {col}")
-        out[key]=[{"value":r[0],"count":int(r[1])} for r in cur.fetchall()]
-    cur.close(); conn.close()
-    return out
+    try:
+        return await asyncio.to_thread(_v660_archive_filters_sync)
+    except Exception:
+        log.exception("V660 results archive filters failed")
+        raise
 
 
 @app.get("/sports/finished")
@@ -18917,6 +19016,239 @@ def _parse_fantasyplayoffs_html_ex(raw_html: str, league_id: int, season_label: 
 def _parse_fantasyplayoffs_html(raw_html: str, league_id: int, season_label: str = "2026-27") -> list[dict]:
     return _parse_fantasyplayoffs_html_ex(raw_html, league_id, season_label)[0]
 
+
+# V660: Cache the complete public FantasyPlayoffs season dataset.
+# This cache is independent of the existing player/profile cache.
+_V660_FP_BUNDLE_LOCK = asyncio.Lock()
+_V660_FP_BUNDLE_CACHE = TTLCache(maxsize=1, ttl=3600)
+
+
+def _v660_fp_parse_bundled_seasons(js_text: str) -> dict:
+    """Parse the public bundled rankings without executing JavaScript."""
+    import json5
+    import re
+
+    match = re.search('\\bece\\s*=\\s*\\{', js_text)
+    if not match:
+        raise ValueError("FantasyPlayoffs season data declaration missing")
+
+    start = js_text.index("{", match.start())
+    depth = 0
+    quoted = None
+    escaped = False
+    end = None
+
+    for i in range(start, len(js_text)):
+        char = js_text[i]
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\\\":
+                escaped = True
+            elif char == quoted:
+                quoted = None
+            continue
+        if char in ('"', "'"):
+            quoted = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+
+    if end is None:
+        raise ValueError("FantasyPlayoffs season data boundary missing")
+
+    literal = js_text[start:end]
+
+    # Only the known numeric top-level season keys need normalization.
+    literal = literal.replace("{2025:", '{"2025":', 1)
+    literal = literal.replace(",2026:", ',"2026":', 1)
+
+    result = json5.loads(literal)
+    if not isinstance(result, dict):
+        raise ValueError("FantasyPlayoffs bundled seasons not an object")
+    return result
+
+
+async def _v660_fp_bundled_seasons() -> dict:
+    """Discover the current application bundle and share its parsed data."""
+    cached = _V660_FP_BUNDLE_CACHE.get("seasons")
+    if cached is not None:
+        return cached
+
+    async with _V660_FP_BUNDLE_LOCK:
+        cached = _V660_FP_BUNDLE_CACHE.get("seasons")
+        if cached is not None:
+            return cached
+
+        from urllib.parse import urljoin, urlparse
+        import re
+
+        base = FANTASYPLAYOFFS_BASE.rstrip("/")
+        page_url = base + "/premier-league-fantasy/stats/"
+
+        async with httpx.AsyncClient(
+            timeout=30, follow_redirects=True
+        ) as client:
+            page = await client.get(
+                page_url, headers={"User-Agent": "Mozilla/5.0"}
+            )
+            page.raise_for_status()
+
+            assets = re.findall(
+                '(?:src|href)=["\']([^"\']*?/assets/appMain-[A-Za-z0-9_-]+\\.js)["\']',
+                page.text,
+            )
+            if not assets:
+                raise ValueError("FantasyPlayoffs application bundle not found")
+
+            asset_url = urljoin(page_url, assets[0])
+            parsed = urlparse(asset_url)
+            origin = urlparse(base)
+
+            if (parsed.scheme, parsed.hostname) != (
+                "https", origin.hostname
+            ):
+                raise ValueError("Unexpected FantasyPlayoffs asset origin")
+
+            bundle = await client.get(
+                asset_url, headers={"User-Agent": "Mozilla/5.0"}
+            )
+            bundle.raise_for_status()
+
+        if len(bundle.content) > 12_000_000:
+            raise ValueError("FantasyPlayoffs bundle exceeds size limit")
+
+        seasons = await asyncio.to_thread(
+            _v660_fp_parse_bundled_seasons, bundle.text
+        )
+
+        # Cache only a usable current-season dataset.
+        current = seasons.get("2026")
+        if not isinstance(current, dict) or not current.get("eng.1"):
+            raise ValueError("Bundled current-season rankings missing")
+
+        _V660_FP_BUNDLE_CACHE["seasons"] = seasons
+        return seasons
+
+
+def _v660_fp_players_from_bundle(
+    seasons: dict, league_id: int, season: int
+):
+    """Return all eligible players, retaining distinct provider identities."""
+    import re
+
+    league_keys = {
+        39: "eng.1",
+        140: "esp.1",
+        78: "ger.1",
+        135: "ita.1",
+        61: "fra.1",
+    }
+
+    league_key = league_keys.get(league_id)
+    if league_key is None:
+        return None
+
+    season_data = seasons.get(str(season))
+    if not isinstance(season_data, dict):
+        return None
+
+    records = season_data.get(league_key)
+    if not isinstance(records, list):
+        return None
+
+    meta = FANTASYPLAYOFFS_LEAGUES[league_id]
+    players = []
+    identities = set()
+
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+
+        points = record.get("fantasyPoints")
+        if (
+            not isinstance(record.get("stats"), dict)
+            or type(points) not in (int, float)
+            or points <= 0
+        ):
+            continue
+
+        name = str(record.get("name") or "").strip()
+        team = str(record.get("team") or "").strip()
+        position = str(record.get("position") or "").strip()
+
+        if not name or not team or position not in (
+            "GK", "DEF", "MID", "FWD"
+        ):
+            raise ValueError("Bundled player has invalid identity")
+
+        photo_url = str(record.get("photoUrl") or "")
+        match = re.search(
+            '/football/players/([0-9]+)\\.png(?:\\?|$)',
+            photo_url,
+        )
+        provider_id = match.group(1) if match else None
+
+        if provider_id:
+            identity = ("provider", provider_id)
+            player_id = f"fp:{league_id}:{provider_id}"
+        else:
+            # Keep source rows separate when no stable ID is supplied.
+            identity = ("row", index)
+            player_id = f"fp:{league_id}:row:{season}:{index}"
+
+        if identity in identities:
+            raise ValueError("Duplicate provider player ID in bundle")
+        identities.add(identity)
+
+        players.append({
+            "id": player_id,
+            "name": name,
+            "team": team,
+            "position": position,
+            "fantasyPoints": float(points),
+            "leagueId": league_id,
+            "league": meta["name"],
+            "country": meta["country"],
+            "source": "FantasyPlayoffs",
+        })
+
+    clubs = len({p["team"].casefold() for p in players})
+    expected_clubs = FANTASYPLAYOFFS_EXPECTED_CLUBS.get(league_id)
+
+    completeness = {
+        "leagueId": league_id,
+        "season": f"{season}-{str(season+1)[-2:]}",
+        "expectedPlayers": len(players),
+        "parsedRows": len(players),
+        "droppedRows": 0,
+        "afterMarkerRows": 0,
+        "clubs": clubs,
+        "expectedClubs": expected_clubs,
+        "complete": (
+            len(players) > 100
+            and (not expected_clubs or clubs >= expected_clubs)
+        ),
+        "reasons": [],
+        "sourceMethod": "bundled-season-data",
+    }
+
+    if len(players) <= 100:
+        completeness["reasons"].append("bundled-player-count-too-low")
+    if expected_clubs and clubs < expected_clubs:
+        completeness["reasons"].append("clubs-below-expected")
+
+    players.sort(
+        key=lambda item: item["fantasyPoints"], reverse=True
+    )
+    return players, completeness
+
+
+
 async def _fetch_fantasyplayoffs_league(league_id: int, season: int=2026, bust_cache: bool=False) -> dict:
     if league_id not in FANTASYPLAYOFFS_LEAGUES:
         raise HTTPException(400, detail={"code":"UNSUPPORTED_FANTASY_LEAGUE","message":"Fantasy leaderboard supports the Big 5 leagues only."})
@@ -18928,23 +19260,88 @@ async def _fetch_fantasyplayoffs_league(league_id: int, season: int=2026, bust_c
     ck=f"fantasyplayoffs:{league_id}:{season_label}"
     if not bust_cache:
         cached=_players_cache.get(ck)
-        if cached is not None: return cached
+        if cached is not None:
+            return cached
+
     url=f"{FANTASYPLAYOFFS_BASE}/{meta['slug']}/stats/"
-    async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
-        r=await client.get(url, headers={"User-Agent":"Mozilla/5.0 (compatible; KasiSportsNews/1.0; +https://kasilivescore.com)"})
-        r.raise_for_status()
-    players,completeness=_parse_fantasyplayoffs_html_ex(r.text, league_id, season_label)
+    players=None
+    completeness=None
+
+    # The site renders only the top 100 records in initial HTML.
+    # Its versioned application bundle contains the complete rankings.
+    if season in (2025, 2026):
+        try:
+            seasons=await _v660_fp_bundled_seasons()
+            result=await asyncio.to_thread(
+                _v660_fp_players_from_bundle, seasons, league_id, season
+            )
+            if result is not None:
+                candidate,diagnostic=result
+                if diagnostic["complete"]:
+                    players,completeness=candidate,diagnostic
+                else:
+                    log.warning(
+                        "V660 bundled FantasyPlayoffs incomplete league=%s: %s",
+                        league_id, diagnostic["reasons"]
+                    )
+        except Exception:
+            log.exception(
+                "V660 bundled FantasyPlayoffs extraction failed league=%s",
+                league_id
+            )
+
+    # Preserve the historical HTML parser if bundle access fails or the
+    # requested season does not exist in the bundled dataset.
+    if players is None:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+            r=await client.get(url, headers={"User-Agent":"Mozilla/5.0 (compatible; KasiSportsNews/1.0; +https://kasilivescore.com)"})
+            r.raise_for_status()
+        players,completeness=_parse_fantasyplayoffs_html_ex(
+            r.text, league_id, season_label
+        )
+
     if not players:
-        raise HTTPException(502, detail={"code":"FANTASYPLAYOFFS_PARSE_EMPTY","message":f"No {meta['name']} FantasyPlayoffs rows could be parsed.","completeness":completeness})
+        raise HTTPException(502, detail={
+            "code":"FANTASYPLAYOFFS_PARSE_EMPTY",
+            "message":f"No {meta['name']} FantasyPlayoffs rows could be parsed.",
+            "completeness":completeness
+        })
+
+    previous=_players_cache.get(ck)
+    if (
+        isinstance(previous,dict)
+        and (previous.get("count") or 0)>len(players)
+    ):
+        return previous
+
     if not completeness["complete"]:
-        log.warning("FantasyPlayoffs table incomplete league=%s: %s",league_id,completeness["reasons"])
-        prev=_players_cache.get(ck)
-        # A thinner, incomplete re-parse must not replace a fuller payload we already hold.
-        if isinstance(prev,dict) and (prev.get("count") or 0)>len(players):
-            return prev
-    position_counts={k:sum(1 for p in players if p.get("position")==k) for k in ("GK","DEF","MID","FWD")}
-    payload={"source":"FantasyPlayoffs","sourceUrl":url,"leagueId":league_id,"league":meta["name"],"country":meta["country"],"season":season_label,"seasonStart":season,"players":players,"count":len(players),"positionCounts":position_counts,"completeness":completeness,"updatedAt":datetime.now(timezone.utc).isoformat()}
-    _players_cache[ck]=payload
+        log.warning(
+            "FantasyPlayoffs table incomplete league=%s: %s",
+            league_id, completeness["reasons"]
+        )
+
+    position_counts={
+        k:sum(1 for p in players if p.get("position")==k)
+        for k in ("GK","DEF","MID","FWD")
+    }
+    payload={
+        "source":"FantasyPlayoffs",
+        "sourceUrl":url,
+        "leagueId":league_id,
+        "league":meta["name"],
+        "country":meta["country"],
+        "season":season_label,
+        "seasonStart":season,
+        "players":players,
+        "count":len(players),
+        "positionCounts":position_counts,
+        "completeness":completeness,
+        "updatedAt":datetime.now(timezone.utc).isoformat(),
+    }
+    # Do not retain incomplete 100-player previews for 24 hours.
+    # The next request may recover the full bundled dataset.
+    if completeness["complete"]:
+        _players_cache[ck]=payload
     return payload
 
 async def _fantasyplayoffs_refresh_all_big5() -> dict:
