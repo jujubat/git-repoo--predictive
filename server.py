@@ -15282,12 +15282,36 @@ def _results_db():
     conn.execute("PRAGMA busy_timeout=30000")
     return conn, "sqlite"
 
+_V660_ARCHIVE_INIT_LOCK = threading.Lock()
+_V660_ARCHIVE_INIT_DONE = False
+
+
 def _results_archive_init():
+    """Initialize archive schema once per process, safely across threads."""
+    global _V660_ARCHIVE_INIT_DONE
+
+    if _V660_ARCHIVE_INIT_DONE:
+        return
+
+    with _V660_ARCHIVE_INIT_LOCK:
+        if _V660_ARCHIVE_INIT_DONE:
+            return
+
+        # A failure leaves the flag False, allowing a later safe retry.
+        _v660_results_archive_init_uncached()
+        _V660_ARCHIVE_INIT_DONE = True
+
+
+def _v660_results_archive_init_uncached():
     conn, kind = _results_db()
     cur = None
     try:
         cur = conn.cursor()
         if kind == "postgres":
+            # Bound first-time schema operations and lock waits.
+            # These settings affect only this transaction.
+            cur.execute("SET LOCAL statement_timeout = '30000ms'")
+            cur.execute("SET LOCAL lock_timeout = '3000ms'")
             cur.execute("""
             CREATE TABLE IF NOT EXISTS ksn_results_archive(
               ksn_key TEXT PRIMARY KEY,
@@ -16353,6 +16377,11 @@ def _v660_archive_query_rows(
     cur = None
     try:
         conn,kind=_results_db(); cur=conn.cursor(); ph="%s" if kind=="postgres" else "?"
+        if kind == "postgres":
+            # Transaction-local safeguards for user-facing archive searches.
+            # Archive ingestion and schema creation remain unaffected.
+            cur.execute("SET LOCAL statement_timeout = '15000ms'")
+            cur.execute("SET LOCAL lock_timeout = '3000ms'")
         where=[]; params=[]
         def add(expr,val): where.append(expr.replace("?",ph)); params.append(val)
         if sport.lower() in {"football","rugby","cricket"}: add("sport=?",sport.lower())
