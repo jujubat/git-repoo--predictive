@@ -15635,7 +15635,19 @@ async def ksn_v659_archive_detail(archive_key: str):
         row = dict(zip(columns, record))
         row["date"] = str(row.pop("kickoff"))
         row["archiveKey"] = row.pop("ksn_key")
-        row["providerFixtureId"] = None
+        # V661: expose only canonical, internally consistent fixture IDs.
+        # Legacy hash-keyed records require separate verification.
+        pid = str(row.get("provider_id") or "").strip()
+        archive_identity = str(row.get("archiveKey") or "").strip()
+        provider_name = str(row.get("provider") or "").lower()
+        verified = (
+            str(row.get("sport") or "").lower() == "football"
+            and re.fullmatch(r"[1-9][0-9]{0,11}", pid) is not None
+            and archive_identity == "football:" + pid
+            and any(tag in provider_name for tag in
+                    ("api-football", "api-sports", "afoot"))
+        )
+        row["providerFixtureId"] = int(pid) if verified else None
         row["isFinished"] = True
         row["permanentArchive"] = True
         row["providerCalls"] = 0
@@ -24789,18 +24801,13 @@ async def v478_resolve_football_fixture_id(home: str = Query(...), away: str = Q
 @app.get('/results/open-stats')
 async def v478_open_finished_stats(fixture_id: str = Query(''), home: str = Query(''), away: str = Query(''), date: str = Query(''), competition: str = Query('')):
     """Finished Games Stats: verify existing ID, otherwise reconcile+persist, then open canonical Match Centre."""
-    fid=int(re.sub(r'\D','',str(fixture_id)) or 0)
-    if fid:
-        try:
-            chk=await _afoot_get('/fixtures',{'id':fid},force_fresh=True)
-            rows=chk.get('response') or []
-            if rows:
-                _v478_persist_archive_fixture_id(fid,home,away,date,competition,rows[0])
-                return RedirectResponse(url=f'/matches/{fid}/stats',status_code=307)
-        except Exception as exc: log.debug('v478 existing fixture verify failed: %s',exc)
-    resolved=await v478_resolve_football_fixture_id(home=home,away=away,date=date,competition=competition)
-    rid=resolved.get('fixtureId') if isinstance(resolved,dict) else None
-    if rid: return RedirectResponse(url=f'/matches/{rid}/stats',status_code=307)
+    # V661: legacy navigation must not initiate provider reconciliation.
+    fid_text = str(fixture_id or "").strip()
+    if re.fullmatch(r"[1-9][0-9]{0,11}", fid_text):
+        return RedirectResponse(
+            url=f"/matches/{fid_text}/stats",
+            status_code=307
+        )
     return HTMLResponse("""<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Match Stats | Kasi Sports News</title><style>body{background:#000;color:#fff;font-family:Arial;padding:24px}.card{max-width:640px;margin:12vh auto;border:1px solid #2b2b2b;border-radius:14px;padding:22px}h2{font-size:24px}p{color:#b8c0cc;line-height:1.55}a{color:#38bdf8}</style></head><body><div class='card'><h2>Detailed statistics are not available for this archived match.</h2><p>We could not verify a unique API-Football fixture for this result, so Kasi Sports News will not attach statistics from another match.</p><a href='/#live'>← Back to Finished Games</a></div></body></html>""",status_code=404)
 
 @app.get('/build-version-v478')
@@ -26162,3 +26169,85 @@ def _ksn_v659_cricket_archive_normalize(match):
     normalized["awayScore"] = away["runs"]
 
     return normalized
+
+
+# V661: Authenticated staging-only, provider-free snapshot audit.
+@app.get("/admin/staging/v661/big5-snapshot-audit")
+def ksn_v661_big5_snapshot_audit(
+    request: Request,
+    league: int = Query(..., ge=1),
+    season: int = Query(2026, ge=2026, le=2026),
+    x_ksn_repair_token: str = Header(default=""),
+):
+    import os
+    import secrets
+    import psycopg2
+    from ksn_v661_big5_bootstrap import audit_staging_snapshot
+
+    expected_service = os.getenv("KSN_V661_STAGING_SERVICE_ID", "")
+    expected_database = os.getenv("KSN_V661_STAGING_DATABASE", "")
+    actual_service = os.getenv("RENDER_SERVICE_ID", "")
+    secret = os.getenv("KSN_TEAM_REPAIR_TOKEN", "")
+
+    allowed = (
+        os.getenv("KSN_STAGING_TEAM_REPAIR_ENABLED", "0") == "1"
+        and (request.url.hostname or "").lower()
+            == "kasi-sports-news-staging.onrender.com"
+        and bool(expected_service)
+        and actual_service == expected_service
+        and expected_service != "srv-daiir1u7bikc738r4lhg"
+        and bool(expected_database)
+        and len(secret) >= 32
+        and secrets.compare_digest(x_ksn_repair_token, secret)
+    )
+
+    if not allowed:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if league not in (39, 140, 78, 135, 61):
+        raise HTTPException(status_code=422, detail="Unsupported league")
+
+    database_url = os.getenv("DATABASE_URL")
+
+    if not database_url:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    conn = None
+
+    try:
+        conn = psycopg2.connect(database_url, connect_timeout=5)
+        conn.set_session(readonly=True, autocommit=False)
+
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '8000ms'")
+            cur.execute("SELECT current_database()")
+            actual_database = cur.fetchone()[0]
+
+        if actual_database != expected_database:
+            raise HTTPException(
+                status_code=503,
+                detail="Database identity mismatch"
+            )
+
+        result = audit_staging_snapshot(
+            conn,
+            league,
+            season,
+            service_name="kasi-sports-news-staging",
+            database_isolated=True,
+        )
+
+        return {
+            "mode": result["mode"],
+            "leagueId": result["leagueId"],
+            "season": result["season"],
+            "snapshotKey": result["snapshotKey"],
+            "status": result["status"],
+            "authorizedToWrite": False,
+            "providerCalls": 0,
+        }
+
+    finally:
+        if conn is not None:
+            conn.rollback()
+            conn.close()
