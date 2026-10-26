@@ -1,0 +1,750 @@
+"""V661 Big-5 standings bootstrap: validation and planning only.
+
+No database or provider operations are performed by this module.
+The staging endpoint integration requires separate review.
+"""
+
+BIG5 = {
+    39: ("Premier League", 20),
+    140: ("La Liga", 20),
+    78: ("Bundesliga", 18),
+    135: ("Serie A", 20),
+    61: ("Ligue 1", 18),
+}
+
+
+def validate_standings(league_id, season, rows):
+    """Validate a complete league table before persistence."""
+
+    league_id = int(league_id)
+    season = int(season)
+
+    if league_id not in BIG5:
+        raise ValueError("Unsupported league")
+
+    if season != 2026:
+        raise ValueError("Only the audited 2026 season is supported")
+
+    name, expected = BIG5[league_id]
+
+    if not isinstance(rows, list):
+        raise ValueError("Standings must be a list")
+
+    if len(rows) != expected:
+        raise ValueError(
+            f"{name}: expected {expected} teams, received {len(rows)}"
+        )
+
+    ids = set()
+    ranks = set()
+    teams = []
+
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("Invalid standings row")
+
+        team = row.get("team")
+
+        if not isinstance(team, dict):
+            raise ValueError("Missing team identity")
+
+        raw_id = team.get("id")
+
+        if (
+            isinstance(raw_id, bool)
+            or not str(raw_id or "").isdigit()
+            or int(raw_id) <= 0
+        ):
+            raise ValueError("Invalid provider team ID")
+
+        team_id = int(raw_id)
+        team_name = str(team.get("name") or "").strip()
+
+        if not team_name:
+            raise ValueError("Missing team name")
+
+        raw_rank = row.get("rank")
+
+        if (
+            isinstance(raw_rank, bool)
+            or not str(raw_rank or "").isdigit()
+        ):
+            raise ValueError("Invalid league rank")
+
+        rank = int(raw_rank)
+
+        if not 1 <= rank <= expected:
+            raise ValueError("Rank outside league table")
+
+        if team_id in ids:
+            raise ValueError("Duplicate team ID")
+
+        if rank in ranks:
+            raise ValueError("Duplicate league rank")
+
+        ids.add(team_id)
+        ranks.add(rank)
+
+        teams.append({
+            "teamId": team_id,
+            "name": team_name,
+            "leagueId": league_id,
+            "season": season,
+        })
+
+    if ranks != set(range(1, expected + 1)):
+        raise ValueError("Incomplete league rankings")
+
+    return {
+        "leagueId": league_id,
+        "league": name,
+        "season": season,
+        "complete": True,
+        "teamCount": len(teams),
+        "teams": teams,
+    }
+
+
+def validate_provider_response(league_id, season, response):
+    """Validate API-Football league metadata before using standings.
+
+    Requires the complete /standings response envelope.
+    A bare table cannot establish competition or season identity.
+    """
+    if not isinstance(response, dict):
+        raise ValueError("Provider response must be an object")
+
+    if response.get("errors"):
+        raise ValueError("Provider returned errors")
+
+    results = response.get("response")
+
+    if not isinstance(results, list) or len(results) != 1:
+        raise ValueError("Expected exactly one standings response")
+
+    league = results[0].get("league")
+
+    if not isinstance(league, dict):
+        raise ValueError("Missing league metadata")
+
+    try:
+        received_league = int(league.get("id"))
+        received_season = int(league.get("season"))
+    except (TypeError, ValueError):
+        raise ValueError("Invalid league or season metadata")
+
+    if received_league != int(league_id):
+        raise ValueError("Provider league ID mismatch")
+
+    if received_season != int(season):
+        raise ValueError("Provider season mismatch")
+
+    table = league.get("standings")
+
+    if (
+        not isinstance(table, list)
+        or len(table) != 1
+        or not isinstance(table[0], list)
+    ):
+        raise ValueError("Unexpected standings structure")
+
+    return validate_standings(league_id, season, table[0])
+
+
+def build_bootstrap_plan(league_id, season, provider_response):
+    """Produce a validated, read-only plan for one Big-5 league.
+
+    Does not read or write databases and does not fetch provider data.
+    The result must not be treated as authorization to persist.
+    """
+    validated = validate_provider_response(
+        league_id, season, provider_response
+    )
+
+    lid = validated["leagueId"]
+    yr = validated["season"]
+
+    return {
+        "mode": "audit_only",
+        "authorizedToWrite": False,
+        "leagueId": lid,
+        "league": validated["league"],
+        "season": yr,
+        "teamCount": validated["teamCount"],
+        "snapshotKey": f"canonical_standings:{lid}:{yr}",
+        "teamIds": [
+            team["teamId"]
+            for team in validated["teams"]
+        ],
+        "requirements": {
+            "stagingOnly": True,
+            "verifiedProviderMetadata": True,
+            "existingSnapshotChecked": False,
+            "membershipWritesApproved": False,
+            "postgresReadbackVerified": False,
+            "providerQuotaApproved": False,
+        },
+    }
+
+
+def assess_snapshot_persistence(plan, existing_snapshot):
+    """Assess snapshot state without authorizing persistence.
+
+    existing_snapshot must be the current canonical snapshot, or None.
+    This function performs no I/O.
+    """
+    if not isinstance(plan, dict):
+        raise ValueError("Invalid bootstrap plan")
+
+    if (
+        plan.get("mode") != "audit_only"
+        or plan.get("authorizedToWrite") is not False
+    ):
+        raise ValueError("Bootstrap plan must be read-only")
+
+    league_id = int(plan["leagueId"])
+    season = int(plan["season"])
+
+    expected_key = f"canonical_standings:{league_id}:{season}"
+
+    if plan.get("snapshotKey") != expected_key:
+        raise ValueError("Snapshot key mismatch")
+
+    if existing_snapshot is None:
+        decision = "candidate_missing_snapshot"
+        reason = "No existing snapshot supplied"
+    else:
+        try:
+            data = existing_snapshot["data"]
+            rows = data["standings"]
+
+            validated = validate_standings(
+                league_id, season, rows
+            )
+
+            current_ids = {
+                team["teamId"]
+                for team in validated["teams"]
+            }
+
+            planned_ids = set(plan["teamIds"])
+
+            if current_ids == planned_ids:
+                decision = "skip_existing_valid"
+                reason = "Existing valid snapshot covers planned teams"
+            else:
+                decision = "manual_review"
+                reason = "Existing valid snapshot has different team IDs"
+
+        except (KeyError, TypeError, ValueError):
+            decision = "manual_review"
+            reason = "Existing snapshot invalid or incomplete"
+
+    return {
+        "snapshotKey": expected_key,
+        "leagueId": league_id,
+        "season": season,
+        "decision": decision,
+        "reason": reason,
+        "authorizedToWrite": False,
+    }
+
+
+def inspect_pg_snapshot(connection, league_id, season):
+    """Read one canonical snapshot through an existing read-only connection.
+
+    Caller must supply a PostgreSQL connection already configured for a
+    read-only transaction. This helper never commits or changes the schema.
+    """
+    league_id = int(league_id)
+    season = int(season)
+
+    if league_id not in BIG5 or season != 2026:
+        raise ValueError("Unsupported league or season")
+
+    if not getattr(connection, "readonly", False):
+        raise ValueError("Read-only PostgreSQL connection required")
+
+    key = f"canonical_standings:{league_id}:{season}"
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT payload,updated FROM ksn_shared_snapshots_v485 WHERE k=%s",
+            (key,)
+        )
+        row = cur.fetchone()
+
+    if row is None:
+        return {
+            "status": "missing",
+            "snapshotKey": key,
+            "snapshot": None,
+        }
+
+    import json
+
+    payload = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+
+    if not isinstance(payload, dict):
+        return {
+            "status": "invalid",
+            "snapshotKey": key,
+            "snapshot": None,
+        }
+
+    return {
+        "status": "present",
+        "snapshotKey": key,
+        "snapshot": payload,
+        "updated": row[1],
+    }
+
+
+def audit_staging_snapshot(
+    connection,
+    league_id,
+    season,
+    *,
+    service_name,
+    database_isolated,
+):
+    """Audit one staging snapshot without provider calls or writes.
+
+    The caller is responsible for verifying the actual database resource ID.
+    """
+    if "staging" not in str(service_name or "").lower():
+        raise ValueError("Staging service identity required")
+
+    if database_isolated is not True:
+        raise ValueError("Verified database isolation required")
+
+    result = inspect_pg_snapshot(
+        connection,
+        league_id,
+        season,
+    )
+
+    return {
+        "mode": "audit_only",
+        "environment": "staging",
+        "leagueId": int(league_id),
+        "season": int(season),
+        "snapshotKey": result["snapshotKey"],
+        "status": result["status"],
+        "snapshot": result.get("snapshot"),
+        "authorizedToWrite": False,
+        "providerCalls": 0,
+    }
+
+
+def plan_missing_memberships(
+    league_id,
+    season,
+    provider_response,
+    existing_team_ids,
+):
+    """Prepare a read-only reconciliation of official league memberships.
+
+    The provider response must retain its league/season metadata.
+    Existing IDs must come from the same league and season.
+    This function never connects to a database or authorizes writes.
+    """
+    validated = validate_provider_response(
+        league_id, season, provider_response
+    )
+
+    if not isinstance(existing_team_ids, (list, tuple, set)):
+        raise ValueError("Existing IDs must be a collection")
+
+    existing = set()
+
+    for value in existing_team_ids:
+        if isinstance(value, bool) or not str(value).isdigit():
+            raise ValueError("Invalid existing team ID")
+
+        team_id = int(value)
+
+        if team_id <= 0:
+            raise ValueError("Invalid existing team ID")
+
+        existing.add(team_id)
+
+    verified = {
+        team["teamId"]: team
+        for team in validated["teams"]
+    }
+
+    missing = [
+        verified[tid]
+        for tid in sorted(verified)
+        if tid not in existing
+    ]
+
+    unexpected = sorted(existing - set(verified))
+
+    return {
+        "mode": "dry_run",
+        "authorizedToWrite": False,
+        "leagueId": validated["leagueId"],
+        "season": validated["season"],
+        "expectedTeams": validated["teamCount"],
+        "existingMemberships": len(existing),
+        "missingMemberships": len(missing),
+        "missingTeams": missing,
+        "unexpectedExistingIds": unexpected,
+        "manualReviewRequired": bool(unexpected),
+    }
+
+
+def build_membership_insert(plan):
+    """Prepare parameterized insert-only SQL; never execute it.
+
+    The plan must originate from validated provider data.
+    The caller must independently verify provenance, staging identity,
+    current database state and explicit authorization before execution.
+    """
+    if not isinstance(plan, dict):
+        raise ValueError("Invalid reconciliation plan")
+
+    if (
+        plan.get("mode") != "dry_run"
+        or plan.get("authorizedToWrite") is not False
+        or plan.get("manualReviewRequired") is not False
+    ):
+        raise ValueError("Unsafe reconciliation plan")
+
+    league_id = int(plan.get("leagueId") or 0)
+    season = int(plan.get("season") or 0)
+
+    if league_id not in BIG5 or season != 2026:
+        raise ValueError("Unsupported league or season")
+
+    expected = BIG5[league_id][1]
+    missing = plan.get("missingTeams")
+
+    if not isinstance(missing, list):
+        raise ValueError("Missing team list")
+
+    existing_count = plan.get("existingMemberships")
+    if (
+        isinstance(existing_count, bool)
+        or not isinstance(existing_count, int)
+        or existing_count < 0
+        or existing_count + len(missing) != expected
+    ):
+        raise ValueError("Inconsistent membership counts")
+
+    values = []
+    seen = set()
+
+    for team in missing:
+        if not isinstance(team, dict):
+            raise ValueError("Invalid team record")
+
+        team_id = team.get("teamId")
+
+        if (
+            isinstance(team_id, bool)
+            or not isinstance(team_id, int)
+            or team_id <= 0
+            or team_id in seen
+            or team.get("leagueId") != league_id
+            or team.get("season") != season
+            or not str(team.get("name") or "").strip()
+        ):
+            raise ValueError("Invalid membership identity")
+
+        seen.add(team_id)
+        values.append((
+            "api-football",
+            league_id,
+            season,
+            team_id,
+        ))
+
+    sql = """
+        INSERT INTO ksn_football_memberships_v530
+            (provider, competition_id, season, team_id)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT DO NOTHING
+    """
+
+    return {
+        "mode": "prepared_only",
+        "authorizedToWrite": False,
+        "sql": sql,
+        "parameters": values,
+        "recordCount": len(values),
+        "leagueId": league_id,
+        "season": season,
+        "requiresStagingApproval": True,
+        "requiresProvenanceVerification": True,
+        "requiresDatabaseRecheck": True,
+    }
+
+
+def build_team_directory_recovery(plan):
+    """Prepare two-table recovery SQL; require complete matching metadata."""
+    membership = build_membership_insert(plan)
+
+    metadata = validate_recovery_team_metadata(
+        plan.get("providerTeamMetadata")
+    )
+
+    expected = {
+        int(team["teamId"]): str(team["name"]).strip()
+        for team in plan["missingTeams"]
+    }
+
+    actual = {team["teamId"]: team for team in metadata}
+
+    if set(expected) != set(actual):
+        raise ValueError("Provider metadata team IDs do not match recovery plan")
+
+    for team_id, name in expected.items():
+        if actual[team_id]["name"].casefold() != name.casefold():
+            raise ValueError("Provider metadata team name mismatch")
+
+    directory_sql = """
+        INSERT INTO ksn_football_teams_v530
+            (provider, team_id, name, country, logo)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT DO NOTHING
+    """
+
+    directory_values = [
+        (
+            "api-football",
+            team_id,
+            actual[team_id]["name"],
+            actual[team_id]["country"],
+            actual[team_id]["logo"],
+        )
+        for team_id in sorted(expected)
+    ]
+
+    if len(directory_values) != membership["recordCount"]:
+        raise ValueError("Directory and membership counts differ")
+
+    return {
+        "mode": "prepared_only",
+        "authorizedToWrite": False,
+        "leagueId": membership["leagueId"],
+        "season": membership["season"],
+        "directorySQL": directory_sql,
+        "directoryParameters": directory_values,
+        "membershipSQL": membership["sql"],
+        "membershipParameters": membership["parameters"],
+        "recordCount": membership["recordCount"],
+        "requiresProviderProvenance": True,
+        "requiresStagingApproval": True,
+        "requiresSingleTransaction": True,
+        "requiresPostgresReadback": True,
+    }
+
+
+def validate_recovery_team_metadata(teams):
+    """Validate provider team metadata without database writes."""
+    if not isinstance(teams, list):
+        raise ValueError("Team metadata must be a list")
+
+    verified = []
+    seen = set()
+
+    for team in teams:
+        if not isinstance(team, dict):
+            raise ValueError("Invalid team metadata")
+
+        raw_id = team.get("teamId")
+        if (
+            isinstance(raw_id, bool)
+            or not str(raw_id or "").isdigit()
+            or int(raw_id) <= 0
+        ):
+            raise ValueError("Invalid team ID")
+
+        team_id = int(raw_id)
+
+        if team_id in seen:
+            raise ValueError("Duplicate team ID")
+
+        name = str(team.get("name") or "").strip()
+        country = str(team.get("country") or "").strip()
+        logo = str(team.get("logo") or "").strip()
+
+        if not name or not country:
+            raise ValueError("Missing team name or country")
+
+        if not logo.startswith("https://"):
+            raise ValueError("Invalid or missing team logo URL")
+
+        seen.add(team_id)
+
+        verified.append({
+            "teamId": team_id,
+            "name": name,
+            "country": country,
+            "logo": logo,
+        })
+
+    return verified
+
+
+def crosscheck_provider_team_directory(
+    league_id, season, standings_response, teams_response
+):
+    """Cross-check supplied provider responses. No IO or writes."""
+    validated = validate_provider_response(
+        league_id, season, standings_response
+    )
+
+    if not isinstance(teams_response, dict):
+        raise ValueError("Invalid teams response")
+
+    if teams_response.get("errors"):
+        raise ValueError("Provider teams response contains errors")
+
+    rows = teams_response.get("response")
+
+    if not isinstance(rows, list):
+        raise ValueError("Missing provider teams response list")
+
+    metadata = []
+
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("Invalid provider teams row")
+
+        team = row.get("team")
+
+        if not isinstance(team, dict):
+            raise ValueError("Missing provider team object")
+
+        metadata.append({
+            "teamId": team.get("id"),
+            "name": team.get("name"),
+            "country": team.get("country"),
+            "logo": team.get("logo"),
+        })
+
+    metadata = validate_recovery_team_metadata(metadata)
+
+    expected = {
+        team["teamId"]: team["name"]
+        for team in validated["teams"]
+    }
+
+    actual = {
+        team["teamId"]: team
+        for team in metadata
+    }
+
+    if set(expected) != set(actual):
+        raise ValueError(
+            "Provider standings and teams directory IDs differ"
+        )
+
+    for team_id, name in expected.items():
+        if actual[team_id]["name"].casefold() != name.casefold():
+            raise ValueError(
+                "Provider standings and teams directory name mismatch"
+            )
+
+    return {
+        "mode": "verified_response_structure_only",
+        "authorizedToWrite": False,
+        "leagueId": validated["leagueId"],
+        "season": validated["season"],
+        "teamCount": len(metadata),
+        "teamIds": sorted(actual),
+        "providerTeamMetadata": [
+            actual[team_id] for team_id in sorted(actual)
+        ],
+        "requiresAuthenticatedTransportEvidence": True,
+        "requiresStagingSnapshotComparison": True,
+        "requiresStagingApproval": True,
+    }
+
+
+def compare_staging_snapshot_to_provider(
+    league_id, season, provider_validation, staging_snapshot
+):
+    """Compare validated provider IDs with stored staging standings.
+
+    Pure validation only; does not authenticate either input.
+    """
+    league_id = int(league_id)
+    season = int(season)
+
+    if not isinstance(provider_validation, dict):
+        raise ValueError("Missing provider validation")
+
+    if provider_validation.get("mode") != "verified_response_structure_only":
+        raise ValueError("Provider validation mode mismatch")
+
+    if provider_validation.get("authorizedToWrite") is not False:
+        raise ValueError("Provider verification is not read-only")
+
+    if (
+        provider_validation.get("leagueId") != league_id
+        or provider_validation.get("season") != season
+    ):
+        raise ValueError("Provider league or season mismatch")
+
+    if not isinstance(staging_snapshot, dict):
+        raise ValueError("Missing staging snapshot")
+
+    payload = staging_snapshot.get("data")
+
+    if not isinstance(payload, dict):
+        raise ValueError("Missing snapshot data")
+
+    standings = payload.get("standings")
+
+    if (
+        isinstance(standings, list)
+        and len(standings) == 1
+        and isinstance(standings[0], list)
+    ):
+        standings = standings[0]
+
+    validated = validate_standings(
+        league_id, season, standings
+    )
+
+    provider_ids = set(provider_validation.get("teamIds") or [])
+    snapshot_ids = {
+        team["teamId"] for team in validated["teams"]
+    }
+
+    if len(provider_ids) != validated["teamCount"]:
+        raise ValueError("Invalid provider team ID count")
+
+    if provider_ids != snapshot_ids:
+        raise ValueError("Staging snapshot differs from provider")
+
+    provider_names = {
+        team["teamId"]: team["name"].strip().casefold()
+        for team in provider_validation.get("providerTeamMetadata") or []
+    }
+
+    snapshot_names = {
+        team["teamId"]: team["name"].strip().casefold()
+        for team in validated["teams"]
+    }
+
+    if provider_names != snapshot_names:
+        raise ValueError("Staging team names differ from provider")
+
+    return {
+        "mode": "snapshot_comparison_only",
+        "authorizedToWrite": False,
+        "leagueId": league_id,
+        "season": season,
+        "teamCount": len(snapshot_ids),
+        "matchingTeamIds": sorted(snapshot_ids),
+        "snapshotMatchesProvider": True,
+        "requiresAuthenticatedTransportEvidence": True,
+        "requiresStagingDatabaseIdentity": True,
+        "requiresStagingApproval": True,
+    }
