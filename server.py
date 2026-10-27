@@ -2866,6 +2866,12 @@ async def _afoot_get_uncollapsed(path: str, params: dict, force_fresh: bool = Fa
             await asyncio.sleep(min(4, 2 ** attempt))
         try:
             _api_football_budget_guard(path)
+            # V662: Count every recovery HTTP attempt, including retries.
+            recovery_budget = _V662_AFOOT_BUDGET.get()
+            if recovery_budget is not None:
+                if recovery_budget['remaining'] <= 0:
+                    raise RuntimeError("V662_RECOVERY_HTTP_BUDGET_EXHAUSTED")
+                recovery_budget['remaining'] -= 1
             await _ksn652_ledger_reserve(path)
             response = await client.get(path, params=params)
             _record_api_football_call(path)
@@ -6195,24 +6201,87 @@ def _enhanced_match_db_get(sport:str, match_id):
     return None
 
 def _enhanced_match_db_put(sport:str, match_id, payload:dict, completed:bool=False):
-    if not SPORTS_DB_ENABLED or not isinstance(payload,dict):return
+    if not SPORTS_DB_ENABLED or not isinstance(payload,dict):
+        return
+
+    sport_key = str(sport).lower()
+    fixture_key = str(match_id)
+
+    # A supplied identity must agree with the row being updated.
+    supplied_id = payload.get("matchId")
+    if supplied_id is not None and str(supplied_id) != fixture_key:
+        log.warning("V662 match persistence rejected mismatched fixture=%s", match_id)
+        return
+
     try:
-        match=payload.get("match") or {}; league=match.get("league") or {}; fixture=match.get("fixture") or {}
-        venue=fixture.get("venue") or {}; stage=str(league.get("round") or "")
         with _sports_db() as db:
             _enhanced_match_db_ensure(db)
-            db.execute("""INSERT INTO enhanced_match_cache(
-              sport,match_id,payload_json,completed,competition_id,competition_name,stage,venue_name,updated_at)
-              VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(sport,match_id) DO UPDATE SET
-              payload_json=excluded.payload_json,completed=MAX(enhanced_match_cache.completed,excluded.completed),
-              competition_id=excluded.competition_id,competition_name=excluded.competition_name,
-              stage=excluded.stage,venue_name=excluded.venue_name,updated_at=excluded.updated_at""",
-              (str(sport).lower(),str(match_id),_db_json(payload),1 if completed else 0,
-               str(league.get("id") or ""),str(league.get("name") or ""),stage,str(venue.get("name") or ""),
-               datetime.now(timezone.utc).isoformat()))
+
+            if sport_key == "football":
+                # SQLite writer lock covers the read, merge and subsequent upsert.
+                db.execute("BEGIN IMMEDIATE")
+
+                row = db.execute(
+                    "SELECT payload_json,completed FROM enhanced_match_cache "
+                    "WHERE sport=? AND match_id=?",
+                    (sport_key, fixture_key)
+                ).fetchone()
+
+                if row is not None:
+                    previous = _db_load(row["payload_json"], {})
+                    if not isinstance(previous, dict):
+                        previous = {}
+
+                    if bool(row["completed"]):
+                        previous["completed"] = True
+                        payload = _v662_merge_match_bundle(previous, payload)
+
+            match = payload.get("match") or {}
+            league = match.get("league") or {}
+            fixture = match.get("fixture") or {}
+            venue = fixture.get("venue") or {}
+
+            stage = str(league.get("round") or "")
+            finished_flag = bool(completed or payload.get("completed"))
+
+            db.execute(
+                """INSERT INTO enhanced_match_cache(
+                    sport,match_id,payload_json,completed,
+                    competition_id,competition_name,stage,venue_name,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(sport,match_id) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    completed=MAX(enhanced_match_cache.completed,excluded.completed),
+                    competition_id=excluded.competition_id,
+                    competition_name=excluded.competition_name,
+                    stage=excluded.stage,
+                    venue_name=excluded.venue_name,
+                    updated_at=excluded.updated_at""",
+                (
+                    sport_key,
+                    fixture_key,
+                    _db_json(payload),
+                    1 if finished_flag else 0,
+                    str(league.get("id") or ""),
+                    str(league.get("name") or ""),
+                    stage,
+                    str(venue.get("name") or ""),
+                    datetime.now(timezone.utc).isoformat()
+                )
+            )
+
             db.commit()
+
+    except ValueError as exc:
+        log.warning(
+            "V662 atomic match merge rejected fixture=%s: %s",
+            match_id, exc
+        )
     except Exception as exc:
-        log.debug("enhanced match cache write failed %s/%s: %s",sport,match_id,exc)
+        log.debug(
+            "enhanced match cache write failed %s/%s: %s",
+            sport, match_id, exc
+        )
 
 def _enhanced_stage_flags(match:dict)->dict:
     league=match.get("league") or {}; name=str(league.get("name") or "").lower(); rnd=str(league.get("round") or "").lower()
@@ -9017,17 +9086,17 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
             "diagnostics":{"elapsedMs":int((time.time()-t0)*1000),"leagueId":league_hint,"sources":sources,"cleanSheetsMissing":cs_missing,"csFillScheduled":cs_scheduled,"requestedSeasons":years,"missingSeasons":[y for y in years if y not in have],"historyFetchLimitPerRequest":3}}
 
 @app.get("/player/history")
-async def player_history(player: int=Query(...,ge=1), seasons: int=Query(4,ge=1,le=4), refresh: int=Query(0,ge=0,le=1)):
-    """DB-first 3-4 season player history, preserving club/league records per season."""
-    current=_current_season(); years=[current-i for i in range(seasons)]; out=[]
+async def player_history(player: int=Query(...,ge=1), seasons: int=Query(7,ge=1,le=7), refresh: int=Query(0,ge=0,le=1)):
+    """DB-first current plus six previous seasons player history, preserving club/league records per season."""
+    current=_current_season(); years=[current-i for i in range(seasons)]; out=[]; sync_attempts=0
     for yr in years:
         prof=_sql_player_profile(player,yr) if SPORTS_DB_ENABLED else None
         useful=bool(prof and prof.get("statistics"))
-        if SPORTS_DB_ENABLED and (refresh or not useful):
-            try: await _sql_sync_player(player,yr,force=bool(refresh)); prof=_sql_player_profile(player,yr)
+        if SPORTS_DB_ENABLED and (refresh or not useful) and sync_attempts < 2 and not _v448_api_football_provider_locked():
+            try: sync_attempts += 1; await _sql_sync_player(player,yr,force=bool(refresh)); prof=_sql_player_profile(player,yr)
             except Exception as exc: log.warning("player history sync %s/%s: %s",player,yr,exc)
         if prof: out.append(_player_history_summary(prof))
-    return {"playerId":player,"defaultSeason":current,"seasons":out,"coverage":"Big-5 current + up to 4 seasons when provider data is available","source":"PostgreSQL-first historical player intelligence","updatedAt":datetime.now(timezone.utc).isoformat()}
+    return {"playerId":player,"defaultSeason":current,"seasons":out,"coverage":"Current season + up to 6 previous seasons when provider data is available","source":"PostgreSQL-first historical player intelligence","updatedAt":datetime.now(timezone.utc).isoformat()}
 
 def _extract_xg(stats_rows):
     out={"home":None,"away":None}
@@ -9630,7 +9699,7 @@ async def home_matches(league: str = Query("ALL")):
 # PRE-MATCH ODDS
 # ---------------------------------------------------------------------------
 
-async def _fetch_prematch_odds_by_dates(dates, league_ids: list[int] | None = None):
+async def _fetch_prematch_odds_by_dates(dates, league_ids: list[int] | None = None, max_requests: int | None = None):
     """Fetch pre-match odds filtered to specific league IDs.
 
     Instead of paginating ALL leagues globally (which can hit 59+ pages),
@@ -9647,10 +9716,20 @@ async def _fetch_prematch_odds_by_dates(dates, league_ids: list[int] | None = No
     if not league_ids:
         league_ids = [lid for name in SCAN_LEAGUES if (lid := LEAGUE_IDS.get(name))]
 
+    # V662: optional logical-call budget for controlled scans.
+    # The default None preserves existing behavior.
+    if max_requests is not None:
+        if type(max_requests) is not int or not 0 <= max_requests <= 10:
+            raise ValueError("max_requests must be an integer from 0 to 10")
+    request_count = 0
+
     for date in sorted(set(x for x in dates if x)):
         for lid in league_ids:
             page = 1
             while page <= MAX_ODDS_PAGES:
+                if max_requests is not None and request_count >= max_requests:
+                    return by_id
+                request_count += 1
                 data = await _afoot_get(
                     "/odds",
                     {"date": date, "league": lid, "season": season, "page": page},
@@ -9663,12 +9742,13 @@ async def _fetch_prematch_odds_by_dates(dates, league_ids: list[int] | None = No
                     norm = _normalise_odds(item.get("bookmakers", []))
                     if _valid_1x2(norm):
                         by_id[str(fixture_id)] = norm
-                        _odds_cache[f"odds:{fixture_id}"] = {
-                            "fixture_id": fixture_id,
-                            "odds": norm,
-                            "source": "API-Football",
-                            "fetchedAt": datetime.now(timezone.utc).isoformat(),
-                        }
+                        if max_requests is None:
+                            _odds_cache[f"odds:{fixture_id}"] = {
+                                "fixture_id": fixture_id,
+                                "odds": norm,
+                                "source": "API-Football",
+                                "fetchedAt": datetime.now(timezone.utc).isoformat(),
+                            }
 
                 paging = data.get("paging") or {}
                 total_pages = int(paging.get("total") or page)
@@ -9685,6 +9765,7 @@ async def fixtures_with_odds(
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     refresh: int = Query(0, ge=0, le=1),
+    max_odds_requests: int | None = None,
 ):
     # v183: this endpoint is also called directly by prediction/summary routes.
     # Strip FastAPI Query metadata defaults before they can leak into fixtures().
@@ -9693,6 +9774,18 @@ async def fixtures_with_odds(
     date_from = date_from if isinstance(date_from, str) else None
     date_to = date_to if isinstance(date_to, str) else None
     refresh = int(refresh) if isinstance(refresh, (int, bool)) else 0
+
+    # V662: bounded odds mode is opt-in and single-league/single-date.
+    bounded_odds = max_odds_requests is not None
+    if bounded_odds:
+        if max_odds_requests.__class__ is not int or not 0 <= max_odds_requests <= 10:
+            raise ValueError("Invalid bounded odds request limit")
+        if league.upper() == "ALL":
+            raise ValueError("Bounded odds scan requires one league")
+        if not date_from or date_from != date_to:
+            raise ValueError("Bounded odds scan requires one date")
+        if refresh:
+            raise ValueError("Bounded odds scan cannot force fixture refresh")
 
     # IMPORTANT: do not put a wall-clock deadline around the entire ALL-league
     # fixture loader.  It may legitimately require one API-Football request per
@@ -9749,7 +9842,7 @@ async def fixtures_with_odds(
         if raw_date:
             dates.append(raw_date[:10])
 
-    if not refresh:
+    if not refresh and not bounded_odds:
         for match in matches:
             fid = match.get("_afootFixtureId")
             cached = _odds_cache.get(f"odds:{fid}") if fid else None
@@ -9760,7 +9853,7 @@ async def fixtures_with_odds(
     # v184: cache the entire odds scan, including an EMPTY result. Without this,
     # a day with no bookmaker odds caused every dashboard poll to rescan API-Football.
     batch_key = f"prematch:{league.upper()}:{','.join(sorted(set(dates)))}"
-    cached_batch = _prematch_odds_batch_cache.get(batch_key) if not refresh else None
+    cached_batch = _prematch_odds_batch_cache.get(batch_key) if not refresh and not bounded_odds else None
     if cached_batch is not None:
         real_by_id.update(cached_batch.get("odds", {}))
 
@@ -9773,27 +9866,32 @@ async def fixtures_with_odds(
                 try:
                     lids = [_resolve_league_id(league)]
                 except Exception:
+                    if bounded_odds:
+                        raise
                     lids = [lid for name in SCAN_LEAGUES if (lid := LEAGUE_IDS.get(name))]
             # Bulk odds discovery can span multiple leagues/dates.  Do not
             # apply the 5-second single-request deadline to the whole batch.
             # _afoot_get() still enforces an individual HTTP timeout.
             fetched = await _fetch_prematch_odds_by_dates(
-                dates, league_ids=lids
+                dates, league_ids=lids,
+                max_requests=max_odds_requests,
             )
             real_by_id.update(fetched)
-            _prematch_odds_batch_cache[batch_key] = {
-                "odds": dict(fetched),
-                "fetchedAt": datetime.now(timezone.utc).isoformat(),
-                "error": None,
-            }
+            if not bounded_odds:
+                _prematch_odds_batch_cache[batch_key] = {
+                    "odds": dict(fetched),
+                    "fetchedAt": datetime.now(timezone.utc).isoformat(),
+                    "error": None,
+                }
         except Exception as exc:
             # Cache the failed/empty scan briefly under the normal 30-minute batch TTL
             # so concurrent dashboard widgets cannot create a provider request storm.
-            _prematch_odds_batch_cache[batch_key] = {
-                "odds": dict(real_by_id),
-                "fetchedAt": datetime.now(timezone.utc).isoformat(),
-                "error": str(exc),
-            }
+            if not bounded_odds:
+                _prematch_odds_batch_cache[batch_key] = {
+                    "odds": dict(real_by_id),
+                    "fetchedAt": datetime.now(timezone.utc).isoformat(),
+                    "error": str(exc),
+                }
             log.warning("Pre-match odds fetch failed or timed out: %s", exc)
 
     bookmaker_count = 0
@@ -9827,7 +9925,17 @@ async def fixtures_with_odds(
         match["bookmakerGatePassed"] = valid
 
     # v27: API-Football remains primary; OddsPAPI fills only missing 1X2.
-    oddspapi_meta = await _supplement_odds_from_oddspapi(matches, refresh=bool(refresh))
+    if bounded_odds:
+        oddspapi_meta = {
+            "checked": False,
+            "matched": 0,
+            "boundedScan": True,
+            "reason": "OddsPAPI supplementary scan disabled in bounded mode",
+        }
+    else:
+        oddspapi_meta = await _supplement_odds_from_oddspapi(
+            matches, refresh=bool(refresh)
+        )
     bookmaker_count = sum(1 for m in matches if _valid_1x2(m.get("odds", {})))
     api_football_odds_count = sum(1 for m in matches if m.get("oddsSource") == "API-Football" and _valid_1x2(m.get("odds", {})))
     oddspapi_count = sum(1 for m in matches if m.get("oddsSource") == "OddsPAPI" and _valid_1x2(m.get("odds", {})))
@@ -11450,6 +11558,58 @@ def _ksn_public_prediction_response(payload, visitor_country=""):
     return out
 
 
+def _v662_saved_prediction_candidates(snapshots, limit=100):
+    """Collect current bookmaker-qualified picks from existing snapshots only."""
+    if not isinstance(snapshots, (list, tuple)):
+        return []
+
+    candidates = []
+    seen = set()
+
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+
+        data = snapshot.get("data", snapshot)
+        if not isinstance(data, dict):
+            continue
+
+        rows = data.get("predictions")
+        if not isinstance(rows, list):
+            rows = data.get("matches")
+
+        if not isinstance(rows, list):
+            continue
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if not _ksn_active_prediction(row):
+                continue
+            if not _valid_1x2(row.get("odds") or {}):
+                continue
+            if row.get("modelOnly") or row.get("predictionEligible") is False:
+                continue
+
+            fid = (
+                row.get("_afootFixtureId")
+                or row.get("fixtureId")
+                or row.get("fixture_id")
+                or row.get("id")
+            )
+            if fid is None:
+                continue
+
+            key = str(fid)
+            if key in seen:
+                continue
+
+            seen.add(key)
+            candidates.append(dict(row))
+
+    ranked = _ksn_sort_football_rows(candidates, "")
+    return ranked[:max(0, min(int(limit), 100))]
+
 @app.get("/ai-predictions")
 async def ai_predictions(
     request: Request = None,
@@ -11459,20 +11619,136 @@ async def ai_predictions(
     type: str = Query("upcoming"),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
+    max_odds_requests: Optional[int] = None,
 ):
     # v406: shared server LKG for first-time visitors. Browser LKG remains the
     # returning-visitor first paint; this snapshot prevents an empty Prediction
     # Pool when a provider/quota request is temporarily unavailable.
+    # V662: internal-only, bounded prediction diagnostic.
+    # Public requests must not activate this path.
+    bounded_prediction = max_odds_requests is not None
+    if bounded_prediction:
+        if isinstance(request, Request):
+            raise ValueError("Bounded prediction mode is internal-only")
+        if max_odds_requests.__class__ is not int or not 0 <= max_odds_requests <= 3:
+            raise ValueError("Invalid bounded prediction request limit")
+        if not isinstance(league, str) or league.upper() == "ALL":
+            raise ValueError("Bounded prediction mode requires one league")
+        if not date_from or date_from != date_to:
+            raise ValueError("Bounded prediction mode requires one date")
+        if refresh != 0 or str(type).lower() != "upcoming":
+            raise ValueError("Bounded prediction mode requires upcoming refresh=0")
+
     pred_snap_key = f"predictions:last_good:{str(league).upper()}:{str(type).lower()}"
     pred_snap = _dashboard_snapshot_get(pred_snap_key) if "_dashboard_snapshot_get" in globals() else None
     pred_snap_data = (pred_snap or {}).get("data") if isinstance(pred_snap, dict) else None
     # v498: the public refresh=0 route is strictly snapshot-first. Do not wait
     # for fixtures/odds or spend provider quota merely to render a saved pool.
     # An explicit refresh=1 retains the original full generation path.
-    if refresh == 0 and isinstance(pred_snap_data, dict) and (pred_snap_data.get("predictions") or pred_snap_data.get("matches")):
-        return _ksn_public_prediction_response({**pred_snap_data, "fromSharedLastGood": True,
-                "cacheFirst": True, "refreshDeferred": True,
-                "cacheNotice": "Saved prediction snapshot; odds and fixture eligibility may have changed."}, _ksn_request_country(request) if isinstance(request, Request) else "")
+    if (not bounded_prediction and refresh == 0
+            and isinstance(pred_snap_data, dict)
+            and (pred_snap_data.get("predictions") or pred_snap_data.get("matches"))):
+        cached_response = _ksn_public_prediction_response(
+            {**pred_snap_data, "fromSharedLastGood": True,
+             "cacheFirst": True, "refreshDeferred": True,
+             "cacheNotice": "Saved prediction snapshot; odds and fixture eligibility may have changed."},
+            _ksn_request_country(request) if isinstance(request, Request) else ""
+        )
+        if cached_response.get("predictions"):
+            return cached_response
+        # V662: Read a bounded set of existing league snapshots, without providers.
+        saved_sources = []
+        for saved_league in SCAN_LEAGUES[:8]:
+            if not isinstance(saved_league, str):
+                continue
+            saved_key = f"predictions:last_good:{saved_league.upper()}:upcoming"
+            try:
+                saved_snapshot = _dashboard_snapshot_get(saved_key)
+                if isinstance(saved_snapshot, dict):
+                    saved_sources.append(saved_snapshot)
+            except Exception as exc:
+                log.debug("V662 saved prediction recovery read failed: %s", exc)
+
+        recovered = _v662_saved_prediction_candidates(saved_sources, limit=limit)
+        if recovered:
+            recovery_payload = {
+                **cached_response,
+                "predictions": recovered,
+                "matches": recovered,
+                "count": len(recovered),
+                "eligibleFixtures": len(recovered),
+                "modelOnlyFixtures": 0,
+                "stale": False,
+                "refreshRequired": False,
+                "refreshDeferred": True,
+                "fromLeagueSnapshots": True,
+                "cacheNotice": "Recovered eligible predictions from saved league snapshots.",
+            }
+            return _ksn_public_prediction_response(
+                recovery_payload,
+                _ksn_request_country(request) if isinstance(request, Request) else ""
+            )
+        return {
+            "predictions": [],
+            "matches": [],
+            "count": 0,
+            "eligibleFixtures": 0,
+            "modelOnlyFixtures": 0,
+            "rejectedNoBookmaker1X2": 0,
+            "cacheFirst": True,
+            "fromSharedLastGood": True,
+            "stale": True,
+            "refreshRequired": True,
+            "refreshDeferred": True,
+            "expiredPredictionsRemoved": cached_response.get("expiredPredictionsRemoved", 0),
+            "cacheNotice": "Saved predictions have expired; a controlled refresh is required.",
+        }
+    # V662: A missing snapshot must not make refresh=0 scan providers.
+    if not bounded_prediction and refresh == 0:
+        saved_sources = []
+        for saved_league in SCAN_LEAGUES[:8]:
+            if not isinstance(saved_league, str):
+                continue
+            saved_key = f"predictions:last_good:{saved_league.upper()}:upcoming"
+            try:
+                saved_snapshot = _dashboard_snapshot_get(saved_key)
+                if isinstance(saved_snapshot, dict):
+                    saved_sources.append(saved_snapshot)
+            except Exception as exc:
+                log.debug("V662 missing-snapshot recovery read failed: %s", exc)
+
+        recovered = _v662_saved_prediction_candidates(saved_sources, limit=limit)
+        if recovered:
+            recovery_payload = {
+                "predictions": recovered,
+                "matches": recovered,
+                "count": len(recovered),
+                "eligibleFixtures": len(recovered),
+                "modelOnlyFixtures": 0,
+                "cacheFirst": True,
+                "refreshRequired": False,
+                "refreshDeferred": True,
+                "fromLeagueSnapshots": True,
+                "cacheNotice": "Recovered eligible predictions from saved league snapshots.",
+            }
+            return _ksn_public_prediction_response(
+                recovery_payload,
+                _ksn_request_country(request) if isinstance(request, Request) else ""
+            )
+
+        return {
+            "predictions": [],
+            "matches": [],
+            "count": 0,
+            "eligibleFixtures": 0,
+            "modelOnlyFixtures": 0,
+            "rejectedNoBookmaker1X2": 0,
+            "cacheFirst": True,
+            "stale": True,
+            "refreshRequired": True,
+            "refreshDeferred": True,
+            "cacheNotice": "No valid saved predictions; controlled refresh required.",
+        }
     today = datetime.now().strftime("%Y-%m-%d")
     upcoming_end = (
         datetime.now() + timedelta(days=7)
@@ -11485,6 +11761,7 @@ async def ai_predictions(
             date_from=date_from or today,
             date_to=date_to or upcoming_end,
             refresh=refresh,
+            max_odds_requests=max_odds_requests,
         )
     except Exception as exc:
         # Prediction UI should remain usable when a provider/quota temporarily
@@ -11523,7 +11800,8 @@ async def ai_predictions(
             # fallback. It is not bookmaker-qualified and is never a Game of Day.
             pred_result = _prediction(match)
             try:
-                _save_prediction_to_db(match, pred_result)
+                if not bounded_prediction:
+                    _save_prediction_to_db(match, pred_result)
             except Exception as exc:
                 log.debug("Model-only prediction snapshot not stored fixture=%s: %s", match.get("_afootFixtureId") or match.get("id"), exc)
             model_only.append({**match, **pred_result, "oddsAvailable":False, "bookmakerGatePassed":False, "predictionEligible":False, "gamesOfDayEligible":False, "modelOnly":True, "predictionBasis":"available team/statistical data; no current bookmaker 1X2"})
@@ -11533,7 +11811,8 @@ async def ai_predictions(
         # Standings/form enrichment is deliberately not performed in this request because
         # it created a provider fan-out and left the homepage stuck on "Predictions loading".
         pred_result = _prediction(match)
-        _save_prediction_to_db(match, pred_result)
+        if not bounded_prediction:
+            _save_prediction_to_db(match, pred_result)
         item = {
             **match,
             **pred_result,
@@ -11609,10 +11888,10 @@ async def ai_predictions(
     payload["matches"] = display_predictions
     payload["count"] = len(display_predictions)
     if display_predictions:
-        if "_dashboard_snapshot_put" in globals():
+        if not bounded_prediction and "_dashboard_snapshot_put" in globals():
             _dashboard_snapshot_put(pred_snap_key, {"data": payload})
         return _ksn_public_prediction_response(payload, _ksn_request_country(request) if isinstance(request, Request) else "")
-    if isinstance(pred_snap_data, dict) and (pred_snap_data.get("predictions") or pred_snap_data.get("matches")):
+    if not bounded_prediction and isinstance(pred_snap_data, dict) and (pred_snap_data.get("predictions") or pred_snap_data.get("matches")):
         return _ksn_public_prediction_response({**pred_snap_data, "stale": True, "fromSharedLastGood": True,
                 "staleReason": "Current prediction scan returned no qualified fixtures"}, _ksn_request_country(request) if isinstance(request, Request) else "")
     return _ksn_public_prediction_response(payload, _ksn_request_country(request) if isinstance(request, Request) else "")
@@ -11627,14 +11906,8 @@ async def tip_of_day(request: Request):
     # Eligibility is enforced at response time, including on cached provider rows.
     # A fixture without a trustworthy future kickoff cannot be an active tip.
     def _upcoming(row):
-        if not isinstance(row, dict):
-            return False
-        status = str(row.get("status") or row.get("matchStatus") or "").casefold()
-        if status and status not in {"ns", "not started", "scheduled", "upcoming", "tbd", "time to be defined"}:
-            return False
-        kickoff = row.get("datetime") or row.get("kickoff") or row.get("date") or row.get("startTime")
-        parsed = _parse_provider_time(kickoff)
-        return parsed is not None and parsed > datetime.now(timezone.utc)
+        # V662: Match the canonical prediction freshness policy.
+        return _ksn_active_prediction(row)
 
     current=[]
     provider_error=None
@@ -12318,6 +12591,8 @@ async def best_predictions(
         reverse=True,
     )
 
+    # V662: Never publish started or expired stored predictions.
+    items = [item for item in items if _ksn_active_prediction(item)]
     return {
         "predictions": items[:limit],
         "matches": items[:limit],
@@ -16440,14 +16715,28 @@ def _v660_archive_query_rows(
         wc=(" WHERE "+" AND ".join(where)) if where else ""
         cur.execute("SELECT COUNT(*) FROM ksn_results_archive"+wc,tuple(params)); total=int(cur.fetchone()[0])
         sql=("SELECT sport,provider,provider_id,country,competition,competition_id,season,round_name,kickoff,"
-             "home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee,ksn_key "
+             "home_id,home_name,home_badge,away_id,away_name,away_badge,home_score,away_score,status,venue,referee,ksn_key,source_payload "
              "FROM ksn_results_archive"+wc+f" ORDER BY kickoff DESC LIMIT {ph} OFFSET {ph}")
         cur.execute(sql,tuple(params+[limit,offset])); raw=cur.fetchall(); rows=[]
         for r in raw:
-            v=list(r); rows.append({"sport":v[0],"source":v[1],"id":v[2],"country":v[3],"league":v[4],"leagueId":v[5],
+            v=list(r)
+            # KSN_V662_CRICKET_SCORE_OUTPUT
+            original_scores = None
+            if str(v[0]).lower() == "cricket":
+                payload = v[21]
+                if isinstance(payload, (str, bytes)):
+                    try:
+                        payload = json.loads(payload)
+                    except (ValueError, TypeError):
+                        payload = None
+                if isinstance(payload, dict):
+                    candidate = payload.get("cricketOriginalScores")
+                    if isinstance(candidate, dict):
+                        original_scores = candidate
+            rows.append({"sport":v[0],"source":v[1],"id":v[2],"country":v[3],"league":v[4],"leagueId":v[5],
               "season":v[6],"round":v[7],"date":str(v[8]),"homeId":v[9],"home":v[10],"homeLogo":v[11],
               "awayId":v[12],"away":v[13],"awayLogo":v[14],"homeScore":v[15],"awayScore":v[16],
-              "status":v[17],"venue":v[18],"referee":v[19],"archiveKey":v[20],"isFinished":True,"providerFixtureId":v[2] if str(v[0]).lower()=="football" else None})
+              "status":v[17],"venue":v[18],"referee":v[19],"archiveKey":v[20],"isFinished":True,"providerFixtureId":v[2] if str(v[0]).lower()=="football" else None,"cricketOriginalScores":original_scores})
         return total, rows
     finally:
         try:
@@ -16463,7 +16752,7 @@ async def results_search(
     q:str=Query(""), sport:str=Query("all"), country:str=Query(""), competition:str=Query(""), competition_id:Optional[int]=Query(None,ge=1),
     season:str=Query(""), team:str=Query(""), year:Optional[int]=Query(None,ge=1900,le=2200),
     date_from:str=Query(""), date_to:str=Query(""), limit:int=Query(100,ge=1,le=500),
-    offset:int=Query(0,ge=0), include_recent:bool=Query(True)
+    offset:int=Query(0,ge=0), include_recent:bool=Query(True), archive_only:bool=Query(False)
 ):
     """Canonical KSN result search.
 
@@ -16474,7 +16763,7 @@ async def results_search(
     """
     now=datetime.now(timezone.utc)
     recent_sync=False; recent_error=None; archived_recent=0
-    if include_recent:
+    if include_recent and not archive_only:
         # Only synchronise the recent provider/cache layer when the requested date range
         # can overlap it. Blank dates and ordinary text searches are allowed to overlap.
         overlap=True
@@ -16518,7 +16807,7 @@ async def results_search(
     # v457: provider history is a gap filler only. If PostgreSQL already has matching
     # rows, return immediately instead of waiting on league/team resolution. This
     # removes the 24s Bundesliga path and protects provider reserve.
-    if offset == 0 and constrained and not rows and competition_id is None:
+    if (not archive_only) and offset == 0 and constrained and not rows and competition_id is None:
         provider_rows,provider_meta=await _historical_provider_results(
             q=(q or team),sport=sport,country=country,competition=competition,season=season,year=year,
             date_from=date_from,date_to=date_to,limit=limit)
@@ -16860,6 +17149,453 @@ async def fixture_enhanced_bundle(fixture_id:int, refresh:int=Query(0,ge=0,le=1)
     return await _football_match_details_build(fixture_id)
 
 @app.get("/sports/{sport}/match/{match_id}")
+def _v662_match_data_assess(payload):
+    """Describe football match data coverage without modifying provider records."""
+    if not isinstance(payload, dict):
+        return payload
+
+    result = dict(payload)
+
+    datasets = {
+        "fixture": bool(result.get("match")),
+        "statistics": bool(result.get("statistics")),
+        "lineups": bool(result.get("teams")),
+        "events": bool(result.get("events")),
+        "players": bool(result.get("players")),
+        "standings": bool(result.get("standings")),
+    }
+
+    # A match can be final even when the provider has not supplied all datasets.
+    status = str(
+        (
+            (
+                (result.get("match") or {}).get("fixture") or {}
+            ).get("status") or {}
+        ).get("short") or ""
+    ).upper()
+
+    match_finished = bool(
+        result.get("completed")
+        or status in {"FT", "AET", "PEN"}
+    )
+
+    # These fields describe coverage, not mandatory provider availability.
+    missing = [
+        name for name, present in datasets.items()
+        if not present
+    ]
+
+    result["matchFinished"] = match_finished
+    result["dataCompleteness"] = {
+        "datasets": datasets,
+        "missing": missing,
+        "availableCount": sum(datasets.values()),
+        "totalCount": len(datasets),
+        "fullyPopulated": not missing,
+        "providerCoverageUnverified": bool(missing),
+    }
+    return result
+
+def _v662_merge_match_bundle(existing, incoming):
+    """Fill missing verified match datasets without erasing saved records."""
+    if not isinstance(existing, dict):
+        existing = {}
+    if not isinstance(incoming, dict):
+        incoming = {}
+
+    old_id = existing.get("matchId")
+    new_id = incoming.get("matchId")
+
+    if old_id is not None and new_id is not None:
+        if str(old_id) != str(new_id):
+            raise ValueError("V662_MATCH_ID_MISMATCH")
+
+    import copy as _v662_copy
+    result = _v662_copy.deepcopy(existing)
+
+    if not result.get("match") and isinstance(incoming.get("match"), dict):
+        result["match"] = _v662_copy.deepcopy(incoming["match"])
+
+    for field in ("statistics", "teams", "events", "players", "standings"):
+        old = result.get(field)
+        new = incoming.get(field)
+
+        if not old and isinstance(new, list) and new:
+            result[field] = _v662_copy.deepcopy(new)
+
+    for field in ("insights", "odds"):
+        old = result.get(field)
+        new = incoming.get(field)
+
+        if not old and isinstance(new, dict) and new:
+            result[field] = _v662_copy.deepcopy(new)
+
+    if not result.get("matchId") and incoming.get("matchId"):
+        result["matchId"] = incoming["matchId"]
+
+    result["completed"] = bool(
+        existing.get("completed") or incoming.get("completed")
+    )
+
+    return _v662_match_data_assess(result)
+
+def _v662_match_recovery_plan(
+    payload,
+    *,
+    enabled=False,
+    provider_locked=True,
+    now_epoch=None,
+    last_attempt_epoch=None,
+):
+    """Plan only; do not initiate provider calls or database writes."""
+    blocked = {
+        "eligible": False,
+        "datasets": [],
+        "maxHttpAttempts": 0,
+        "cooldownSeconds": 3600,
+    }
+
+    if not enabled:
+        return {**blocked, "reason": "disabled"}
+
+    if provider_locked:
+        return {**blocked, "reason": "provider-reserve-locked"}
+
+    if not isinstance(payload, dict):
+        return {**blocked, "reason": "invalid-record"}
+
+    assessed = _v662_match_data_assess(payload)
+
+    if not assessed.get("matchFinished"):
+        return {**blocked, "reason": "not-finished"}
+
+    fixture_id = str(assessed.get("matchId") or "")
+
+    if not fixture_id.isdecimal() or int(fixture_id) < 1:
+        return {**blocked, "reason": "invalid-fixture-id"}
+
+    if (
+        not isinstance(now_epoch, (int, float))
+        or isinstance(now_epoch, bool)
+    ):
+        return {**blocked, "reason": "missing-clock"}
+
+    if last_attempt_epoch is not None:
+        if (
+            not isinstance(last_attempt_epoch, (int, float))
+            or isinstance(last_attempt_epoch, bool)
+        ):
+            return {**blocked, "reason": "invalid-cooldown"}
+
+        elapsed = now_epoch - last_attempt_epoch
+
+        if elapsed < 3600:
+            return {**blocked, "reason": "cooldown"}
+
+    missing = assessed["dataCompleteness"]["missing"]
+
+    requested = [
+        field
+        for field in ("statistics", "players")
+        if field in missing
+    ][:2]
+
+    if not requested:
+        return {**blocked, "reason": "no-core-gaps"}
+
+    return {
+        "eligible": True,
+        "reason": "missing-core-data",
+        "fixtureId": int(fixture_id),
+        "datasets": requested,
+        "maxHttpAttempts": 4,
+        "cooldownSeconds": 3600,
+    }
+
+def _v662_match_recovery_claim(
+    fixture_id, now_epoch, cooldown_seconds=3600
+):
+    """Atomic SQLite claim; no provider calls or worker scheduling."""
+    if not SPORTS_DB_ENABLED:
+        return False
+
+    fixture = str(fixture_id)
+    if not fixture.isdecimal() or int(fixture) < 1:
+        return False
+
+    import math as _math
+
+    if (
+        not isinstance(now_epoch, (int, float))
+        or isinstance(now_epoch, bool)
+        or not isinstance(cooldown_seconds, (int, float))
+        or isinstance(cooldown_seconds, bool)
+        or not _math.isfinite(now_epoch)
+        or not _math.isfinite(cooldown_seconds)
+        or cooldown_seconds < 3600
+    ):
+        return False
+
+    db = None
+    try:
+        db = _sports_db()
+        db.execute("BEGIN IMMEDIATE")
+
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS v662_match_recovery_cooldown(
+                fixture_id TEXT PRIMARY KEY,
+                last_attempt REAL NOT NULL
+            )"""
+        )
+
+        row = db.execute(
+            "SELECT last_attempt FROM v662_match_recovery_cooldown "
+            "WHERE fixture_id=?",
+            (fixture,)
+        ).fetchone()
+
+        if row is not None:
+            if now_epoch - float(row["last_attempt"]) < cooldown_seconds:
+                db.rollback()
+                return False
+
+        db.execute(
+            """INSERT INTO v662_match_recovery_cooldown(
+                fixture_id, last_attempt
+            ) VALUES (?,?)
+            ON CONFLICT(fixture_id) DO UPDATE SET
+                last_attempt=excluded.last_attempt""",
+            (fixture, float(now_epoch))
+        )
+
+        db.commit()
+        return True
+
+    except Exception as exc:
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        log.warning(
+            "V662 recovery claim failed fixture=%s: %s",
+            fixture_id, type(exc).__name__
+        )
+        return False
+
+    finally:
+        if db is not None:
+            db.close()
+
+async def _v662_match_recovery_worker(plan):
+    """Recover selected missing datasets; never schedule automatically."""
+    result = {
+        "attempted": False,
+        "saved": False,
+        "datasetsRecovered": [],
+        "reason": "not-eligible",
+    }
+
+    if not isinstance(plan, dict) or not plan.get("eligible"):
+        return result
+
+    fixture_id = plan.get("fixtureId")
+
+    if (
+        not isinstance(fixture_id, int)
+        or isinstance(fixture_id, bool)
+        or fixture_id < 1
+    ):
+        return {**result, "reason": "invalid-fixture-id"}
+
+    if _v448_api_football_provider_locked():
+        return {**result, "reason": "provider-reserve-locked"}
+
+    # Fail closed if the caller provides a plan exceeding the approved limits.
+    datasets = plan.get("datasets")
+
+    if (
+        not isinstance(datasets, list)
+        or not datasets
+        or len(datasets) > 2
+        or len(set(datasets)) != len(datasets)
+        or any(x not in {"statistics", "players"} for x in datasets)
+        or plan.get("maxHttpAttempts") != 4
+    ):
+        return {**result, "reason": "invalid-recovery-plan"}
+
+    existing = _enhanced_match_db_get("football", fixture_id)
+    if not isinstance(existing, dict) or not existing.get("completed"):
+        return {**result, "reason": "no-verified-finished-record"}
+    if str(existing.get("matchId") or "") != str(fixture_id):
+        return {**result, "reason": "persisted-identity-mismatch"}
+    match = existing.get("match") or {}
+    teams = match.get("teams") or {}
+    status = str(((match.get("fixture") or {}).get("status") or {}).get("short") or "").upper()
+    if status not in {"FT", "AET", "PEN"} or not (teams.get("home") or {}).get("id") or not (teams.get("away") or {}).get("id"):
+        return {**result, "reason": "unverified-final-fixture"}
+
+    # The caller must first acquire the persistent recovery claim.
+    # Until endpoint integration is implemented, this function is offline-only.
+    recovered = {
+        "sport": "football",
+        "matchId": fixture_id,
+    }
+
+    budget = {"remaining": 4}
+    token = _V662_AFOOT_BUDGET.set(budget)
+
+    try:
+        for dataset in datasets:
+            if _v448_api_football_provider_locked():
+                break
+
+            if budget["remaining"] <= 0:
+                break
+
+            endpoint = (
+                "/fixtures/statistics"
+                if dataset == "statistics"
+                else "/fixtures/players"
+            )
+
+            try:
+                response = await _afoot_get(
+                    endpoint,
+                    {"fixture": fixture_id}
+                )
+            except Exception as exc:
+                log.debug(
+                    "V662 match recovery dataset=%s fixture=%s failed: %s",
+                    dataset, fixture_id, type(exc).__name__
+                )
+                continue
+
+            rows = (
+                response.get("response")
+                if isinstance(response, dict)
+                else None
+            )
+
+            valid_rows = []
+            if isinstance(rows, list):
+                expected_team_ids = {
+                    str((teams.get("home") or {}).get("id")),
+                    str((teams.get("away") or {}).get("id")),
+                }
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    team_id = str((row.get("team") or {}).get("id") or "")
+                    if team_id not in expected_team_ids:
+                        continue
+                    if dataset == "statistics":
+                        stats = row.get("statistics")
+                        useful = isinstance(stats, list) and any(
+                            isinstance(item, dict) and item.get("value") is not None
+                            for item in stats
+                        )
+                    else:
+                        players = row.get("players")
+                        useful = isinstance(players, list) and any(
+                            isinstance(player, dict)
+                            and (player.get("player") or {}).get("id")
+                            and isinstance(player.get("statistics"), list)
+                            and bool(player.get("statistics"))
+                            for player in players
+                        )
+                    if useful:
+                        valid_rows.append(row)
+            if valid_rows:
+                recovered[dataset] = valid_rows
+
+    finally:
+        _V662_AFOOT_BUDGET.reset(token)
+
+    successful = [
+        name for name in datasets
+        if recovered.get(name)
+    ]
+
+    if successful:
+        # Atomic merge preserves saved scores and other existing datasets.
+        _enhanced_match_db_put(
+            "football",
+            fixture_id,
+            recovered,
+            completed=True
+        )
+
+    return {
+        "attempted": True,
+        "saved": bool(successful),
+        "datasetsRecovered": successful,
+        "httpBudgetRemaining": budget["remaining"],
+        "reason": (
+            "datasets-recovered"
+            if successful
+            else "no-provider-data"
+        ),
+    }
+
+async def _v662_match_recovery_dispatch(
+    payload, *, enabled=False, now_epoch=None
+):
+    """Authorize, claim, then run bounded finished-match recovery.
+
+    Not connected to any request route by this function.
+    """
+    if not enabled:
+        return {
+            "attempted": False,
+            "reason": "disabled",
+        }
+
+    if not isinstance(payload, dict):
+        return {
+            "attempted": False,
+            "reason": "invalid-record",
+        }
+
+    if _v448_api_football_provider_locked():
+        return {
+            "attempted": False,
+            "reason": "provider-reserve-locked",
+        }
+
+    plan = _v662_match_recovery_plan(
+        payload,
+        enabled=True,
+        provider_locked=False,
+        now_epoch=now_epoch,
+    )
+
+    if not plan.get("eligible"):
+        return {
+            "attempted": False,
+            "reason": plan.get("reason", "not-eligible"),
+        }
+
+    fixture_id = plan["fixtureId"]
+
+    # Atomic and persistent: only the successful claimant proceeds.
+    if not _v662_match_recovery_claim(
+        fixture_id,
+        now_epoch,
+        plan["cooldownSeconds"],
+    ):
+        return {
+            "attempted": False,
+            "reason": "cooldown-or-claim-unavailable",
+        }
+
+    return await _v662_match_recovery_worker(plan)
+
+
+
+
+
+
 async def sport_match_details(sport:str,match_id:str,league:str=Query(""),refresh:int=Query(0,ge=0,le=1)):
     sport=(sport or "football").lower().strip()
     if sport=="football":
@@ -16867,15 +17603,27 @@ async def sport_match_details(sport:str,match_id:str,league:str=Query(""),refres
         if not fid:raise HTTPException(400,"Invalid fixture ID")
         persisted_enhanced=_enhanced_match_db_get("football",fid) if not refresh else None
         if isinstance(persisted_enhanced,dict) and persisted_enhanced.get("completed"):
-            return {**persisted_enhanced,"cached":True,"cacheLayer":"persistent-enhanced"}
+            assessed = _v662_match_data_assess(persisted_enhanced)
+            # V662: opt-in, nonblocking, finished-match data recovery.
+            if __import__("os").environ.get("KSN_V662_MATCH_RECOVERY_ENABLED", "0") == "1":
+                missing = assessed.get("dataCompleteness", {}).get("missing", [])
+                if any(field in missing for field in ("statistics", "players")):
+                    asyncio.create_task(
+                        _v662_match_recovery_dispatch(
+                            assessed,
+                            enabled=True,
+                            now_epoch=datetime.now(timezone.utc).timestamp(),
+                        )
+                    )
+            return {**assessed,"cached":True,"cacheLayer":"persistent-enhanced"}
         snap=_dashboard_snapshot_get(f"match:football:{fid}") if not refresh else None
         cached=(snap or {}).get("data") if isinstance(snap,dict) else None
         if isinstance(cached,dict) and cached.get("partialAvailable"):
             # One click: render last-known-good data immediately; refresh independently.
             asyncio.create_task(_football_match_details_refresh(fid))
-            return {**cached,"cached":True,"refreshing":True}
+            return {**_v662_match_data_assess(cached),"cached":True,"refreshing":True}
         try:
-            return await asyncio.wait_for(_football_match_details_build(fid),timeout=13.0)
+            return _v662_match_data_assess(await asyncio.wait_for(_football_match_details_build(fid),timeout=13.0))
         except Exception as exc:
             log.warning("football match details failed fixture=%s: %s",fid,exc)
             persisted=_match_stats_db_get("football",fid)
@@ -18187,6 +18935,127 @@ def _v434_inject_bootstrap(html_doc:str,raw_json:str)->str:
 
 # v427: keep shared first-paint snapshots warm independently of visitor traffic.
 # This runs after startup and never blocks application startup or /shared/bootstrap itself.
+import contextvars as _v662_contextvars
+_V662_AFOOT_BUDGET = _v662_contextvars.ContextVar("v662_afoot_budget", default=None)
+
+# V662 recovery is explicitly opt-in and is not scheduled by default.
+_V662_RECOVERY_LAST_ATTEMPT = 0.0
+_V662_RECOVERY_CURSOR = 0
+_V662_RECOVERY_LOCK = asyncio.Lock()
+
+async def _v662_bounded_prediction_recovery():
+    """One guarded league/date attempt; never launch an ALL-league scan."""
+    global _V662_RECOVERY_LAST_ATTEMPT, _V662_RECOVERY_CURSOR
+
+    if os.getenv("KSN_V662_PREDICTION_RECOVERY_ENABLED", "0") != "1":
+        return {"skipped": "disabled"}
+
+    if _v448_api_football_provider_locked():
+        return {"skipped": "provider_locked"}
+
+    if _V662_RECOVERY_LOCK.locked():
+        return {"skipped": "already_running"}
+
+    async with _V662_RECOVERY_LOCK:
+        now_mono = time.monotonic()
+
+        if _V662_RECOVERY_LAST_ATTEMPT and now_mono - _V662_RECOVERY_LAST_ATTEMPT < 3600:
+            return {"skipped": "cooldown"}
+
+        _V662_RECOVERY_LAST_ATTEMPT = now_mono
+
+        key = "predictions:last_good:ALL:upcoming"
+        existing = _dashboard_snapshot_get(key)
+        existing_data = (
+            existing.get("data", existing)
+            if isinstance(existing, dict) else {}
+        )
+
+        if isinstance(existing_data, dict):
+            active = [
+                row for row in (
+                    existing_data.get("predictions")
+                    or existing_data.get("matches")
+                    or []
+                )
+                if isinstance(row, dict)
+                and _ksn_active_prediction(row)
+                and _valid_1x2(row.get("odds") or {})
+                and row.get("predictionEligible")
+            ]
+            if active:
+                return {"skipped": "healthy_snapshot"}
+
+        if _v448_api_football_provider_locked():
+            return {"skipped": "provider_locked"}
+
+        # V662: Rotate one league/date combination per permitted attempt.
+        valid_leagues = [
+            name for name in SCAN_LEAGUES
+            if isinstance(name, str) and name.strip()
+        ]
+        if not valid_leagues:
+            return {"skipped": "no_configured_leagues"}
+
+        slot = _V662_RECOVERY_CURSOR % (len(valid_leagues) * 2)
+        _V662_RECOVERY_CURSOR += 1
+        league_name = valid_leagues[slot // 2]
+        recovery_date = (
+            datetime.now(timezone.utc) + timedelta(days=slot % 2)
+        ).date().isoformat()
+
+        for league_name in (league_name,):
+            # Fail closed for unknown league names.
+            try:
+                _resolve_league_id(league_name)
+            except Exception:
+                continue
+
+            budget_token = _V662_AFOOT_BUDGET.set({'remaining': 6})
+            try:
+                result = await ai_predictions(
+                    request=None,
+                    limit=100,
+                    refresh=0,
+                    league=league_name,
+                    type="upcoming",
+                    date_from=recovery_date,
+                    date_to=recovery_date,
+                    max_odds_requests=2,
+                )
+            finally:
+                _V662_AFOOT_BUDGET.reset(budget_token)
+
+            if not isinstance(result, dict):
+                continue
+
+            qualified = _v662_saved_prediction_candidates(
+                [result], limit=100
+            )
+
+            if not qualified:
+                continue
+
+            payload = {
+                "predictions": qualified,
+                "matches": qualified,
+                "count": len(qualified),
+                "eligibleFixtures": len(qualified),
+                "modelOnlyFixtures": 0,
+                "fromBoundedRecovery": True,
+                "recoveredAt": datetime.now(timezone.utc).isoformat(),
+            }
+
+            _dashboard_snapshot_put(key, {"data": payload})
+
+            return {
+                "recovered": len(qualified),
+                "league": league_name,
+                "date": recovery_date,
+            }
+
+        return {"recovered": 0}
+
 async def _v427_shared_cache_warmer():
     # Let readiness probes succeed before warming expensive provider-backed routes.
     await asyncio.sleep(25)
@@ -18238,6 +19107,14 @@ async def _v427_shared_cache_warmer():
             # 90s timeout: the old 12s cut cold feeds off before they could be stored, so visitors paid for it.
             async with httpx.AsyncClient(transport=transport,base_url="http://ksn.internal",timeout=90.0) as c:
                 await asyncio.gather(*[hit(c,u) for u in (slow+date_urls()+["/sports/videos?sport=all&limit=8&offset=0","/sports/news/bulletin?limit=5"])])
+                # V662: Recovery is opt-in and never runs for public requests.
+                if os.getenv("KSN_V662_PREDICTION_RECOVERY_ENABLED", "0") == "1":
+                    try:
+                        await _v662_bounded_prediction_recovery()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        log.warning("V662 bounded prediction recovery failed: %s", exc)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

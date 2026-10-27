@@ -13873,7 +13873,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
   finally{archiveBusy=false}
  }
 
- function setLive(m){m=m==='finished'?'finished':'live';shell();S.liveMode=m;document.body.dataset.kasiLiveView=m;document.getElementById('ksn422LiveTab')?.classList.toggle('active',m==='live');document.getElementById('ksn422FinishedTab')?.classList.toggle('active',m==='finished');const l=document.getElementById('ksn422LiveBody'),f=document.getElementById('ksn422FinishedBody');if(l)l.hidden=m!=='live';if(f)f.hidden=m!=='finished';token(m==='live'?'live.finished':'live.matches');if(S.route==='live')(m==='live'?live():finished(false));return true}
+ function setLive(m){m=m==='finished'?'finished':'live';shell();S.liveMode=m;document.body.dataset.kasiLiveView=m;document.getElementById('ksn422LiveTab')?.classList.toggle('active',m==='live');document.getElementById('ksn422FinishedTab')?.classList.toggle('active',m==='finished');const l=document.getElementById('ksn422LiveBody'),f=document.getElementById('ksn422FinishedBody');if(l)l.hidden=m!=='live';if(f)f.hidden=m!=='finished';token(m==='live'?'live.finished':'live.matches');if(S.route==='live'){if(m==='live')live();else if(typeof window.__KSN662FinishedShow==='function')window.__KSN662FinishedShow();else finished(false)}return true}
  window.ksn422Activate=activate;window.ksn422SetLiveMode=setLive;window.kasiscorePrimaryNav=(tab)=>String(tab).toLowerCase()==='admin'?false:activate(String(tab).toLowerCase());
  document.addEventListener('click',e=>{const b=e.target.closest?.('.kasiscore-primary-nav button[data-primary],.kasiscore-mobile-nav button[data-mobile]');if(!b)return;const r=b.dataset.primary||b.dataset.mobile;if(r==='admin'||!ROUTES.has(r))return;e.preventDefault();e.stopImmediatePropagation();activate(r)},true);
  document.addEventListener('click',e=>{const f=e.target.closest?.('#ksn422FinishedTab'),l=e.target.closest?.('#ksn422LiveTab');if(!f&&!l)return;e.preventDefault();e.stopImmediatePropagation();setLive(f?'finished':'live')},true);
@@ -16374,6 +16374,272 @@ window.loadMatchStatsPage=async function(id){
 
 
 
+
+
+<style id="ksn-v662-finished-archive-style">
+/* ksn662-box-sizing-fix: prevent controls overflowing narrow viewports */
+#ksn662FinishedArchive,
+#ksn662FinishedArchive *,
+#ksn662FinishedArchive *::before,
+#ksn662FinishedArchive *::after {
+ box-sizing:border-box;
+}
+#ksn662FinishedArchive {
+ min-width:0;
+ max-width:100%;
+}
+#ksn662FinishedArchive .ksn662-shell,
+#ksn662FinishedArchive .ksn662-filters,
+#ksn662FinishedArchive .ksn662-card {
+ min-width:0;
+ max-width:100%;
+}
+#ksn662FinishedArchive .ksn662-field input,
+#ksn662FinishedArchive .ksn662-field select {
+ min-width:0;
+ max-width:100%;
+}
+
+#ksn662FinishedArchive{display:none;width:100%;min-width:0}
+body[data-kasi-live-view="finished"] #ks307FinishedGrid,
+body[data-kasi-live-view="finished"] #ks307FinishedMore{display:none!important}
+body[data-kasi-live-view="finished"] #ksn662FinishedArchive{display:block!important}
+.ksn662-shell{background:#0b111b;color:#f1f5f9;border:1px solid #263345;border-radius:16px;padding:16px;margin:12px 0}
+.ksn662-title{font-size:20px;font-weight:800;margin:0 0 5px}
+.ksn662-note{font-size:12px;color:#aab8ca;margin:0 0 16px}
+.ksn662-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.ksn662-field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:#cbd5e1;min-width:0}
+.ksn662-field input,.ksn662-field select{background:#111d2c;border:1px solid #334155;border-radius:9px;padding:10px;min-width:0;width:100%;color:#f8fafc;font:inherit}
+.ksn662-actions{display:flex;flex-wrap:wrap;gap:9px;margin:12px 0}
+.ksn662-actions button{background:#172a40;border:1px solid #425873;color:#fff;padding:10px 16px;border-radius:9px;cursor:pointer}
+.ksn662-actions button:disabled{opacity:.45;cursor:default}
+.ksn662-count{font-size:12px;color:#aab8ca;margin-bottom:12px}
+.ksn662-list{display:grid;gap:9px}
+.ksn662-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid #29394d;border-radius:12px;background:#101c2b;padding:14px;min-width:0}
+.ksn662-meta{font-size:11px;color:#9db0c7;margin-bottom:8px;overflow-wrap:anywhere}
+.ksn662-teams{display:grid;gap:7px}
+.ksn662-team{font-size:14px;font-weight:650;overflow-wrap:anywhere}
+.ksn662-score{font-size:22px;font-weight:800;white-space:nowrap;font-variant-numeric:tabular-nums}
+.ksn662-stats{grid-column:1/-1;display:flex;justify-content:flex-end}
+.ksn662-stats a{color:#dbeafe;border:1px solid #425873;border-radius:8px;padding:8px 13px;text-decoration:none;font-size:12px}
+.ksn662-empty{padding:22px;text-align:center;color:#aab8ca}
+@media(max-width:780px){.ksn662-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:460px){.ksn662-shell{padding:11px}.ksn662-filters{grid-template-columns:1fr}.ksn662-card{gap:8px;padding:11px}.ksn662-score{font-size:19px}}
+
+/* ksn662-v422-integration: V422 owns navigation, V662 archive */
+body[data-kasi-live-view="finished"] #ksn422FinishedSearch,
+body[data-kasi-live-view="finished"] #ksn422FinishedResults,
+body[data-kasi-live-view="finished"] #ksn422Paging {
+ display:none!important;
+}
+#ksn422FinishedBody #ksn662FinishedArchive {
+ width:100%;max-width:100%;min-width:0;
+}
+</style>
+<script id="ksn-v662-finished-archive-ui">
+(function(){
+'use strict';
+if(window.__KSN662_FINISHED_ARCHIVE__)return;
+window.__KSN662_FINISHED_ARCHIVE__=true;
+
+const PAGE=40;
+const E=x=>String(x??'').replace(/[&<>"']/g,c=>({
+ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[c]));
+const S={rows:[],total:0,offset:0,loading:false,serial:0};
+let root=null;
+
+function text(x){
+ if(typeof x==='string'||typeof x==='number')return String(x);
+ return typeof x?.name==='string'?x.name:'';
+}
+function score(x,side){
+ const candidates=[
+  x?.goals?.[side],
+  x?.score?.[side],
+  x?.scores?.[side],
+  x?.score?.fulltime?.[side],
+  x?.scores?.fulltime?.[side],
+  x?.result?.[side],
+  x?.[side+'Score'],
+  x?.[side+'_score']
+ ];
+ for(const n of candidates){
+  if(typeof n==='number'&&Number.isInteger(n)&&n>=0)return n;
+  if(typeof n==='string'&&/^\d+$/.test(n.trim()))return Number(n);
+ }
+ return null;
+}
+function cricketScore(x,side){
+ // Never invent wickets: prefer verified original score data.
+ const direct=x?.[side+'Score'];
+ const valid=/^[0-9]+(?:\/(?:10|[0-9]))?$/;
+ const base=score(x,side);
+ const saved=x?.cricketOriginalScores?.[side];
+ const raw=typeof saved?.raw==='string'?saved.raw.trim():'';
+
+ if(raw&&valid.test(raw)&&base!==null&&
+    Number(raw.split('/')[0])===base){
+  const wickets=raw.split('/')[1];
+  if(wickets===undefined||Number(wickets)<=10)
+   return raw;
+ }
+
+ if(typeof direct==='string'&&valid.test(direct.trim()))
+  return direct.trim();
+
+ return base;
+}
+function normal(x){
+ const sport=String(x?.sport||'football').toLowerCase();
+ const home=text(x?.home||x?.homeTeam||x?.teams?.home);
+ const away=text(x?.away||x?.awayTeam||x?.teams?.away);
+ const league=text(x?.competition||x?.league);
+ const country=text(x?.country);
+ const date=String(x?.date||x?.datetime||x?.kickoff||x?.fixture?.date||'');
+ return {sport,home,away,league,country,date,h:sport==='cricket'?cricketScore(x,'home'):score(x,'home'),a:sport==='cricket'?cricketScore(x,'away'):score(x,'away')};
+}
+function href(x,m){
+ try{
+  if(typeof window.ksnMatchStatsHref!=='function')return '';
+  const value=window.ksnMatchStatsHref(x,{
+   sport:m.sport,finished:true,home:m.home,away:m.away,
+   date:m.date,competition:m.league
+  });
+  return typeof value==='string'&&value.startsWith('/')&&!value.startsWith('//')?value:'';
+ }catch(_){return ''}
+}
+function renderRow(x){
+ const m=normal(x);
+ if(!m.home||!m.away||m.h===null||m.a===null)return '';
+ const url=href(x,m);
+ const when=m.date?m.date.slice(0,16).replace('T',' '):'Date unavailable';
+ const head=[m.sport.toUpperCase(),m.country,m.league,when].filter(Boolean).join(' ? ');
+ return `<article class="ksn662-card">
+  <div><div class="ksn662-meta">${E(head)}</div>
+   <div class="ksn662-teams"><div class="ksn662-team">${E(m.home)}</div>
+   <div class="ksn662-team">${E(m.away)}</div></div>
+  </div><div class="ksn662-score">${m.h}?${m.a}</div>
+  <div class="ksn662-stats">${url?`<a href="${E(url)}">Match details</a>`:
+  '<span class="ksn662-meta">Match details unavailable</span>'}</div>
+ </article>`;
+}
+function mount(){
+ if(root&&root.isConnected)return root;
+ const old=document.getElementById('ksn422FinishedBody');
+ if(!old||!old.isConnected)return null;
+ root=document.createElement('section');
+ root.id='ksn662FinishedArchive';
+ root.setAttribute('aria-label','Finished Games archive');
+ root.innerHTML=`<div class="ksn662-shell">
+  <h2 class="ksn662-title">Finished Games</h2>
+  <p class="ksn662-note">Confirmed results from the permanent archive</p>
+  <div class="ksn662-filters">
+   <label class="ksn662-field">Sport<select data-k="sport">
+    <option value="all">All sports</option><option value="football">Football</option>
+    <option value="rugby">Rugby</option><option value="cricket">Cricket</option></select></label>
+   <label class="ksn662-field">Search teams / matches<input data-k="q" placeholder="Search results"></label>
+   <label class="ksn662-field">Competition<input data-k="competition" placeholder="Competition"></label>
+   <label class="ksn662-field">Country<input data-k="country" placeholder="Country"></label>
+   <label class="ksn662-field">Season<input data-k="season" placeholder="e.g. 2025"></label>
+   <label class="ksn662-field">From date<input data-k="date_from" type="date"></label>
+   <label class="ksn662-field">To date<input data-k="date_to" type="date"></label>
+  </div>
+  <div class="ksn662-actions"><button data-action="search">Search results</button>
+   <button data-action="reset">Reset filters</button></div>
+  <div class="ksn662-count" aria-live="polite"></div>
+  <div class="ksn662-list"></div>
+  <div class="ksn662-actions"><button data-action="more" hidden>Load more</button></div>
+ </div>`;
+ old.appendChild(root);
+ root.addEventListener('click',e=>{
+  const b=e.target.closest('button[data-action]');
+  if(!b)return;
+  const a=b.dataset.action;
+  if(a==='search')load(false);
+  if(a==='more')load(true);
+  if(a==='reset'){
+   root.querySelectorAll('[data-k]').forEach(el=>el.value=el.dataset.k==='sport'?'all':'');
+   load(false);
+  }
+ });
+ root.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&e.target.matches('input[data-k]')){e.preventDefault();load(false)}
+ });
+ return root;
+}
+function active(){return document.body.dataset.kasiLiveView==='finished'}
+function draw(note=''){
+ if(!mount())return;
+ const list=root.querySelector('.ksn662-list');
+ const count=root.querySelector('.ksn662-count');
+ const more=root.querySelector('[data-action="more"]');
+ const cards=S.rows.map(renderRow).filter(Boolean);
+ list.innerHTML=cards.join('')||
+  `<div class="ksn662-empty">${E(note||'No confirmed results matched your filters.')}</div>`;
+ count.textContent=`${cards.length} displayed${S.total?` ? ${S.total} archive matches`:''}${S.loading?' ? Loading?':''}`;
+ more.hidden=S.loading||S.rows.length>=S.total||S.total<=0;
+}
+async function load(append){
+ if(!mount())return;
+ const serial=++S.serial;
+ const params=new URLSearchParams();
+ root.querySelectorAll('[data-k]').forEach(el=>{
+  const value=el.value.trim();
+  if(value&&(el.dataset.k!=='sport'||value!=='all'))params.set(el.dataset.k,value);
+ });
+ params.set('limit',String(PAGE));
+ params.set('offset',String(append?S.rows.length:0));
+ params.set('include_recent','false');params.set('archive_only','true');
+ S.loading=true;
+ draw(append?'Loading more?':'Searching the permanent archive?');
+ try{
+  const response=await fetch('/results/search?'+params.toString(),{
+   headers:{Accept:'application/json'},cache:'no-store'
+  });
+  if(!response.ok)throw new Error('Archive HTTP '+response.status);
+  const data=await response.json();
+  if(serial!==S.serial)return;
+  const rows=Array.isArray(data?.matches)?data.matches:[];
+  S.rows=append?S.rows.concat(rows):rows;
+  const total=Number(data?.total);
+  S.total=Number.isFinite(total)&&total>=0?total:S.rows.length;
+  S.offset=S.rows.length;
+  S.loading=false;
+  draw();
+ }catch(_){
+  if(serial!==S.serial)return;
+  S.loading=false;
+  draw(S.rows.length?'':'Archive temporarily unavailable. Please retry.');
+ }
+}
+function show(){
+ if(!mount())return false;
+ document.body.dataset.kasiLiveView='finished';
+ document.getElementById('ks307LiveBtn')?.classList.remove('active');
+ document.getElementById('ks307FinishedBtn')?.classList.add('active');
+ const live=document.getElementById('liveMatchGrid');
+ if(live)live.style.display='none';
+ if(!S.rows.length&&!S.loading)load(false);else draw();
+ return false;
+}
+window.__KSN662FinishedShow=show;
+const previous=window.ks307SetLiveMode;
+window.ks307SetLiveMode=function(mode){
+ if(mode==='finished')return typeof window.ksn422SetLiveMode==='function'?window.ksn422SetLiveMode('finished'):show();
+ if(mode==='live'&&typeof window.ksn422SetLiveMode==='function')return window.ksn422SetLiveMode('live');
+const answer=typeof previous==='function'?previous.apply(this,arguments):undefined;
+ document.body.dataset.kasiLiveView='live';
+ document.getElementById('ks307LiveBtn')?.classList.add('active');
+ document.getElementById('ks307FinishedBtn')?.classList.remove('active');
+ return answer;
+};
+function wire(){mount();}
+if(document.readyState==='loading')
+ document.addEventListener('DOMContentLoaded',wire,{once:true});
+else wire();
+})();
+</script>
 
 </body>
 </html>
