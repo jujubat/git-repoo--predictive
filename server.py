@@ -18997,11 +18997,11 @@ async def _v662_bounded_prediction_recovery():
         if not valid_leagues:
             return {"skipped": "no_configured_leagues"}
 
-        slot = _V662_RECOVERY_CURSOR % (len(valid_leagues) * 2)
+        slot = _V662_RECOVERY_CURSOR % (len(valid_leagues) * 7)
         _V662_RECOVERY_CURSOR += 1
-        league_name = valid_leagues[slot // 2]
+        league_name = valid_leagues[slot % len(valid_leagues)]
         recovery_date = (
-            datetime.now(timezone.utc) + timedelta(days=slot % 2)
+            datetime.now(timezone.utc) + timedelta(days=slot // len(valid_leagues))
         ).date().isoformat()
 
         for league_name in (league_name,):
