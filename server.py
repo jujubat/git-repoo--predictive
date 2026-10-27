@@ -5159,6 +5159,50 @@ async def ksn_staging_seo_test_gate(request: Request, call_next):
                 headers={"X-Robots-Tag": "noindex, nofollow, noarchive",
                          "Cache-Control": "no-store"},
             )
+        # V662 TEMPORARY: staging-only authenticated archive acceptance.
+        # Remove before production promotion.
+        if path == "/results/search":
+            import secrets
+            staging_identity = " ".join(
+                os.getenv(k, "") for k in
+                ("RENDER_SERVICE_NAME", "RENDER_EXTERNAL_URL", "KSN_ENV")
+            ).lower()
+            configured_secret = os.getenv("KSN_STAGING_TEST_TOKEN", "")
+            supplied_secret = request.headers.get("X-KSN-Staging-Token", "")
+            params = request.query_params
+            required = {
+                "limit": "3",
+                "offset": "0",
+                "archive_only": "true",
+                "include_recent": "false",
+            }
+            valid_query = (
+                set(params.keys()) == set(required)
+                and len(list(params.multi_items())) == len(required)
+                and all(params.get(k) == v for k, v in required.items())
+            )
+            authorized = (
+                request.method == "GET"
+                and "staging" in staging_identity
+                and os.getenv("KSN_STAGING_P0_READ_ONLY", "0") == "1"
+                and len(configured_secret) >= 32
+                and secrets.compare_digest(supplied_secret, configured_secret)
+                and valid_query
+            )
+            if authorized:
+                response = await call_next(request)
+                response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+                response.headers["Cache-Control"] = "no-store"
+                return response
+            return Response(
+                content="Staging SEO test mode: route disabled",
+                status_code=503,
+                media_type="text/plain",
+                headers={
+                    "X-Robots-Tag": "noindex, nofollow, noarchive",
+                    "Cache-Control": "no-store",
+                },
+            )
         allowed = path in {
             "/health", "/robots.txt",
             "/sitemap.xml", "/seo/sitemap.xml",
