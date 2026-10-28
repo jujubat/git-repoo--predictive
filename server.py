@@ -29161,6 +29161,20 @@ async def ksn_v663_staging_football_refresh(request: Request):
             detail="Staging football refresh already running",
         )
 
+    async def _ksn_v663_staging_provider_get(
+        path, params, *, force_fresh=False, priority="general"
+    ):
+        if path != "/fixtures":
+            raise PermissionError("V663 staging fixtures only")
+        if _V662_AFOOT_BUDGET.get() is None:
+            raise PermissionError("V663 provider budget required")
+        return await _afoot_get_uncollapsed(
+            path,
+            params,
+            force_fresh=True,
+            priority=priority,
+        )
+
     async with _KSN_V663_REFRESH_LOCK:
         now = _ksn_v663_time.monotonic()
 
@@ -29184,7 +29198,7 @@ async def ksn_v663_staging_football_refresh(request: Request):
             football_only=football_only,
             target_date=parsed_date,
             cache=_fixtures_cache,
-            provider_get=_afoot_get,
+            provider_get=_ksn_v663_staging_provider_get,
             normalize_fixture=_normalise_fixture,
             provider_budget_context=_V662_AFOOT_BUDGET,
         )
