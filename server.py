@@ -5558,6 +5558,13 @@ async def ksn_v663_staging_football_only_gate(request: Request, call_next):
 
 @app.middleware("http")
 async def ksn_staging_seo_test_gate(request: Request, call_next):
+    if (
+        request.url.path == "/__ksn_v663/staging/football/refresh"
+        and request.method == "POST"
+        and os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+        and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+    ):
+        return await call_next(request)
     if _ksn_staging_seo_test_mode():
         path = request.url.path
         # V657 P0: opt-in, staging-only, authenticated archive smoke test.
@@ -29093,3 +29100,104 @@ def ksn_v661_big5_snapshot_audit(
         if conn is not None:
             conn.rollback()
             conn.close()
+
+
+# V663 STEP 326: Opt-in staging-only football refresh.
+# No background polling; provider budget is limited to one HTTP attempt.
+
+# V663 STEP 327: Per-process staging refresh safety state.
+# No scheduler, provider calls or database access at import time.
+import asyncio as _ksn_v663_asyncio
+import time as _ksn_v663_time
+
+_KSN_V663_REFRESH_LOCK = _ksn_v663_asyncio.Lock()
+_KSN_V663_REFRESH_LAST_ATTEMPT = 0.0
+_KSN_V663_REFRESH_COOLDOWN_SECONDS = 900
+
+@app.post("/__ksn_v663/staging/football/refresh")
+async def ksn_v663_staging_football_refresh(request: Request):
+    import os as _os
+    from datetime import date as _date
+    from ksn_v663_staging_football_refresh import (
+        execute_authenticated_refresh,
+    )
+
+    environment = _os.getenv("KSN_ENVIRONMENT", "").strip().lower()
+    football_only = _os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0")
+
+    if environment != "staging" or football_only != "1":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    configured_secret = _os.getenv("KSN_V663_STAGING_REFRESH_SECRET", "")
+    supplied_secret = request.headers.get("X-KSN-Staging-Refresh-Secret", "")
+
+    if not isinstance(configured_secret, str) or len(configured_secret) < 32:
+        raise HTTPException(status_code=503, detail="Refresh not configured")
+
+    import hmac as _hmac
+
+    if not _hmac.compare_digest(
+        supplied_secret.encode("utf-8"),
+        configured_secret.encode("utf-8"),
+    ):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    target = request.query_params.get("date", "")
+    try:
+        parsed_date = _date.fromisoformat(target)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UTC date")
+
+    if not target or target != parsed_date.isoformat():
+        raise HTTPException(status_code=400, detail="Explicit UTC date required")
+
+    global _KSN_V663_REFRESH_LAST_ATTEMPT
+    global _KSN_V663_FOOTBALL_LIVE_CACHE
+    global _KSN_V663_FOOTBALL_LIVE_UPDATED
+
+    if _KSN_V663_REFRESH_LOCK.locked():
+        raise HTTPException(
+            status_code=429,
+            detail="Staging football refresh already running",
+        )
+
+    async with _KSN_V663_REFRESH_LOCK:
+        now = _ksn_v663_time.monotonic()
+
+        if (
+            _KSN_V663_REFRESH_LAST_ATTEMPT > 0
+            and now - _KSN_V663_REFRESH_LAST_ATTEMPT
+            < _KSN_V663_REFRESH_COOLDOWN_SECONDS
+        ):
+            raise HTTPException(
+                status_code=429,
+                detail="Staging football refresh cooldown active",
+            )
+
+        # Reserve cooldown before any provider work, including failures.
+        _KSN_V663_REFRESH_LAST_ATTEMPT = now
+
+        result = await execute_authenticated_refresh(
+            supplied_secret=supplied_secret,
+            configured_secret=configured_secret,
+            environment=environment,
+            football_only=football_only,
+            target_date=parsed_date,
+            cache=_fixtures_cache,
+            provider_get=_afoot_get,
+            normalize_fixture=_normalise_fixture,
+            provider_budget_context=_V662_AFOOT_BUDGET,
+        )
+
+    if result.get("published") is True:
+        _KSN_V663_FOOTBALL_LIVE_CACHE = None
+        _KSN_V663_FOOTBALL_LIVE_UPDATED = 0.0
+
+    return {
+        "status": "ok",
+        "sport": "football",
+        "date": target,
+        "accepted": result.get("accepted", 0),
+        "published": result.get("published", False),
+        "stagingOnly": True,
+    }
