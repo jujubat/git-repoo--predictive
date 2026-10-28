@@ -6375,6 +6375,18 @@ async def fixtures(
         and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
     ):
         from ksn_v663_staging_football_consumer import read_verified_fixtures
+        from ksn_v663_verified_snapshot_store import (
+            CACHE_KEY as _v663_snapshot_key,
+            restore_snapshot as _v663_restore_snapshot,
+        )
+
+        _v663_store_path = BASE_DIR / "ksn_v663_staging_verified.sqlite"
+
+        if _fixtures_cache.get(_v663_snapshot_key) is None:
+            _v663_restored = _v663_restore_snapshot(_v663_store_path)
+            if _v663_restored is not None:
+                _fixtures_cache[_v663_snapshot_key] = _v663_restored
+
         return read_verified_fixtures(
             _fixtures_cache,
             league=league,
@@ -29244,6 +29256,27 @@ async def ksn_v663_staging_football_refresh(request: Request):
         )
 
     if result.get("published") is True:
+        from ksn_v663_verified_snapshot_store import (
+            CACHE_KEY as _v663_snapshot_key,
+            publish_snapshot as _v663_publish_snapshot,
+        )
+
+        _v663_published = _fixtures_cache.get(_v663_snapshot_key)
+
+        _v663_snapshot_saved = False
+        if _v663_published is not None:
+            try:
+                _v663_publish_snapshot(
+                    BASE_DIR / "ksn_v663_staging_verified.sqlite",
+                    _v663_published,
+                )
+                _v663_snapshot_saved = True
+            except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+                log.warning(
+                    "V663 staging snapshot persistence failed (%s)",
+                    type(exc).__name__,
+                )
+
         _KSN_V663_FOOTBALL_LIVE_CACHE = None
         _KSN_V663_FOOTBALL_LIVE_UPDATED = 0.0
 
@@ -29253,5 +29286,10 @@ async def ksn_v663_staging_football_refresh(request: Request):
         "date": target,
         "accepted": result.get("accepted", 0),
         "published": result.get("published", False),
+        "snapshotSaved": (
+            _v663_snapshot_saved
+            if result.get("published") is True
+            else False
+        ),
         "stagingOnly": True,
     }
