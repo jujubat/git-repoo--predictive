@@ -5567,6 +5567,15 @@ async def ksn_v663_staging_football_only_gate(request: Request, call_next):
 
 @app.middleware("http")
 async def ksn_staging_seo_test_gate(request: Request, call_next):
+    # V663 Step 400E: permit provider-free fixture reads in football-only staging.
+    if (
+        request.url.path == "/fixtures"
+        and request.method == "GET"
+        and os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+        and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+        and os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1"
+    ):
+        return await call_next(request)
     if (
         request.url.path == "/__ksn_v663/staging/football/refresh"
         and request.method == "POST"
@@ -6359,6 +6368,23 @@ async def fixtures(
             date_from = date_from or (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
             date_to = date_to or date_from
     type = type.strip().lower()
+
+    # V663 Step 400C: provider-free staging consumer.
+    if (
+        os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+        and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+    ):
+        from ksn_v663_staging_football_consumer import read_verified_fixtures
+        return read_verified_fixtures(
+            _fixtures_cache,
+            league=league,
+            fixture_type=type,
+            date_from=date_from,
+            date_to=date_to,
+            today=datetime.now().date(),
+            resolve_league_id=_resolve_league_id,
+        )
+
 
     bucket = (
         datetime.now().strftime("%Y-%m-%d-%H")
