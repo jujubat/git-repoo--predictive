@@ -1668,13 +1668,22 @@ def _api_football_budget_guard(path: str, priority: str = "general"):
     explicitly provided by trusted internal call sites.
     """
     if os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1":
-        raise HTTPException(
-            503,
-            detail={
-                "code": "STAGING_SEO_TEST_PROVIDER_DISABLED",
-                "message": "API-Football disabled during staging SEO tests.",
-            },
+        staging_authorized = (
+            os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+            and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+            and path == "/fixtures"
+            and _KSN_V663_PROVIDER_AUTHORIZED.get() is True
+            and isinstance(_V662_AFOOT_BUDGET.get(), dict)
+            and _V662_AFOOT_BUDGET.get().get("remaining") == 1
         )
+        if not staging_authorized:
+            raise HTTPException(
+                503,
+                detail={
+                    "code": "STAGING_SEO_TEST_PROVIDER_DISABLED",
+                    "message": "API-Football disabled during staging SEO tests.",
+                },
+            )
 
     _reset_api_football_usage_if_new_day()
 
@@ -20426,6 +20435,7 @@ def _v434_inject_bootstrap(html_doc:str,raw_json:str)->str:
 # This runs after startup and never blocks application startup or /shared/bootstrap itself.
 import contextvars as _v662_contextvars
 _V662_AFOOT_BUDGET = _v662_contextvars.ContextVar("v662_afoot_budget", default=None)
+_KSN_V663_PROVIDER_AUTHORIZED = _v662_contextvars.ContextVar("ksn_v663_provider_authorized", default=False)
 
 # V662 recovery is explicitly opt-in and is not scheduled by default.
 _V662_RECOVERY_LAST_ATTEMPT = 0.0
@@ -29168,12 +29178,16 @@ async def ksn_v663_staging_football_refresh(request: Request):
             raise PermissionError("V663 staging fixtures only")
         if _V662_AFOOT_BUDGET.get() is None:
             raise PermissionError("V663 provider budget required")
-        return await _afoot_get_uncollapsed(
-            path,
-            params,
-            force_fresh=True,
-            priority=priority,
-        )
+        token = _KSN_V663_PROVIDER_AUTHORIZED.set(True)
+        try:
+            return await _afoot_get_uncollapsed(
+                path,
+                params,
+                force_fresh=True,
+                priority=priority,
+            )
+        finally:
+            _KSN_V663_PROVIDER_AUTHORIZED.reset(token)
 
     async with _KSN_V663_REFRESH_LOCK:
         now = _ksn_v663_time.monotonic()
