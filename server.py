@@ -103,6 +103,15 @@ PORT = int(os.getenv("PORT", "8000"))
 
 AUTH_DB = Path(os.getenv("AUTH_DB_PATH", str(BASE_DIR / "kasiscore_users.db")))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+# V663 STEP 229: central PostgreSQL fail-closed protection.
+# Football-only staging must not inherit DATABASE_URL.
+if (
+    os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+    and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+):
+    DATABASE_URL = ""
+
 AUTH_SECRET = os.getenv("AUTH_SECRET", "")
 if not AUTH_SECRET:
     AUTH_SECRET = secrets.token_hex(32)
@@ -820,7 +829,32 @@ _oddspapi_ws_state = {
 # ---------------------------------------------------------------------------
 APICACHE_DB = Path(os.getenv("APICACHE_DB", str(BASE_DIR / "api_cache.sqlite3")))
 
+# V663 STEP 238: isolate persistent football API cache in staging.
+if (
+    os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+    and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+):
+    _ksn238_cache_path = (
+        BASE_DIR / "data" / "v663_staging_isolated" / "api_cache.sqlite3"
+    ).resolve()
+    _ksn238_configured_cache = Path(
+        os.getenv(
+            "APICACHE_DB",
+            str(BASE_DIR / "api_cache.sqlite3")
+        )
+    ).resolve()
+    if _ksn238_cache_path == _ksn238_configured_cache:
+        raise RuntimeError(
+            "Staging API cache conflicts with configured database"
+        )
+    APICACHE_DB = _ksn238_cache_path
+
+
 def _apicache_db():
+    # V663 Step 240: prepare only the isolated staging cache directory.
+    if _ksn_v663_staging_sqlite_enabled():
+        APICACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+
     conn = sqlite3.connect(str(APICACHE_DB))
     conn.row_factory = sqlite3.Row
     conn.execute("""
@@ -1027,8 +1061,8 @@ def _persistent_cache_purge_expired():
 _team_profile_page_cache = TTLCache(maxsize=500, ttl=21600)
 _rate_bucket = []
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "90"))  # 90 req/min default; 0 to disable
-KASISCORE_DAILY_BUDGET = int(os.getenv("KASISCORE_DAILY_BUDGET", "6500"))
-KASISCORE_PROVIDER_RESERVE = int(os.getenv("KASISCORE_PROVIDER_RESERVE", "1000"))
+KASISCORE_DAILY_BUDGET = int(os.getenv("KASISCORE_DAILY_BUDGET", "75000"))
+KASISCORE_PROVIDER_RESERVE = int(os.getenv("KASISCORE_PROVIDER_RESERVE", "10000"))
 
 _quota_state = {
     "dailyLimit": None,
@@ -1078,7 +1112,7 @@ _KSN652_TEAM_MISS_PER_MINUTE = max(
 _KSN652_SCHEMA_READY = False
 
 
-def _ksn652_ledger_reserve_sync(path: str) -> None:
+def _ksn652_ledger_reserve_sync(path: str, priority: str = "general") -> None:
     global _KSN652_SCHEMA_READY
 
     if not DATABASE_URL or psycopg2 is None:
@@ -1087,14 +1121,12 @@ def _ksn652_ledger_reserve_sync(path: str) -> None:
         )
 
     utc_now = datetime.now(timezone.utc)
-    daily_cap = max(0, KASISCORE_DAILY_BUDGET)
-    provider_limit = _quota_state.get("dailyLimit")
-
-    if isinstance(provider_limit, int) and provider_limit > 0:
-        daily_cap = min(
-            daily_cap,
-            max(0, provider_limit - KASISCORE_PROVIDER_RESERVE)
-        )
+    decision = _ksn_v663_quota_decision(
+        calls_today=0,
+        priority=priority,
+        provider_limit=_quota_state.get("dailyLimit"),
+    )
+    daily_cap = decision["cap"]
 
     if daily_cap == 0:
         raise HTTPException(
@@ -1212,10 +1244,10 @@ def _ksn652_ledger_reserve_sync(path: str) -> None:
             conn.close()
 
 
-async def _ksn652_ledger_reserve(path: str) -> None:
+async def _ksn652_ledger_reserve(path: str, priority: str = "general") -> None:
     if _KSN652_LEDGER_ENABLED:
         await asyncio.to_thread(
-            _ksn652_ledger_reserve_sync, path
+            _ksn652_ledger_reserve_sync, path, priority
         )
 
 
@@ -1553,44 +1585,123 @@ async def _ksn655_retention_scheduler_loop():
                 await asyncio.sleep(3600)
 
 
+
+# V663: Priority-aware API-Football daily budget policy.
+# This pure function performs no provider, database, or network operations.
+# Unmarked calls are general. Critical status must be explicitly authorized.
+def _ksn_v663_quota_decision(
+    calls_today: int,
+    priority: str = "general",
+    provider_remaining=None,
+    provider_limit=None,
+    daily_budget=None,
+    critical_reserve=None,
+) -> dict:
+    budget = (
+        KASISCORE_DAILY_BUDGET
+        if daily_budget is None else int(daily_budget)
+    )
+    reserve = (
+        KASISCORE_PROVIDER_RESERVE
+        if critical_reserve is None else int(critical_reserve)
+    )
+
+    if budget <= 0 or reserve < 0 or reserve > budget:
+        raise ValueError("INVALID_V663_QUOTA_CONFIGURATION")
+
+    used = max(0, int(calls_today))
+    tier = "critical" if priority == "critical" else "general"
+    general_cap = budget - reserve
+    cap = budget if tier == "critical" else general_cap
+
+    if isinstance(provider_limit, int) and provider_limit > 0:
+        provider_cap = (
+            provider_limit
+            if tier == "critical"
+            else max(0, provider_limit - reserve)
+        )
+        cap = min(cap, provider_cap)
+
+    if used >= cap:
+        return {
+            "allowed": False,
+            "reason": "LOCAL_DAILY_BUDGET",
+            "priority": tier,
+            "used": used,
+            "cap": cap,
+        }
+
+    if isinstance(provider_remaining, int):
+        required_remaining = reserve if tier == "general" else 0
+
+        if provider_remaining <= required_remaining:
+            return {
+                "allowed": False,
+                "reason": "PROVIDER_REMAINING_PROTECTED",
+                "priority": tier,
+                "used": used,
+                "cap": cap,
+            }
+
+    return {
+        "allowed": True,
+        "reason": "WITHIN_BUDGET",
+        "priority": tier,
+        "used": used,
+        "cap": cap,
+    }
+
+
 def _v448_api_football_provider_locked() -> bool:
     """True when background/non-essential API-Football work must use cache only."""
     _reset_api_football_usage_if_new_day()
     remaining = _quota_state.get("dailyRemaining")
     if isinstance(remaining, int) and remaining <= KASISCORE_PROVIDER_RESERVE:
         return True
-    return int(_api_football_usage.get("callsToday", 0)) >= KASISCORE_DAILY_BUDGET
+    return int(_api_football_usage.get("callsToday", 0)) >= (KASISCORE_DAILY_BUDGET - KASISCORE_PROVIDER_RESERVE)
 
 
-def _api_football_budget_guard(path: str):
+def _api_football_budget_guard(path: str, priority: str = "general"):
+    """Protect the daily API-Football allocation.
+
+    Unmarked requests remain general. Critical authorization must be
+    explicitly provided by trusted internal call sites.
+    """
     if os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1":
         raise HTTPException(
             503,
             detail={
                 "code": "STAGING_SEO_TEST_PROVIDER_DISABLED",
-                "message": "API-Football disabled during staging SEO tests."
-            }
+                "message": "API-Football disabled during staging SEO tests.",
+            },
         )
+
     _reset_api_football_usage_if_new_day()
-    remaining = _quota_state.get("dailyRemaining")
-    limit = _quota_state.get("dailyLimit") or 7500
-    if isinstance(remaining, int) and remaining <= KASISCORE_PROVIDER_RESERVE:
+
+    decision = _ksn_v663_quota_decision(
+        calls_today=int(_api_football_usage.get("callsToday", 0)),
+        priority=priority,
+        provider_remaining=_quota_state.get("dailyRemaining"),
+        provider_limit=_quota_state.get("dailyLimit"),
+    )
+
+    if not decision["allowed"]:
         _api_football_usage["blockedByBudget"] += 1
-        raise HTTPException(429, detail={
-            "code": "API_FOOTBALL_RESERVE_PROTECTED",
-            "message": "API-Football reserve protected; use cached/fallback data.",
-            "dailyRemaining": remaining, "dailyLimit": limit,
-            "reserve": KASISCORE_PROVIDER_RESERVE, "path": path,
-        })
-    if int(_api_football_usage.get("callsToday", 0)) >= KASISCORE_DAILY_BUDGET:
-        _api_football_usage["blockedByBudget"] += 1
-        raise HTTPException(429, detail={
-            "code": "KASISCORE_DAILY_PROVIDER_BUDGET",
-            "message": "Kasi Sports News API-Football daily operating budget reached.",
-            "callsToday": _api_football_usage["callsToday"],
-            "budget": KASISCORE_DAILY_BUDGET,
-            "reserve": KASISCORE_PROVIDER_RESERVE, "path": path,
-        })
+
+        raise HTTPException(
+            429,
+            detail={
+                "code": "KSN_V663_PRIORITY_BUDGET_PROTECTED",
+                "reason": decision["reason"],
+                "priority": decision["priority"],
+                "path": path,
+                "callsToday": decision["used"],
+                "effectiveCap": decision["cap"],
+                "dailyBudget": KASISCORE_DAILY_BUDGET,
+                "criticalReserve": KASISCORE_PROVIDER_RESERVE,
+                "providerRemaining": _quota_state.get("dailyRemaining"),
+            },
+        )
 
 def _rate_check():
     """Local safety limiter without blocking healthy API-Football capacity.
@@ -2849,7 +2960,7 @@ async def _v505_cache_set(path, params, data):
     async with _V505_PERSISTENT_CACHE_LIMIT:
         return await asyncio.to_thread(_persistent_cache_set, path, params, data)
 
-async def _afoot_get_uncollapsed(path: str, params: dict, force_fresh: bool = False) -> dict:
+async def _afoot_get_uncollapsed(path: str, params: dict, force_fresh: bool = False, priority: str = "general") -> dict:
     # ── Persistent SQLite cache (survives restarts) ──────────────────────────
     if not force_fresh:
         cached = await _v505_cache_get(path, params)
@@ -2865,14 +2976,14 @@ async def _afoot_get_uncollapsed(path: str, params: dict, force_fresh: bool = Fa
         if attempt:
             await asyncio.sleep(min(4, 2 ** attempt))
         try:
-            _api_football_budget_guard(path)
+            _api_football_budget_guard(path, priority)
             # V662: Count every recovery HTTP attempt, including retries.
             recovery_budget = _V662_AFOOT_BUDGET.get()
             if recovery_budget is not None:
                 if recovery_budget['remaining'] <= 0:
                     raise RuntimeError("V662_RECOVERY_HTTP_BUDGET_EXHAUSTED")
                 recovery_budget['remaining'] -= 1
-            await _ksn652_ledger_reserve(path)
+            await _ksn652_ledger_reserve(path, priority)
             response = await client.get(path, params=params)
             _record_api_football_call(path)
             _record_quota(response, path)
@@ -2947,7 +3058,8 @@ async def _afoot_get_uncollapsed(path: str, params: dict, force_fresh: bool = Fa
                 })
 
             # ── Write to persistent SQLite cache before returning ────────────
-            await _v505_cache_set(path, params, data)
+            if _V662_AFOOT_BUDGET.get() is None:
+                await _v505_cache_set(path, params, data)
 
             return data
 
@@ -2968,16 +3080,16 @@ async def _afoot_get_uncollapsed(path: str, params: dict, force_fresh: bool = Fa
 _AFOOT_INFLIGHT: dict[str, asyncio.Task] = {}
 _AFOOT_INFLIGHT_LOCK = asyncio.Lock()
 
-async def _afoot_get(path: str, params: dict, force_fresh: bool = False) -> dict:
+async def _afoot_get(path: str, params: dict, force_fresh: bool = False, priority: str = "general") -> dict:
     if not force_fresh:
         cached = await _v505_cache_get(path, params)
         if cached is not None:
             return cached
-    key = _persist_cache_key(path, params) + ("|fresh" if force_fresh else "")
+    key = (_persist_cache_key(path, params) + ("|fresh" if force_fresh else "") + "|priority:" + ("critical" if priority == "critical" else "general"))
     async with _AFOOT_INFLIGHT_LOCK:
         task = _AFOOT_INFLIGHT.get(key)
         if task is None or task.done():
-            task = asyncio.create_task(_afoot_get_uncollapsed(path, params, force_fresh=force_fresh))
+            task = asyncio.create_task(_afoot_get_uncollapsed(path, params, force_fresh=force_fresh, priority=priority))
             _AFOOT_INFLIGHT[key] = task
     try:
         return await task
@@ -3320,9 +3432,43 @@ V141_FIXTURE_REFRESH_SECONDS = int(os.getenv("FIXTURE_REFRESH_SECONDS", "1800"))
 V141_PREDICTION_REFRESH_SECS = 120
 V141_LEARNING_CYCLE_SECS = int(os.getenv("LEARNING_CYCLE_SECS", str(6 * 3600)))  # 6 hours (was 3 hrs)
 V141_MODEL_VERSION = os.getenv("MODEL_VERSION", "KasiScore AI Model")
+
+def _ksn_v663_staging_sqlite_enabled():
+    return (
+        os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+        and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+    )
+
+
+def _ksn_v663_staging_sqlite_path(filename):
+    """Return a separate staging SQLite path; never fall back."""
+    if not _ksn_v663_staging_sqlite_enabled():
+        raise RuntimeError("Staging SQLite path requested outside staging")
+    allowed = {"kasi_sports.db", "kasiscore_learning.sqlite3"}
+    if filename not in allowed:
+        raise RuntimeError("Unknown staging database file")
+    root = BASE_DIR / "data" / "v663_staging_isolated"
+    candidate = (root / filename).resolve()
+    original_sports = Path(
+        os.getenv("SPORTS_DB_PATH", "").strip()
+        or str(BASE_DIR / "kasi_sports.db")
+    ).resolve()
+    original_learning = Path(
+        os.getenv("LEARNING_DB_PATH", "").strip()
+        or str(BASE_DIR / "kasiscore_learning.sqlite3")
+    ).resolve()
+    if candidate in {original_sports, original_learning}:
+        raise RuntimeError("Staging SQLite path conflicts with configured database")
+    return candidate
+
 V141_LEARNING_DB_PATH = Path(
     os.getenv("LEARNING_DB_PATH", str(BASE_DIR / "kasiscore_learning.sqlite3"))
 )
+
+if _ksn_v663_staging_sqlite_enabled():
+    V141_LEARNING_DB_PATH = _ksn_v663_staging_sqlite_path(
+        "kasiscore_learning.sqlite3"
+    )
 
 V141_PREDICTION_WEIGHTS = {
     "odds":          0.385,   # Bookmaker odds — 38.5% weight
@@ -4564,6 +4710,15 @@ def _ksn_staging_seo_test_mode():
     return os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1"
 
 
+
+# V663 STEP 190: football-only staging background-job policy.
+def _ksn_v663_staging_background_jobs_allowed():
+    return not (
+        os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+        and os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+    )
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     if _ksn_staging_seo_test_mode():
@@ -4582,7 +4737,11 @@ async def lifespan(app: FastAPI):
         yield
         return
 
-    v141_learning.init()
+    if _ksn_v663_staging_background_jobs_allowed():
+        v141_learning.init()
+
+    if _ksn_v663_staging_sqlite_enabled():
+        v141_learning.init()
     log.info("KasiScore v182 starting on port %d", PORT)
     log.info("API-Football key: %s", "SET" if API_KEY else "NOT SET")
 
@@ -4591,7 +4750,7 @@ async def lifespan(app: FastAPI):
     # tier where the SQLite file is wiped — it is recreated within seconds.
     _admin_email = os.getenv("ADMIN_EMAIL", os.getenv("PAYMENT_ADMIN_EMAIL","")).strip().lower()
     _admin_password = os.getenv("ADMIN_PASSWORD","").strip()
-    if _admin_email and _admin_password:
+    if _ksn_v663_staging_background_jobs_allowed() and _admin_email and _admin_password:
         try:
             _c = _auth_db()
             _ph = _pw(_admin_password)
@@ -4614,24 +4773,25 @@ async def lifespan(app: FastAPI):
     # Unlike an asyncio-only watchdog, this can capture the responsible stack.
     loop_probe_stop = threading.Event()
     loop_probe_thread = _v503_start_loop_probe(asyncio.get_running_loop(), loop_probe_stop)
-    cleanup_task = asyncio.create_task(_background_fixture_cleanup())
-    prediction_task = asyncio.create_task(_background_prediction_refresh())
-    learning_task = asyncio.create_task(_background_learning_cycle())
-    video_warm_task = asyncio.create_task(_warm_video_cache())
-    news_warm_task = asyncio.create_task(_warm_news_cache())
-    home_warm_task = asyncio.create_task(_home_football_refresh_loop())
-    fantasy_players_task = asyncio.create_task(_fantasyplayoffs_midnight_refresh_loop())
-    oddspapi_task = asyncio.create_task(_oddspapi_ws_loop()) if (ODDSPAPI_ENABLED and ODDSPAPI_WS_ENABLED and ODDSPAPI_API_KEY) else None
+    staging_background_jobs_allowed = _ksn_v663_staging_background_jobs_allowed()
+    cleanup_task = asyncio.create_task(_background_fixture_cleanup()) if staging_background_jobs_allowed else None
+    prediction_task = asyncio.create_task(_background_prediction_refresh()) if staging_background_jobs_allowed else None
+    learning_task = asyncio.create_task(_background_learning_cycle()) if staging_background_jobs_allowed else None
+    video_warm_task = asyncio.create_task(_warm_video_cache()) if staging_background_jobs_allowed else None
+    news_warm_task = asyncio.create_task(_warm_news_cache()) if staging_background_jobs_allowed else None
+    home_warm_task = asyncio.create_task(_home_football_refresh_loop()) if staging_background_jobs_allowed else None
+    fantasy_players_task = asyncio.create_task(_fantasyplayoffs_midnight_refresh_loop()) if staging_background_jobs_allowed else None
+    oddspapi_task = asyncio.create_task(_oddspapi_ws_loop()) if (staging_background_jobs_allowed and ODDSPAPI_ENABLED and ODDSPAPI_WS_ENABLED and ODDSPAPI_API_KEY) else None
     # Run warmers inside the actual FastAPI lifespan (on_event hooks are not
     # guaranteed to execute when a custom lifespan handler is installed).
-    shared_warmer_task = asyncio.create_task(_v427_shared_cache_warmer(), name="ksn-shared-cache-warmer")
+    shared_warmer_task = asyncio.create_task(_v427_shared_cache_warmer(), name="ksn-shared-cache-warmer") if staging_background_jobs_allowed else None
     loop_watchdog_task = asyncio.create_task(_v502_event_loop_watchdog(), name="ksn-event-loop-watchdog")
     retention_scheduler_task = (
         asyncio.create_task(
             _ksn655_retention_scheduler_loop(),
             name="ksn-v655-ledger-retention",
         )
-        if _ksn655_scheduler_allowed()
+        if staging_background_jobs_allowed and _ksn655_scheduler_allowed()
         else None
     )
 
@@ -4645,28 +4805,44 @@ async def lifespan(app: FastAPI):
         )
 
     loop_probe_stop.set()
-    shared_warmer_task.cancel()
+    if shared_warmer_task is not None:
+        shared_warmer_task.cancel()
     loop_watchdog_task.cancel()
-    await asyncio.gather(shared_warmer_task, loop_watchdog_task, return_exceptions=True)
+    await asyncio.gather(
+        *([shared_warmer_task] if shared_warmer_task is not None else []),
+        loop_watchdog_task,
+        return_exceptions=True,
+    )
     loop_probe_thread.join(timeout=0.2)
     if oddspapi_task:
         oddspapi_task.cancel()
-    cleanup_task.cancel()
-    video_warm_task.cancel()
-    news_warm_task.cancel()
-    home_warm_task.cancel()
-    fantasy_players_task.cancel()
-    prediction_task.cancel()
-    learning_task.cancel()
+    if cleanup_task is not None:
+        cleanup_task.cancel()
+    if video_warm_task is not None:
+        video_warm_task.cancel()
+    if news_warm_task is not None:
+        news_warm_task.cancel()
+    if home_warm_task is not None:
+        home_warm_task.cancel()
+    if fantasy_players_task is not None:
+        fantasy_players_task.cancel()
+    if prediction_task is not None:
+        prediction_task.cancel()
+    if learning_task is not None:
+        learning_task.cancel()
 
-    with contextlib.suppress(asyncio.CancelledError):
-        await cleanup_task
-    with contextlib.suppress(asyncio.CancelledError):
-        await prediction_task
-    with contextlib.suppress(asyncio.CancelledError):
-        await learning_task
-    with contextlib.suppress(asyncio.CancelledError):
-        await fantasy_players_task
+    if cleanup_task is not None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await cleanup_task
+    if prediction_task is not None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await prediction_task
+    if learning_task is not None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await learning_task
+    if fantasy_players_task is not None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await fantasy_players_task
 
     global _http, _odds_api_http
     if _http and not _http.is_closed:
@@ -4707,6 +4883,10 @@ def _ksn398_eligible(path: str) -> bool:
     return path.startswith(_KSN398_PUBLIC_PREFIXES)
 
 def _ksn398_conn():
+    # V663 Step 251: prevent legacy LKG storage access in staging.
+    if _ksn_v663_staging_football_only():
+        raise RuntimeError('Legacy LKG storage disabled in staging')
+
     if DATABASE_URL and psycopg2 is not None:
         return psycopg2.connect(DATABASE_URL, connect_timeout=10), "postgres"
     conn = sqlite3.connect(str(BASE_DIR / "ksn_lkg.sqlite3"), timeout=10)
@@ -4934,6 +5114,9 @@ class KSNSharedLKGMiddleware:
         asyncio.create_task(run())
 
     async def __call__(self, scope, receive, send):
+        # V663 STEP 207: no persistent LKG access in football-only staging.
+        if _ksn_v663_staging_football_only():
+            return await self.app(scope, receive, send)
         if scope.get("type") != "http" or scope.get("method") != "GET" or not _ksn398_eligible(scope.get("path", "")):
             return await self.app(scope, receive, send)
 
@@ -5093,6 +5276,30 @@ def google_robots_txt():
 
 @app.get("/sitemap.xml", include_in_schema=False)
 async def google_sitemap_xml():
+    # V663: staging must never advertise production URLs.
+    staging_identity = " ".join(
+        os.getenv(key, "")
+        for key in (
+            "RENDER_SERVICE_NAME",
+            "RENDER_EXTERNAL_URL",
+            "KSN_ENV",
+            "KSN_ENVIRONMENT",
+        )
+    ).lower()
+
+    if "staging" in staging_identity:
+        return Response(
+            content=(
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                '</urlset>'
+            ),
+            media_type="application/xml",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+            },
+        )
     base = KASI_PUBLIC_ORIGIN
     # Prefer the richer SEO registry when available at request time.
     rows = []
@@ -5114,12 +5321,239 @@ async def google_sitemap_xml():
     body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     for row in rows:
         path = str(row.get("path") or "").strip()
+        # V663 STEP 073: football-only sitemap filtering
+        if _ksn_v663_staging_football_only():
+            normalized_path = path.lower().rstrip("/") or "/"
+            if _ksn_v663_disabled_sport_path(normalized_path):
+                continue
         if not path or not path.startswith("/") or path in seen or not row.get("indexable", True):
+            continue
+        if not _ksn_v663_seo_content_available(
+            path,
+            _SSR_CACHE.get("competition-data:" + str(path).strip("/")),
+        ):
             continue
         seen.add(path)
         body.append(f"<url><loc>{_xml_safe(base + path)}</loc></url>")
     body.append("</urlset>")
     return Response(content="".join(body), media_type="application/xml; charset=utf-8", headers={"Cache-Control":"public, max-age=300, s-maxage=900"})
+
+
+# V663 STEP 056: staging-only football route restriction
+def _ksn_v663_staging_football_only():
+    # V663 STEP 063: staging football-only mode is independent of SEO test mode.
+    return (
+        os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+        and os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+    )
+
+
+def _ksn_v663_disabled_sport_path(path):
+    path = str(path or "").lower()
+    segments = [part for part in path.split("/") if part]
+
+    if not segments:
+        return False
+
+    # V663 Step 110S: disable cricket/rugby archive page
+    # only when the football-only staging gate is active.
+    if path.rstrip("/") == "/results/sport-archive-view":
+        return True
+
+    if segments[0] in {"rugby", "cricket"}:
+        return True
+
+    if len(segments) >= 2 and segments[0] == "sports":
+        if segments[1] in {"rugby", "cricket"}:
+            return True
+
+    if len(segments) >= 2 and segments[0] == "admin":
+        if segments[1].startswith(("rugby-", "cricket-")):
+            return True
+
+    # V663 STEP 068B: dynamic non-football route protection
+    if len(segments) >= 2 and segments[0] in {'profiles', 'match'}:
+        if segments[1] in {'rugby', 'cricket'}:
+            return True
+    return False
+
+
+
+# V663 STEP 070: shared endpoint staging safety
+@app.middleware("http")
+async def ksn_v663_shared_endpoint_safety(request: Request, call_next):
+    if _ksn_v663_staging_football_only():
+        path = request.url.path.lower().rstrip("/") or "/"
+
+        # Legacy provider probe is exclusively Rugby/Cricket.
+        # Prevent its external provider calls in staging.
+        blocked_paths = {
+            "/sports/provider-probe",
+            "/sports/provider-health",
+        }
+
+        # The generic scores endpoint accesses shared persistent
+        # snapshots. Keep it unavailable until isolated.
+        if (
+            path.startswith("/sports/")
+            and path.endswith("/scores")
+            and path != "/sports/football/scores"
+        ):
+            blocked_paths.add(path)
+
+        if path in blocked_paths:
+            return Response(
+                content="Not Found",
+                status_code=404,
+                media_type="text/plain",
+                headers={
+                    "X-Robots-Tag": "noindex, nofollow, noarchive",
+                    "Cache-Control": "no-store",
+                },
+            )
+
+        # Reject explicit Rugby/Cricket query selections on
+        # shared search, video and competition endpoints.
+        guarded_paths = {
+            "/sports/videos",
+            "/sports/directory",
+            "/sports/directory/search",
+            "/sports/intelligence/search",
+            "/sports/competition/filtered",
+            "/sports/transfers",
+            "/sports/standings",
+        }
+
+        if path in guarded_paths:
+            sport = str(
+                request.query_params.get("sport", "")
+            ).strip().lower()
+
+            if sport in {"rugby", "cricket"}:
+                return Response(
+                    content="Not Found",
+                    status_code=404,
+                    media_type="text/plain",
+                    headers={
+                        "X-Robots-Tag": "noindex, nofollow, noarchive",
+                        "Cache-Control": "no-store",
+                    },
+                )
+
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def ksn_v663_staging_football_only_gate(request: Request, call_next):
+    # V663 STEP 213: temporary isolation until staging DB identity is verified.
+    if _ksn_v663_staging_football_only():
+        _v663_path = request.url.path.lower().rstrip('/') or '/'
+        _v663_blocked_prefixes = (
+            '/auth/', '/admin/', '/analytics/',
+            '/webhooks/', '/lottery/', '/storage/',
+        )
+        _v663_blocked_exact = {'/tip-of-day'}
+        # V663 Step 244: block auxiliary persistent storage routes.
+        _v663_blocked_exact = tuple(_v663_blocked_exact) + (
+            "/results/football-fixture-id",
+            "/results/live-h2h",
+        )
+        _v663_blocked_prefixes = tuple(_v663_blocked_prefixes) + (
+            "/push/",
+            "/growth/",
+            "/oddspapi/",
+        )
+
+        if (
+            _v663_path in _v663_blocked_exact
+            or any(
+                _v663_path == prefix[:-1]
+                or _v663_path.startswith(prefix)
+                for prefix in _v663_blocked_prefixes
+            )
+        ):
+            return Response(
+                content='Staging database isolation pending',
+                status_code=503,
+                media_type='text/plain',
+                headers={
+                    'X-Robots-Tag': 'noindex, nofollow, noarchive',
+                    'Cache-Control': 'no-store',
+                },
+            )
+
+    if (
+        _ksn_v663_staging_football_only()
+        and _ksn_v663_disabled_sport_path(request.url.path)
+    ):
+        return Response(
+            content="Not Found",
+            status_code=404,
+            media_type="text/plain",
+            headers={
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+                "Cache-Control": "no-store",
+            },
+        )
+
+    # V663 Step 110F: fail closed until staging archive DB isolation
+    # and read-only acceptance have been independently verified.
+    if _ksn_v663_staging_football_only():
+        if (
+            request.url.path.rstrip("/") == "/finished-games"
+            and request.method in ("GET", "HEAD")
+            and any(
+                key in request.query_params
+                for key in ("hours", "days", "africa")
+            )
+        ):
+            return Response(
+                content="Staging legacy finished-games scan disabled",
+                status_code=503,
+                media_type="text/plain",
+                headers={
+                    "X-Robots-Tag": "noindex, nofollow, noarchive",
+                    "Cache-Control": "no-store",
+                },
+            )
+        # V663 Step 296: allow only isolated, provider-free archive reads.
+        # This entire block remains inside the football-only staging guard.
+        archive_path = request.url.path.rstrip("/") or "/"
+        archive_method = request.method == "GET"
+
+        archive_history_allowed = (
+            archive_method
+            and archive_path == "/results/history"
+        )
+
+        archive_search_allowed = (
+            archive_method
+            and archive_path == "/results/search"
+            and request.query_params.getlist("archive_only") == ["true"]
+            and request.query_params.getlist("include_recent") == ["false"]
+            and request.query_params.getlist("sport") == ["football"]
+        )
+
+        archive_protected = (
+            archive_path in ("/results/search", "/results/history")
+            or archive_path.startswith("/results/archive-detail/")
+            or archive_path.startswith("/results/archive-h2h/")
+        )
+
+        if archive_protected and not (
+            archive_history_allowed or archive_search_allowed
+        ):
+            return Response(
+                content="Staging archive isolation pending",
+                status_code=503,
+                media_type="text/plain",
+                headers={
+                    "X-Robots-Tag": "noindex, nofollow, noarchive",
+                    "Cache-Control": "no-store",
+                },
+            )
+
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -5541,6 +5975,11 @@ async def sports_intelligence_search(
     """Sports-only search. No news results. Uses cached provider/directory data."""
     query=q.strip()
     sp=sport.strip().lower()
+    # V663 STEP 060: football-only shared search guard
+    if _ksn_v663_staging_football_only():
+        if sp in {"rugby", "cricket"}:
+            raise HTTPException(404, "Sport not available")
+        sp = "football"
     typ=entity_type.strip().lower()
     if sp not in {"all","football","rugby","cricket"}:sp="all"
     if typ not in {"auto","team","player","competition"}:typ="auto"
@@ -5757,7 +6196,7 @@ async def _build_home_football_snapshot():
     global _HOME_FOOTBALL_SNAPSHOT
     try:
         fd=await fixtures_with_odds(league="ALL",type="upcoming",date_from=None,date_to=None,refresh=0)
-        rows=fd.get("matches") or []
+        rows = [m for m in (fd.get('matches') or []) if isinstance(m, dict) and _ksn_active_prediction(m)]
         preds=[]
         for m in rows:
             if m.get("isFinished"): continue
@@ -5794,16 +6233,42 @@ async def _home_football_refresh_loop():
     await asyncio.to_thread(_restore_home_football_snapshot)
     while True:
         try:
-            await _build_home_football_snapshot()
+            if not _v448_api_football_provider_locked():
+                await _build_home_football_snapshot()
         except Exception as exc:
             log.warning("Home background refresh error: %s", exc)
         await asyncio.sleep(_HOME_FOOTBALL_REFRESH_SECONDS)
+
+
+def _ksn_v663_home_fresh_snapshot(snapshot):
+    """Filter a Home snapshot at response time without mutating it."""
+    if not isinstance(snapshot, dict):
+        return {}
+
+    rows = [
+        m for m in (snapshot.get("matches") or snapshot.get("fixtures") or [])
+        if isinstance(m, dict) and _ksn_active_prediction(m)
+    ]
+
+    predictions = [
+        m for m in (snapshot.get("predictions") or [])
+        if isinstance(m, dict) and _ksn_active_prediction(m)
+    ]
+
+    return {
+        **snapshot,
+        "matches": rows,
+        "fixtures": rows,
+        "predictions": predictions,
+        "count": len(rows),
+    }
+
 
 @app.get("/home/football")
 async def home_football():
     if _HOME_FOOTBALL_SNAPSHOT:
         _schedule_home_football_snapshot()
-        return {**_HOME_FOOTBALL_SNAPSHOT,"staleWhileRevalidate":True}
+        return _ksn_v663_home_fresh_snapshot(_HOME_FOOTBALL_SNAPSHOT) | {"staleWhileRevalidate": True}
     _schedule_home_football_snapshot()
     # Cold start: give already-persistent API caches a short chance only.
     try:
@@ -5811,7 +6276,7 @@ async def home_football():
     except (asyncio.TimeoutError,Exception):
         pass
     if _HOME_FOOTBALL_SNAPSHOT:
-        return {**_HOME_FOOTBALL_SNAPSHOT,"staleWhileRevalidate":True}
+        return _ksn_v663_home_fresh_snapshot(_HOME_FOOTBALL_SNAPSHOT) | {"staleWhileRevalidate": True}
     return {"matches":[],"fixtures":[],"predictions":[],"count":0,"warming":True,
             "generatedAt":datetime.now(timezone.utc).isoformat()}
 
@@ -5927,7 +6392,8 @@ async def fixtures(
                 "dailyRemaining": _daily_remaining,
                 "providerReserve": KASISCORE_PROVIDER_RESERVE,
             }
-            _fixtures_cache[cache_key] = served
+            if _V662_AFOOT_BUDGET.get() is None:
+                _fixtures_cache[cache_key] = served
             return _ksn_priority_response(served, _ksn_request_country(request) if isinstance(request, Request) else "")
 
         # No valid LKG exists for this exact request. Fail soft without burning
@@ -5962,7 +6428,7 @@ async def fixtures(
         if not all_leagues:
             params["league"] = _resolve_league_id(league)
 
-        data = await _afoot_get("/fixtures", params)
+        data = await _afoot_get("/fixtures", params, priority="critical")
         raw = data.get("response", [])
         normalised = [_normalise_fixture(f, "") for f in raw]
 
@@ -6034,10 +6500,13 @@ async def fixtures(
             result["partialErrorCount"] = len(league_errors)
 
         if normalised:
-            _fixtures_last_good[last_good_key] = result
-            _fixtures_cache[cache_key] = result
+            if _V662_AFOOT_BUDGET.get() is None:
+                _fixtures_last_good[last_good_key] = result
+            if _V662_AFOOT_BUDGET.get() is None:
+                _fixtures_cache[cache_key] = result
             if "_dashboard_snapshot_put" in globals():
-                _dashboard_snapshot_put(f"fixtures:football:{league.upper()}:{type}:last_good", {"data": result})
+                if _V662_AFOOT_BUDGET.get() is None:
+                    _dashboard_snapshot_put(f"fixtures:football:{league.upper()}:{type}:last_good", {"data": result})
             return _ksn_priority_response(result, _ksn_request_country(request) if isinstance(request, Request) else "")
 
         if type != "live":
@@ -6052,11 +6521,13 @@ async def fixtures(
                     "staleReason": "API-Football returned an empty ALL-league scan",
                     "providerWarning": "Serving last known good fixtures while the ALL-league refresh returned no matches.",
                 }
-                _fixtures_cache[cache_key] = served
+                if _V662_AFOOT_BUDGET.get() is None:
+                    _fixtures_cache[cache_key] = served
                 return served
 
         if type == "live":
-            _fixtures_cache[cache_key] = result
+            if _V662_AFOOT_BUDGET.get() is None:
+                _fixtures_cache[cache_key] = result
         return _ksn_priority_response(result, _ksn_request_country(request) if isinstance(request, Request) else "")
 
     else:
@@ -6099,10 +6570,13 @@ async def fixtures(
     }
 
     if normalised:
-        _fixtures_last_good[last_good_key] = result
-        _fixtures_cache[cache_key] = result
+        if _V662_AFOOT_BUDGET.get() is None:
+            _fixtures_last_good[last_good_key] = result
+        if _V662_AFOOT_BUDGET.get() is None:
+            _fixtures_cache[cache_key] = result
         if "_dashboard_snapshot_put" in globals():
-            _dashboard_snapshot_put(f"fixtures:football:{league.upper()}:{type}:last_good", {"data": result})
+            if _V662_AFOOT_BUDGET.get() is None:
+                _dashboard_snapshot_put(f"fixtures:football:{league.upper()}:{type}:last_good", {"data": result})
         return _ksn_priority_response(result, _ksn_request_country(request) if isinstance(request, Request) else "")
 
     if type != "live":
@@ -6117,11 +6591,13 @@ async def fixtures(
                 "staleReason": "API-Football returned an empty fixture scan",
                 "providerWarning": "Serving last known good fixtures while API-Football returned no matches.",
             }
-            _fixtures_cache[cache_key] = served
+            if _V662_AFOOT_BUDGET.get() is None:
+                _fixtures_cache[cache_key] = served
             return _ksn_priority_response(served, _ksn_request_country(request) if isinstance(request, Request) else "")
 
     if type == "live":
-        _fixtures_cache[cache_key] = result
+        if _V662_AFOOT_BUDGET.get() is None:
+            _fixtures_cache[cache_key] = result
     return _ksn_priority_response(result, _ksn_request_country(request) if isinstance(request, Request) else "")
 
 # ---------------------------------------------------------------------------
@@ -6159,6 +6635,10 @@ async def transfers_alias(
     return await sports_transfers(team=team, page=page)
 
 def _match_stats_db_get(sport:str, match_id):
+    # V663 STEP 221: bypass shared DB reads in football-only staging.
+    if _ksn_v663_staging_football_only():
+        return None
+
     if not SPORTS_DB_ENABLED:return None
     try:
         with _sports_db() as db:
@@ -6183,6 +6663,10 @@ def _enhanced_match_db_ensure(db):
       PRIMARY KEY(sport,match_id))""")
 
 def _enhanced_match_db_get(sport:str, match_id):
+    # V663 STEP 221: bypass shared DB reads in football-only staging.
+    if _ksn_v663_staging_football_only():
+        return None
+
     if not SPORTS_DB_ENABLED:return None
     try:
         with _sports_db() as db:
@@ -6201,6 +6685,10 @@ def _enhanced_match_db_get(sport:str, match_id):
     return None
 
 def _enhanced_match_db_put(sport:str, match_id, payload:dict, completed:bool=False):
+    # V663 STEP 219: staging-only persistence bypass.
+    if _ksn_v663_staging_football_only():
+        return None
+
     if not SPORTS_DB_ENABLED or not isinstance(payload,dict):
         return
 
@@ -6312,6 +6800,10 @@ def _fantasy_match_signals(match:dict, events:list, statistics:list)->dict:
             "mode":"provider-data-signals","officialFantasyPoints":False}
 
 def _match_stats_db_put(sport:str, match_id, payload:dict, completed:bool=False):
+    # V663 STEP 219: staging-only persistence bypass.
+    if _ksn_v663_staging_football_only():
+        return None
+
     if not SPORTS_DB_ENABLED or not isinstance(payload,dict):return
     try:
         now=datetime.now(timezone.utc).isoformat()
@@ -6864,6 +7356,64 @@ async def sports_videos(
     city: str = Query(""),
     offset: int = Query(0,ge=0,le=5000),
 ):
+    # V663 STEP 072: staging football-only video feed
+    if _ksn_v663_staging_football_only():
+        requested_sport = str(sport or "all").lower().strip()
+
+        if requested_sport not in {"all", "football"}:
+            raise HTTPException(404, "Sport not available")
+
+        cached_pool = _VIDEO_POOL_CACHE.get("all")
+        pool = list(
+            cached_pool
+            if cached_pool is not None
+            else (_VIDEO_LAST_GOOD or [])
+        )
+
+        football_pool = [
+            item for item in pool
+            if isinstance(item, dict)
+            and str(item.get("sport") or "").lower() == "football"
+        ]
+
+        if q.strip():
+            needle = q.strip().casefold()
+            football_pool = [
+                item for item in football_pool
+                if needle in (
+                    str(item.get("title", ""))
+                    + " "
+                    + str(item.get("description", ""))
+                ).casefold()
+            ]
+
+        total = len(football_pool)
+        selected = football_pool[offset:offset + limit]
+
+        selected = [
+            _clean_public_item_text(item)
+            for item in selected
+        ]
+
+        return {
+            "sport": "football",
+            "query": q.strip(),
+            "count": len(selected),
+            "poolSize": total,
+            "offset": offset,
+            "nextOffset": offset + len(selected),
+            "hasMore": offset + len(selected) < total,
+            "items": selected,
+            "location": {
+                "country": country.strip().upper(),
+                "region": region.strip(),
+                "city": city.strip(),
+            },
+            "locationMethod": "staging_memory_only",
+            "preciseLocationRequired": False,
+            "source": "Existing in-memory Football video pool",
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+        }
     """Small location-ranked feed selected from a much larger recent backend pool."""
     cached=_VIDEO_POOL_CACHE.get("all")
     if cached is not None:
@@ -7308,11 +7858,21 @@ def _public_decode(kind:str,ref:str)->int:
 # created/written, fall back to a writable local data directory so a database
 # path problem never prevents the whole API from starting.
 _SPORTS_DB_CONFIGURED = os.getenv("SPORTS_DB_PATH", "").strip()
+
+if _ksn_v663_staging_sqlite_enabled():
+    _SPORTS_DB_CONFIGURED = str(
+        _ksn_v663_staging_sqlite_path("kasi_sports.db")
+    )
 SPORTS_DB_ENABLED=os.getenv("SPORTS_DB_ENABLED","1").strip().lower() not in {"0","false","no"}
 SPORTS_DB_FALLBACK = False
 SPORTS_DB_INIT_ERROR = None
 
 def _resolve_sports_db_path():
+
+    if _ksn_v663_staging_sqlite_enabled():
+        isolated = _ksn_v663_staging_sqlite_path("kasi_sports.db")
+        isolated.parent.mkdir(parents=True, exist_ok=True)
+        return isolated
     global SPORTS_DB_FALLBACK
     preferred = Path(_SPORTS_DB_CONFIGURED) if _SPORTS_DB_CONFIGURED else (BASE_DIR / "kasi_sports.db")
     try:
@@ -7643,11 +8203,19 @@ def _v504_upsert_teams_batch(items):
 # Cap database mirror jobs across concurrent league catalog requests.
 _V504_TEAM_WRITE_LIMIT = asyncio.Semaphore(2)
 async def _v504_persist_teams(items):
+    # V663 STEP 219: staging-only persistence bypass.
+    if _ksn_v663_staging_football_only():
+        return None
+
     if not items:return
     async with _V504_TEAM_WRITE_LIMIT:
         await asyncio.to_thread(_v504_upsert_teams_batch,items)
 
 def _db_upsert_player(p):
+    # V663 STEP 219: staging-only persistence bypass.
+    if _ksn_v663_staging_football_only():
+        return None
+
     if not SPORTS_DB_ENABLED or not p or not p.get("id"):return
     now=datetime.now(timezone.utc).isoformat();pid=int(p["id"]);birth=p.get("birth") or {}
     with _sports_db() as db:
@@ -9185,6 +9753,9 @@ async def match_enrichment(fixture_id:int):
 async def sports_directory(sport:str=Query(...), q:str=Query("")):
     """Provider-backed Teams & Players directory for Football, Rugby and Cricket. News is never used."""
     sport=sport.strip().lower(); q=q.strip()
+    # V663 STEP 060: football-only shared search guard
+    if _ksn_v663_staging_football_only() and sport != "football":
+        raise HTTPException(404, "Sport not available")
     if sport not in {"football","rugby","cricket"}: raise HTTPException(400,"Supported sports: football, rugby, cricket")
     ck=f"global-directory:{sport}:{q.lower() or 'catalog'}"
     if ck in GLOBAL_DIRECTORY_CACHE:return GLOBAL_DIRECTORY_CACHE[ck]
@@ -9295,6 +9866,12 @@ async def sports_directory(sport:str=Query(...), q:str=Query("")):
 async def sports_directory_search(q:str=Query(...,min_length=2,max_length=80),sport:str=Query("all")):
     """Global sports-data search: teams, players, competitions, fixtures/results, tables and statistics. No News API."""
     q=q.strip();ql=q.lower();wanted=sport.strip().lower();sports=["football","rugby","cricket"] if wanted=="all" else [wanted]
+    # V663 STEP 060: football-only shared search guard
+    if _ksn_v663_staging_football_only():
+        if wanted in {"rugby", "cricket"}:
+            raise HTTPException(404, "Sport not available")
+        wanted = "football"
+        sports = ["football"]
     result={"query":q,"sport":wanted,"teams":[],"players":[],"competitions":[],"fixtures":[],"results":[],"standings":[],"statistics":[],"errors":[],"source":"sports providers/cache"}
     dirs=await asyncio.gather(*[sports_directory(sp,q) for sp in sports],return_exceptions=True)
     for sp,d in zip(sports,dirs):
@@ -9367,12 +9944,20 @@ async def sports_db_sync_player(player_id:int,season:int=Query(0,ge=0),force:int
 
 # Do not let a sports-cache database failure take down authentication, news,
 # health checks, or the rest of Kasi Sports News during application import.
-if SPORTS_DB_ENABLED and not _ksn_staging_seo_test_mode():
+if (SPORTS_DB_ENABLED and not _ksn_staging_seo_test_mode() and _ksn_v663_staging_background_jobs_allowed()):
     try:
         _sports_db_init()
     except Exception as exc:
         SPORTS_DB_INIT_ERROR = f"{type(exc).__name__}: {exc}"
         log.exception("Sports database initialisation failed; continuing in degraded mode")
+
+# V663 isolated staging schema, independent of background jobs.
+if (
+    SPORTS_DB_ENABLED
+    and _ksn_v663_staging_sqlite_enabled()
+    and not _ksn_staging_seo_test_mode()
+):
+    _sports_db_init()
 
 @app.get("/public-route/{kind}/{provider_id}")
 async def public_route(kind:str,provider_id:int,name:str=Query(""),response:Response=None):
@@ -9480,6 +10065,92 @@ async def directory_discover(league:int=Query(39,ge=1),season:int=Query(0,ge=0))
         t=x.get("team") or {}
         if t.get("id"):teams.append({"name":t.get("name"),"badge":t.get("logo"),"rank":x.get("rank"),"points":x.get("points"),"form":x.get("form"),"publicRef":_public_ref("team",int(t["id"]),t.get("name") or "team")})
     out={"players":players,"teams":teams};_PLAYERS_EXPLORER_CACHE[key]=out;return out
+
+# V663 STEP 112R: cache-only My Kasi football team search
+@app.get("/my-kasi/teams/search")
+async def ksn_v663_my_kasi_team_search(
+    q: str = Query(..., min_length=2, max_length=80)
+):
+    """Search verified football teams in memory only; no DB or provider fallback."""
+    query = q.strip().casefold()
+    if len(query) < 2:
+        return {"teams": [], "source": "memory-only"}
+
+    found = {}
+
+    def collect(rows):
+        if not isinstance(rows, (list, tuple)):
+            return
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            name = str(row.get("name") or "").strip()
+            ref = str(row.get("publicRef") or "").strip()
+            raw_id = row.get("internalId")
+
+            if not name or not ref or query not in name.casefold():
+                continue
+
+            try:
+                provider_id = _public_decode("team", ref)
+                if provider_id <= 0:
+                    continue
+                if ref != _public_ref("team", provider_id, name):
+                    continue
+                if raw_id is not None and (
+                    isinstance(raw_id, bool)
+                    or int(raw_id) != provider_id
+                ):
+                    continue
+            except Exception:
+                continue
+
+            found.setdefault(provider_id, {
+                "name": name,
+                "publicRef": ref,
+                "badge": str(row.get("badge") or ""),
+                "country": str(row.get("country") or ""),
+            })
+
+    for key, payload in list(_PLAYERS_EXPLORER_CACHE.items()):
+        if not isinstance(payload, dict):
+            continue
+        if not str(key).startswith(("explorer:", "search:", "discover:")):
+            continue
+        collect(payload.get("teams"))
+
+    for key, payload in list(GLOBAL_DIRECTORY_CACHE.items()):
+        if not str(key).startswith("global-directory:football:"):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        # The global directory uses "ref" rather than "publicRef".
+        rows = []
+        for row in payload.get("teams") or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("sport") or "football").lower() != "football":
+                continue
+            rows.append({
+                **row,
+                "publicRef": row.get("publicRef") or row.get("ref"),
+            })
+        collect(rows)
+
+    teams = sorted(
+        found.values(),
+        key=lambda row: row["name"].casefold()
+    )[:50]
+
+    return {
+        "teams": teams,
+        "source": "memory-only",
+        "databaseAccess": False,
+        "providerAccess": False,
+    }
+
 @app.get("/directory/search")
 async def directory_search(q:str=Query(...,min_length=2,max_length=80),season:int=Query(0,ge=0)):
     season=season or _current_season();q=q.strip()
@@ -9525,7 +10196,7 @@ async def live(
         params["league"]=_resolve_league_id(league)
 
     try:
-        fd=await _afoot_get("/fixtures",params)
+        fd=await _afoot_get("/fixtures",params, priority="critical")
         raw=fd.get("response",[])
     except Exception as exc:
         stale=_live_cache.get(ck)
@@ -10315,8 +10986,20 @@ def _ksn_v588_complete_profile(profile, team_id, season):
         derived = _ksn_v585_archive_season_summary(team_id,season,league_id)
         if derived.get('played'):
             p['teamStats'] = _ksn_stats_from_summary(derived,team_id,league_id,season)
-    p['dataComplete'] = bool(p['past10'] and p['future'] and p.get('standings') and _ksn_valid_team_stats(p.get('teamStats')))
     p = _ksn_v613_fill_stats(p,team_id,season)
+    # V663: Recalculate after statistics recovery and require provider player IDs.
+    verified_players = [
+        player for player in (p.get('players') or [])
+        if isinstance(player, dict)
+        and str(player.get('id') or '').isdigit()
+        and int(player['id']) > 0
+    ]
+    p['dataComplete'] = bool(
+        (p.get('past10') or p.get('future'))
+        and p.get('standings')
+        and _ksn_valid_team_stats(p.get('teamStats'))
+        and verified_players
+    )
     return p
 
 
@@ -10808,6 +11491,127 @@ async def team_profile(team: str = Query(...), season: int = Query(0, ge=0), ref
         _dashboard_snapshot_put(f"team_profile_last_good:{team_id}:{season}",{"data":result})
     return result
 
+
+
+# V663 STEP 182: transparent player-profile section availability.
+def _ksn_v663_player_completeness(profile):
+    if not isinstance(profile, dict):
+        return {
+            "status": "unavailable",
+            "availableSections": [],
+            "missingSections": [],
+            "unknownSections": [],
+        }
+
+    identity = profile.get("player") or {}
+
+    sections = (
+        "statistics",
+        "teams",
+        "recentMatches",
+        "transfers",
+        "injuries",
+        "trophies",
+        "career",
+        "form",
+        "matchRatings",
+    )
+
+    available = []
+    missing = []
+    unknown = []
+
+    for name in sections:
+        value = profile.get(name)
+
+        if isinstance(value, (list, dict)):
+            if value:
+                available.append(name)
+            elif name in profile:
+                unknown.append(name)
+            else:
+                missing.append(name)
+        elif value is None:
+            missing.append(name)
+        elif value:
+            available.append(name)
+        else:
+            unknown.append(name)
+
+    has_identity = (
+        isinstance(identity, dict)
+        and bool(identity.get("id"))
+        and bool(identity.get("name"))
+    )
+
+    if not has_identity:
+        status = "unavailable"
+    elif not available:
+        status = "identity_only"
+    elif missing or unknown:
+        status = "partial"
+    else:
+        status = "complete"
+
+    return {
+        "status": status,
+        "identityAvailable": bool(has_identity),
+        "availableSections": available,
+        "missingSections": missing,
+        "unknownSections": unknown,
+        "sectionCount": len(sections),
+        "availableCount": len(available),
+    }
+
+
+def _ksn_v663_complete_player_profile(sql_profile, snapshot, player_id, season):
+    """Recover only missing sections from a verified same-player/season snapshot."""
+    if not isinstance(sql_profile, dict):
+        return sql_profile
+
+    result = dict(sql_profile)
+
+    if not isinstance(snapshot, dict):
+        return result
+
+    saved = snapshot.get("data")
+
+    if not isinstance(saved, dict):
+        return result
+
+    identity = saved.get("player") or {}
+
+    try:
+        same_player = int(identity.get("id") or 0) == int(player_id)
+        same_season = int(
+            saved.get("requestedSeason") or saved.get("season") or 0
+        ) == int(season)
+    except (TypeError, ValueError):
+        return result
+
+    if not (same_player and same_season):
+        return result
+
+    for field in (
+        "statistics", "teams", "recentMatches", "transfers",
+        "injuries", "trophies", "career", "form", "matchRatings"
+    ):
+        if not result.get(field) and saved.get(field):
+            result[field] = saved[field]
+
+    current = dict(result.get("player") or {})
+
+    for field in (
+        "name", "firstname", "lastname", "age",
+        "nationality", "height", "weight", "photo", "birth"
+    ):
+        if not current.get(field) and identity.get(field):
+            current[field] = identity[field]
+
+    result["player"] = current
+    result["snapshotRecovered"] = True
+    return result
+
 @app.get("/player/profile")
 async def player_profile(player: int = Query(..., ge=1), season: int = Query(0, ge=0)):
     """Fast dedicated player profile.
@@ -10817,15 +11621,26 @@ async def player_profile(player: int = Query(..., ge=1), season: int = Query(0, 
     Historical season fan-out and per-fixture rating fan-out are not performed
     on the critical path.
     """
+
+    # V663 STEP 184: add transparent response-only completeness metadata.
+    def _ksn_v663_profile_response(value):
+        if not isinstance(value, dict):
+            return value
+        response = dict(value)
+        response["playerDataCompleteness"] = (
+            _ksn_v663_player_completeness(response)
+        )
+        return response
+
     season=season or _current_season()
     player_snap=_dashboard_snapshot_get(f"player_profile_last_good:{player}:{season}") if "_dashboard_snapshot_get" in globals() else None
     player_snap_data=(player_snap or {}).get("data") if isinstance(player_snap,dict) else None
     if isinstance(player_snap_data,dict) and (player_snap_data.get("player") or player_snap_data.get("statistics")):
         key=f"player-profile-fast:{player}:{season}"
         cached=_team_cache.get(key)
-        if cached is not None:return cached
+        if cached is not None:return _ksn_v663_profile_response(cached)
         if SPORTS_DB_ENABLED:asyncio.create_task(_sql_sync_player(player,season,force=False))
-        return {**player_snap_data,"cached":True,"refreshing":True}
+        return _ksn_v663_profile_response({**player_snap_data,"cached":True,"refreshing":True})
     if SPORTS_DB_ENABLED:
         sql_profile=_sql_player_profile(player,season)
         if sql_profile:
@@ -10834,11 +11649,13 @@ async def player_profile(player: int = Query(..., ge=1), season: int = Query(0, 
             if row and (_sync_due(row.get("synced_at")) or not useful_sql):
                 pass  # v494: no provider synchronization triggered by public player profile views
             if useful_sql:
-                return sql_profile
+                return _ksn_v663_profile_response(_ksn_v663_complete_player_profile(
+                    sql_profile, player_snap, player, season
+                ))
     key=f"player-profile-fast:{player}:{season}"
     cached=_team_cache.get(key)
     if cached is not None:
-        return cached
+        return _ksn_v663_profile_response(cached)
 
     async def safe(path,params):
         try:
@@ -10921,7 +11738,7 @@ async def player_profile(player: int = Query(..., ge=1), season: int = Query(0, 
     _team_cache[key]=result
     if result.get("player") and (result.get("statistics") or result.get("teams") or result.get("recentMatches")):
         _dashboard_snapshot_put(f"player_profile_last_good:{player}:{season}",{"data":result})
-    return result
+    return _ksn_v663_profile_response(result)
 
 
 async def _resolve_team_id(name: str) -> tuple[int, str]:
@@ -11370,6 +12187,10 @@ def _save_prediction_to_db(match: dict, prediction_result: dict):
     Runs synchronously (SQLite is fast). Swallows errors so a DB hiccup
     never breaks the API response.
     """
+    # V663 STEP 219: staging-only persistence bypass.
+    if _ksn_v663_staging_football_only():
+        return None
+
     try:
         pred_block = prediction_result.get("prediction", {})
         probs = pred_block.get("probabilities", {})
@@ -11588,7 +12409,7 @@ def _v662_saved_prediction_candidates(snapshots, limit=100):
                 continue
             if not _valid_1x2(row.get("odds") or {}):
                 continue
-            if row.get("modelOnly") or row.get("predictionEligible") is False:
+            if row.get("modelOnly") or row.get("predictionEligible") is not True:
                 continue
 
             fid = (
@@ -12047,7 +12868,15 @@ async def tip_of_day(request: Request):
                 con.close()
                 if row:
                     snap=json.loads(row["payload"] or "{}")
-                    saved_cmp=[x for x in (snap.get("comparisonFallback") or []) if _upcoming(x) and x.get("home") and x.get("away") and x.get("bookmakerPick") not in (None,"","—")]
+                    saved_cmp=[
+                        x for x in (snap.get("comparisonFallback") or [])
+                        if isinstance(x, dict)
+                        and _upcoming(x)
+                        and x.get("home")
+                        and x.get("away")
+                        and x.get("bookmakerPick") not in (None, "", "?")
+                        and _valid_1x2(x.get("odds") or {})
+                    ]
                     if saved_cmp:
                         comparison_fallback=saved_cmp[:3]; state="comparison-saved"
         except Exception as exc:
@@ -12076,6 +12905,13 @@ async def tip_of_day(request: Request):
             "yesterdayDate":yesterday,"yesterday":yesterday_rows,
             "error":None,"refreshError":provider_error if state.startswith("comparison") else None,
             "generatedAt":datetime.now(timezone.utc).isoformat()}
+    # V663 staging-only football contract.
+    if _ksn_v663_staging_football_only():
+        sport_tips = {"football": football_tip}
+        sport_tip_status = {
+            "football": "qualified" if football_tip else "no-qualified-tip"
+        }
+
     payload["sportTips"] = sport_tips
     payload["sportTipStatus"] = sport_tip_status
     payload["sportTipCount"] = sum(
@@ -13193,6 +14029,10 @@ _KSN530_SCHEMA_READY = False
 
 def _ksn530_pg_connection():
     global _KSN530_SCHEMA_READY
+    # V663 STEP 221: bypass shared DB reads in football-only staging.
+    if _ksn_v663_staging_football_only():
+        return None
+
     if not DATABASE_URL or psycopg2 is None:
         return None
     conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
@@ -14751,10 +15591,10 @@ async def _sports_scores(sport: str, date: str | None = None, live: bool = False
             # v449: live polling is non-essential provider work. Once the protected
             # API-Football reserve is active, do not enter _afoot_get merely to
             # trigger its 429 guard; continue to the existing public/cache fallback.
-            if _v448_api_football_provider_locked():
+            if not live and _v448_api_football_provider_locked():
                 fd={"response":[]}
             else:
-                fd=await _afoot_get("/fixtures", params)
+                fd=await _afoot_get("/fixtures", params, priority="critical" if live else "general")
             for f in (fd.get("response") or []):
                 fs=f.get("fixture") or {}; ts=f.get("teams") or {}; goals=f.get("goals") or {}; st=fs.get("status") or {}
                 out.append({"id":str(fs.get("id") or ""),"sport":"football","league":(f.get("league") or {}).get("name") or "Football","leagueSlug":str((f.get("league") or {}).get("id") or ""),"leagueId":(f.get("league") or {}).get("id"),"country":(f.get("league") or {}).get("country") or "","countryName":(f.get("league") or {}).get("country") or "","leagueLogo":(f.get("league") or {}).get("logo") or "","leagueFlag":(f.get("league") or {}).get("flag") or "","date":fs.get("date"),"home":(ts.get("home") or {}).get("name") or "Home","away":(ts.get("away") or {}).get("name") or "Away","homeId":(ts.get("home") or {}).get("id"),"awayId":(ts.get("away") or {}).get("id"),"homeLogo":(ts.get("home") or {}).get("logo") or "","awayLogo":(ts.get("away") or {}).get("logo") or "","homeScore":goals.get("home"),"awayScore":goals.get("away"),"status":st.get("long") or st.get("short") or "Scheduled","statusShort":st.get("short") or "","elapsed":st.get("elapsed") or 0,"venue":(fs.get("venue") or {}).get("name") or "","source":"API-Football"})
@@ -14973,6 +15813,13 @@ async def sports_news_image(url: str = Query(...)):
 
 @app.get("/sports/config")
 async def sports_config():
+    # V663 STEP 071C: staging football-only sports configuration
+    if _ksn_v663_staging_football_only():
+        return {
+            "sports": {"football": SPORT_LABELS["football"]},
+            "providers": {"football": "API-Football"},
+            "sportIds": {"football": ODDSPAPI_SPORT_FOOTBALL},
+        }
     allowed={k:v for k,v in SPORT_LABELS.items() if k in {"football","rugby","cricket"}}
     return {"sports":allowed,"providers":{
         "football":"API-Football",
@@ -15290,8 +16137,277 @@ async def featured_competitions():
     rows=[x for x in COMPETITION_REGISTRY if x.get("featured")]
     return {"count":len(rows),"competitions":rows}
 
+
+# V663 STEP 096D: staging cache-only football scores
+# V663 STEP 103: isolated in-memory Football scores adapter.
+def _ksn_v663_memory_football_scores(date="", live=0, league=""):
+    """Read existing Football fixture memory only; never refresh it."""
+    requested_date = str(date or "").strip()
+    requested_league = str(league or "").strip()
+    live_only = bool(live)
+
+    empty = {
+        "sport": "football",
+        "date": requested_date,
+        "count": 0,
+        "games": [],
+        "stagingCacheOnly": True,
+        "memoryOnly": True,
+        "databaseIsolationPending": True,
+        "cacheMiss": True,
+    }
+
+    # V663 STEP 105: fresh primary fixture cache only.
+    # Never use six-hour last-good data or homepage snapshots
+    # to populate the staging scores endpoint.
+    # Do not refresh caches, contact providers or read databases.
+    candidates = []
+    cache = globals().get("_fixtures_cache")
+    if cache is not None:
+        try:
+            values = list(cache.values())
+        except (RuntimeError, KeyError):
+            values = []
+        for payload in values:
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("stale") or payload.get("providerLocked"):
+                continue
+            candidates.append(payload)
+
+    live_statuses = {"1H", "HT", "2H", "ET", "P", "BT"}
+    finished_statuses = {"FT", "AET", "PEN"}
+    scheduled_statuses = {"NS", "TBD"}
+
+    games_by_id = {}
+
+    for payload in candidates:
+        rows = payload.get("matches") or payload.get("fixtures") or []
+        if not isinstance(rows, list):
+            continue
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            sport = str(
+                row.get("sport")
+                or row.get("sportType")
+                or row.get("sport_type")
+                or "football"
+            ).strip().lower()
+
+            if sport not in ("football", "soccer"):
+                continue
+
+            fixture_id = row.get("_afootFixtureId")
+            if fixture_id is None:
+                fixture_id = row.get("id")
+            if fixture_id is None or not str(fixture_id).strip():
+                continue
+
+            status = str(row.get("statusShort") or "").upper()
+            if status not in (
+                live_statuses | finished_statuses | scheduled_statuses
+            ):
+                continue
+
+            if live_only and status not in live_statuses:
+                continue
+
+            kickoff = str(
+                row.get("fixtureDate")
+                or row.get("datetime")
+                or ""
+            ).strip()
+
+            # Explicit dates must match the requested calendar day.
+            # Undated requests are restricted to today's UTC date
+            # unless live=1. Do not display arbitrary future fixtures
+            # as today's scores.
+            day = kickoff[:10]
+            target_day = (
+                requested_date
+                or datetime.datetime.now(
+                    datetime.timezone.utc
+                ).date().isoformat()
+            )
+
+            if not live_only and day != target_day:
+                continue
+
+            league_id = row.get("leagueId")
+            if league_id is None:
+                league_id = row.get("_leagueId")
+
+            if requested_league and str(league_id or "") != requested_league:
+                continue
+
+            home_name = str(row.get("home") or "").strip()
+            away_name = str(row.get("away") or "").strip()
+
+            if not home_name or not away_name:
+                continue
+
+            home_score = row.get("homeScore")
+            away_score = row.get("awayScore")
+
+            # Scheduled games must not display invented scores.
+            if status in scheduled_statuses:
+                home_score = None
+                away_score = None
+
+            display_status = (
+                "in" if status in live_statuses
+                else "ft" if status in finished_statuses
+                else "ns"
+            )
+
+            game = {
+                "id": str(fixture_id),
+                "sport": "football",
+                "league": row.get("league") or "Football",
+                "leagueSlug": str(league_id or ""),
+                "leagueId": league_id,
+                "country": row.get("country") or "",
+                "countryName": row.get("countryName")
+                    or row.get("country") or "",
+                "leagueLogo": row.get("leagueLogo") or "",
+                "leagueFlag": row.get("leagueFlag") or "",
+                "home": home_name,
+                "away": away_name,
+                "homeId": row.get("homeId"),
+                "awayId": row.get("awayId"),
+                "homeLogo": row.get("homeLogo") or "",
+                "awayLogo": row.get("awayLogo") or "",
+                "homeScore": home_score,
+                "awayScore": away_score,
+                "statusShort": display_status,
+                "providerStatusShort": status,
+                "status": row.get("status") or status,
+                "date": kickoff,
+                "venue": row.get("venue") or "",
+                "source": "existing Football fixture memory",
+            }
+
+            # A fixture may occur in multiple caches. Prefer a
+            # record with actual scores over one without scores.
+            existing = games_by_id.get(game["id"])
+            if existing is None or (
+                existing.get("homeScore") is None
+                and game["homeScore"] is not None
+            ):
+                games_by_id[game["id"]] = game
+
+    games = sorted(
+        games_by_id.values(),
+        key=lambda item: (
+            item.get("date") or "",
+            item.get("id") or "",
+        )
+    )
+
+    if not games:
+        return empty
+
+    return {
+        **empty,
+        "date": requested_date or (
+            "" if live_only else target_day
+        ),
+        "count": len(games),
+        "games": games,
+        "cacheMiss": False,
+    }
+
+def _ksn_v663_cached_football_scores(date="", live=0, league=""):
+    """Read Football snapshots without provider calls or database writes."""
+    # V663 STEP 101: fail-closed staging football scores.
+    # Persistent snapshot database isolation has not been verified.
+    # Do not access PostgreSQL or SQLite through this endpoint.
+    if _ksn_v663_staging_football_only():
+        return _ksn_v663_memory_football_scores(date, live, league)
+    requested_date = str(date or "").strip()
+    requested_league = str(league or "").strip()
+
+    key = (
+        f"v363:scores:football:"
+        f"{requested_date or 'window'}:"
+        f"{int(bool(live))}:"
+        f"{requested_league or 'all'}"
+    )
+
+    snap = _dashboard_snapshot_get(key)
+
+    data = (
+        snap.get("data")
+        if isinstance(snap, dict)
+        and isinstance(snap.get("data"), dict)
+        else None
+    )
+
+    if isinstance(data, dict) and isinstance(data.get("games"), list):
+        games = [
+            dict(row) for row in data["games"]
+            if isinstance(row, dict)
+            and str(row.get("sport") or "football").strip().lower()
+            in ("football", "soccer")
+        ]
+
+        return {
+            **data,
+            "sport": "football",
+            "count": len(games),
+            "games": games,
+            "fromPersistentCache": True,
+            "stagingCacheOnly": True,
+        }
+
+    # Never substitute unrelated upcoming fixtures for a
+    # dated, live or league-specific request.
+    if requested_date or live or requested_league:
+        return {
+            "sport": "football",
+            "count": 0,
+            "games": [],
+            "stagingCacheOnly": True,
+            "cacheMiss": True,
+        }
+
+    fallback = _dashboard_snapshot_get(
+        "fixtures:football:ALL:upcoming:last_good"
+    )
+
+    payload = (
+        fallback.get("data")
+        if isinstance(fallback, dict)
+        and isinstance(fallback.get("data"), dict)
+        else {}
+    )
+
+    rows = payload.get("matches") or payload.get("games") or []
+
+    games = [
+        dict(row) for row in rows
+        if isinstance(row, dict)
+        and str(row.get("sport") or "football").strip().lower()
+        in ("football", "soccer")
+    ]
+
+    return {
+        "sport": "football",
+        "count": len(games),
+        "games": games,
+        "fromPersistentCache": bool(games),
+        "stagingCacheOnly": True,
+        "cacheMiss": not bool(games),
+    }
+
+
 @app.get("/sports/{sport}/scores")
 async def sports_scores(sport: str, date: str = Query(""), live: int = Query(0, ge=0, le=1), league: str = Query(""), refresh: int = Query(0, ge=0, le=1)):
+    if _ksn_v663_staging_football_only() and sport.lower().strip()=="football":
+        return _ksn_v663_cached_football_scores(date, live, league)
     allowed=set(SPORT_LABELS)
     sport=sport.lower().strip()
     if sport not in allowed: raise HTTPException(400, f"Unsupported sport: {sport}")
@@ -15545,7 +16661,40 @@ def _balanced_finished_football(rows:list)->tuple[list,dict]:
 # ================================================================
 RESULTS_ARCHIVE_SQLITE = Path(os.getenv("RESULTS_ARCHIVE_SQLITE", str(BASE_DIR / "ksn_results_archive.sqlite3")))
 
+# V663 Step 247: isolated results archive for football-only staging.
+if (
+    os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+    and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+):
+    _ksn247_archive_path = (
+        BASE_DIR / "data" / "v663_staging_isolated"
+        / "ksn_results_archive.sqlite3"
+    ).resolve()
+    _ksn247_original_paths = {
+        Path(os.getenv("RESULTS_ARCHIVE_SQLITE", "").strip()
+             or str(BASE_DIR / "ksn_results_archive.sqlite3")).resolve(),
+        Path(os.getenv("SPORTS_DB_PATH", "").strip()
+             or str(BASE_DIR / "kasi_sports.db")).resolve(),
+        Path(os.getenv("LEARNING_DB_PATH", "").strip()
+             or str(BASE_DIR / "kasiscore_learning.sqlite3")).resolve(),
+        Path(os.getenv("APICACHE_DB", "").strip()
+             or str(BASE_DIR / "api_cache.sqlite3")).resolve(),
+    }
+    if _ksn247_archive_path in _ksn247_original_paths:
+        raise RuntimeError(
+            "Staging archive path conflicts with configured storage"
+        )
+    RESULTS_ARCHIVE_SQLITE = _ksn247_archive_path
+
+
 def _results_db():
+
+    # V663 Step 247: create only the dedicated staging archive directory.
+    if _ksn_v663_staging_sqlite_enabled():
+        RESULTS_ARCHIVE_SQLITE.parent.mkdir(
+            parents=True, exist_ok=True
+        )
+
     if DATABASE_URL:
         if psycopg2 is None:
             raise RuntimeError("DATABASE_URL requires psycopg2-binary")
@@ -15909,6 +17058,17 @@ async def ksn_v659_archive_detail(archive_key: str):
             )
 
         row = dict(zip(columns, record))
+
+        # V663 Step 110O: football-only staging archive detail.
+        # Preserve existing non-staging behavior.
+        if (
+            _ksn_v663_staging_football_only()
+            and str(row.get("sport") or "").lower() != "football"
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Archived match not found"
+            )
         row["date"] = str(row.pop("kickoff"))
         row["archiveKey"] = row.pop("ksn_key")
         # V661: expose only canonical, internally consistent fixture IDs.
@@ -16516,7 +17676,12 @@ async def results_history(
     ph="%s" if kind=="postgres" else "?"
     where=[]; params=[]
     def add(expr,val): where.append(expr.replace("?",ph)); params.append(val)
-    if sport.lower() in {"football","rugby","cricket"}: add("sport=?",sport.lower())
+    # V663 Step 110L: football-only staging history contract.
+    # Non-staging archive behavior remains unchanged.
+    if _ksn_v663_staging_football_only():
+        add("sport=?", "football")
+    elif sport.lower() in {"football","rugby","cricket"}:
+        add("sport=?", sport.lower())
     # v457: structured filters are identities, not free-text searches.
     # Exact normalized equality prevents England Premier League from matching Ghana
     # Premier League and senior Bundesliga from matching Frauen/U19 Bundesliga.
@@ -16672,7 +17837,12 @@ def _v660_archive_query_rows(
             cur.execute("SET LOCAL lock_timeout = '3000ms'")
         where=[]; params=[]
         def add(expr,val): where.append(expr.replace("?",ph)); params.append(val)
-        if sport.lower() in {"football","rugby","cricket"}: add("sport=?",sport.lower())
+        # V663 Step 110I: football-only staging archive contract.
+        # Preserve all existing non-staging query behavior.
+        if _ksn_v663_staging_football_only():
+            add("sport=?", "football")
+        elif sport.lower() in {"football","rugby","cricket"}:
+            add("sport=?", sport.lower())
         if competition_id is not None: add("competition_id=?", competition_id)  # v529 exact provider competition filter
         # v457: named fields are canonical structured filters. Keep q broad below.
         if country.strip(): add("lower(trim(country))=?",country.strip().lower())
@@ -16828,24 +17998,54 @@ async def results_search(
 
 
 def _v660_archive_filters_sync():
+
     """Load existing archive filters without blocking the ASGI event loop."""
+
     _results_archive_init()
+
     conn = None
+
     cur = None
+
     try:
+
         conn,kind = _results_db()
+
         cur = conn.cursor()
+
         out = {}
+
         for key,col in (("countries","country"),("competitions","competition"),("seasons","season")):
-            cur.execute(f"SELECT {col}, COUNT(*) FROM ksn_results_archive WHERE COALESCE({col},'')<>'' GROUP BY {col} ORDER BY {col}")
+
+            # V663 STEP 197: isolate archive filters in football-only staging.
+            # All other environments retain the original multisport query.
+            sport_filter = (
+                " AND sport='football'"
+                if _ksn_v663_staging_football_only()
+                else ""
+            )
+            cur.execute(
+                f"SELECT {col}, COUNT(*) FROM ksn_results_archive "
+                f"WHERE COALESCE({col},'')<>''{sport_filter} "
+                f"GROUP BY {col} ORDER BY {col}"
+            )
+
             out[key] = [{"value":r[0],"count":int(r[1])} for r in cur.fetchall()]
+
         return out
+
     finally:
+
         try:
+
             if cur is not None:
+
                 cur.close()
+
         finally:
+
             if conn is not None:
+
                 conn.close()
 
 
@@ -16859,12 +18059,71 @@ async def results_filters():
         raise
 
 
+# V663 STEP 066: isolated staging football finished results
+_KSN_V663_FINISHED_CACHE = {}
+
+async def _ksn_v663_football_finished_response(request, hours, limit):
+    """Staging-only: completed football fixtures from safe memory."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=hours)
+    # Read each UTC calendar date intersecting the requested window.
+    # The memory helper never refreshes providers or reads databases.
+    all_games = []
+    day = cutoff.date()
+    while day <= now.date():
+        snapshot = _ksn_v663_memory_football_scores(
+            date=day.isoformat(), live=0
+        )
+        all_games.extend(snapshot.get("games", []))
+        day += timedelta(days=1)
+
+    rows = []
+    for game in all_games:
+        if not isinstance(game, dict):
+            continue
+        if game.get("providerStatusShort") not in ("FT", "AET", "PEN"):
+            continue
+        if game.get("homeScore") is None or game.get("awayScore") is None:
+            continue
+        try:
+            stamp = datetime.fromisoformat(
+                str(game.get("date") or "").replace("Z", "+00:00")
+            )
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+        if cutoff <= stamp <= now:
+            rows.append(game)
+
+    rows = _ksn_sort_football_rows(rows, newest_first=True)
+    if limit is not None:
+        rows = rows[:limit]
+
+    return _ksn_priority_response({
+        "count": len(rows),
+        "matches": rows,
+        "hours": hours,
+        "sports": ["football"],
+        "sportsBreakdown": {"football": len(rows)},
+        "providerMode": "staging-football-memory",
+        "stagingCacheOnly": True,
+        "databaseIsolationPending": True,
+        "providerCalls": 0,
+    }, _ksn_request_country(request))
+
+
+
 @app.get("/sports/finished")
 async def sports_finished_all(request: Request, hours:int=Query(48,ge=1,le=168),limit:Optional[int]=Query(None,ge=1,le=5000)):
     """All scored completed results in the rolling window. No display/result cap.
     Football is globally discovered by date and Africa-facing ordered 2:1:1 while pools
     are available. Rugby/Cricket are also retained. Missing final scores are excluded.
     """
+    if _ksn_v663_staging_football_only():
+        return await _ksn_v663_football_finished_response(
+            request, hours, limit
+        )
     now=datetime.now(timezone.utc); cutoff=now-timedelta(hours=hours); key=f"v310:{hours}:all-scored"
     cached=_FINISHED_MULTI_CACHE.get(key)
     if cached and time.time()-cached[0] < 300:return _ksn_priority_response({**cached[1],"cached":True}, _ksn_request_country(request))
@@ -16882,7 +18141,11 @@ async def sports_finished_all(request: Request, hours:int=Query(48,ge=1,le=168),
     while d<=now.date():dates.append(d.isoformat());d+=timedelta(days=1)
     for ds in dates:
         try:
-            data=await _afoot_get('/fixtures',{'date':ds,'timezone':TIMEZONE})
+            data=await _afoot_get(
+                '/fixtures',
+                {'date':ds,'timezone':TIMEZONE},
+                priority="critical" if ds == now.date().isoformat() else "general"
+            )
             for raw in data.get('response',[]) or []:
                 m=_widget_match_record(_normalise_fixture(raw,''),'football')
                 # Preserve the authoritative API-Football fixture identity.
@@ -16952,6 +18215,57 @@ async def sports_finished_all(request: Request, hours:int=Query(48,ge=1,le=168),
     return _ksn_priority_response(payload, _ksn_request_country(request))
 
 _LIVE_TASK=None
+# V663 STEP 064: isolated staging football live feed
+_KSN_V663_FOOTBALL_LIVE_TASK = None
+_KSN_V663_FOOTBALL_LIVE_CACHE = None
+_KSN_V663_FOOTBALL_LIVE_UPDATED = 0.0
+
+
+async def _ksn_v663_football_live_compute():
+    """Staging-only: no providers, databases or persistent snapshots."""
+    global _KSN_V663_FOOTBALL_LIVE_CACHE
+    global _KSN_V663_FOOTBALL_LIVE_UPDATED
+
+    data = _ksn_v663_memory_football_scores(live=1)
+    games = [
+        game for game in data.get("games", [])
+        if isinstance(game, dict)
+        and game.get("providerStatusShort")
+        in ("1H", "HT", "2H", "ET", "P", "BT")
+    ]
+
+    games = _ksn_sort_football_rows(games)
+
+    payload = {
+        "count": len(games),
+        "games": games,
+        "updatedAt": datetime.now(timezone.utc).isoformat(),
+        "sports": ["football"],
+        "partial": False,
+        "failedSports": [],
+        "providerMode": "staging-football-memory",
+        "stagingCacheOnly": True,
+        "providerCalls": 0,
+    }
+
+    _KSN_V663_FOOTBALL_LIVE_CACHE = payload
+    _KSN_V663_FOOTBALL_LIVE_UPDATED = time.time()
+    return payload
+
+
+
+async def _ksn_v663_football_live_response(request):
+    """Return only current staging football memory, never stale live data."""
+    payload = await _ksn_v663_football_live_compute()
+    return _ksn_priority_response({
+        **payload,
+        "cached": False,
+        "stale": False,
+        "cacheAgeSeconds": 0,
+    }, _ksn_request_country(request))
+
+
+
 async def _sports_live_compute():
     sports = ["football","rugby","cricket"]
     async def one(sp):
@@ -16988,6 +18302,8 @@ async def _sports_live_compute():
 async def sports_live_all(request: Request):
     """Cache-first live feed: serves the shared last-good snapshot instantly and
     refreshes once in the background; a cold start waits at most ~6s."""
+    if _ksn_v663_staging_football_only():
+        return await _ksn_v663_football_live_response(request)
     global _LIVE_TASK
     snap=_dashboard_snapshot_get("sports_live:last_good")
     cached=(snap or {}).get("data") if isinstance(snap,dict) else None
@@ -18308,6 +19624,11 @@ def _valid_public_news_item(item: dict) -> bool:
 
 @app.middleware("http")
 async def kasi_news_failsoft_middleware(request: Request, call_next):
+    if (
+        _ksn_v663_staging_football_only()
+        and request.url.path in {"/sports/news", "/sports/news/bulletin"}
+    ):
+        return await call_next(request)
     """Never expose an application-level 5xx for public News when last-good data exists."""
     if request.url.path not in {"/sports/news","/sports/news/bulletin"}:
         return await call_next(request)
@@ -18350,6 +19671,51 @@ async def sports_news(
     offset: int = Query(0,ge=0,le=500),
 ):
     """Country-aware, freshness-ranked sports news selected from a larger backend pool."""
+    # V663 Step 298: isolated staging returns verified in-memory football
+    # news only. Do not launch discovery, touch editorial/auth storage,
+    # or read shared persistent snapshots.
+    if _ksn_v663_staging_football_only():
+        snapshot = globals().get("_NEWS_VERIFIED_SNAPSHOT") or {}
+        raw_items = snapshot.get("items", []) if isinstance(snapshot, dict) else []
+        football_items = [
+            item for item in raw_items
+            if isinstance(item, dict)
+            and str(item.get("sport") or "").strip().lower() == "football"
+        ]
+        if q.strip():
+            needle = q.strip().casefold()
+            football_items = [
+                item for item in football_items
+                if needle in (
+                    str(item.get("title") or "") + " "
+                    + str(item.get("description") or "") + " "
+                    + str(item.get("summary") or "")
+                ).casefold()
+            ]
+        page = football_items[offset:offset + limit]
+        visitor_country = (
+            country.strip().upper()
+            or (request.headers.get("cf-ipcountry") or "").strip().upper()
+        )
+        return {
+            "sport": "football",
+            "count": len(page),
+            "poolSize": len(football_items),
+            "offset": offset,
+            "items": page,
+            "country": visitor_country,
+            "continent": "",
+            "countryMethod": "staging-memory",
+            "fallback": "verified-football-memory-only",
+            "source": "Verified in-memory football news",
+            "warming": not bool(football_items),
+            "verified": bool(football_items),
+            "retryAfterMs": 0,
+            "vettingState": {},
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
+            "providerCalls": 0,
+            "stagingCacheOnly": True,
+        }
     # v56 fast path: Cloudflare/header country is free; never block News on
     # external IP geolocation. Full enrichment refreshes asynchronously.
     header_country=(request.headers.get("cf-ipcountry") or request.headers.get("x-vercel-ip-country") or "").strip().upper()
@@ -18473,6 +19839,19 @@ async def sports_news(
 
 @app.get("/sports/news/bulletin")
 async def sports_news_bulletin(request: Request, limit: int = Query(5,ge=1,le=12), country: str = Query("")):
+    # V663 Step 298: bypass first-party editorial DB and news discovery
+    # while staging football-only isolation is active.
+    if _ksn_v663_staging_football_only():
+        data = await sports_news(
+            request=request,
+            sport="football",
+            q="",
+            limit=max(8, limit),
+            country=country,
+            offset=0,
+        )
+        items = list(data.get("items") or [])[:limit]
+        return {**data, "items": items, "count": len(items)}
     try:
         data=await sports_news(request=request,sport="all",q="",limit=max(8,limit),country=country,offset=0)
         live_editorial=[x for x in _editorial_published(limit=50) if x.get("placement")=="live_news"]
@@ -18567,6 +19946,10 @@ def _v485_snapshot_pg_connection():
     return c
 
 def _v485_snapshot_sqlite_get(key):
+    # V663 Step 241: never read shared snapshot SQLite in staging.
+    if _ksn_v663_staging_football_only():
+        return None
+
     try:
         with sqlite3.connect(_SHARED_SNAPSHOT_DB,timeout=1) as c:
             c.execute("CREATE TABLE IF NOT EXISTS snapshots(k TEXT PRIMARY KEY,payload TEXT NOT NULL,updated REAL NOT NULL)")
@@ -18581,6 +19964,9 @@ def _v485_snapshot_sqlite_get(key):
     return None
 
 def _dashboard_snapshot_get(key):
+    # V663 STEP 216: no shared snapshot DB I/O in football-only staging.
+    if _ksn_v663_staging_football_only():
+        return None
     if DATABASE_URL and psycopg2 is not None:
         try:
             c=_v485_snapshot_pg_connection()
@@ -18600,6 +19986,9 @@ def _dashboard_snapshot_get(key):
     return _v485_snapshot_sqlite_get(key)
 
 def _dashboard_snapshot_put(key,payload):
+    # V663 STEP 216: no shared snapshot DB I/O in football-only staging.
+    if _ksn_v663_staging_football_only():
+        return None
     if not isinstance(payload,dict):
         return
     serialized=json.dumps(payload,ensure_ascii=False)
@@ -18797,6 +20186,9 @@ async def _v413_background_revalidate(url:str,key:str):
 
 @app.middleware("http")
 async def v413_universal_shared_cache(request:Request,call_next):
+    # V663 STEP 205-R: bypass persistent cache in football-only staging.
+    if _ksn_v663_staging_football_only():
+        return await call_next(request)
     path=request.url.path
     if request.method!="GET" or path=="/shared/bootstrap" or not path.startswith(_V413_PUBLIC_PREFIXES):
         return await call_next(request)
@@ -18859,6 +20251,79 @@ _V434_BOOTSTRAP_KEYS={
   "cricketTeams": "v363:teams-players:cricket:80",
 }
 
+
+# V663 STEP 092: staging mixed-sport bootstrap filtering
+def _ksn_v663_filter_bootstrap_payload(payload):
+    """Remove explicitly classified Rugby/Cricket rows without changing input."""
+    if not isinstance(payload, dict):
+        return payload
+
+    disabled = {"rugby", "cricket"}
+    collection_keys = (
+        "games", "items", "matches",
+        "predictions", "tips", "videos"
+    )
+
+    def sport_of(row):
+        if not isinstance(row, dict):
+            return ""
+
+        for key in ("sport", "sportType", "sport_type"):
+            value = row.get(key)
+
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+
+        category = row.get("category")
+        if isinstance(category, str):
+            category = category.strip().lower()
+            if category in disabled:
+                return category
+
+        return ""
+
+    result = dict(payload)
+
+    for key in collection_keys:
+        rows = payload.get(key)
+
+        if not isinstance(rows, list):
+            continue
+
+        kept = [
+            row for row in rows
+            if sport_of(row) not in disabled
+        ]
+
+        if len(kept) == len(rows):
+            continue
+
+        result[key] = kept
+
+        # Only update aggregate counts for the primary games/items array.
+        if key in ("games", "items"):
+            if isinstance(result.get("count"), int):
+                result["count"] = len(kept)
+
+            if isinstance(result.get("total"), int):
+                result["total"] = len(kept)
+
+    # V663 STEP 094: sanitize disabled-sport bootstrap metadata
+    for key in ("sports", "failedSports"):
+        values = payload.get(key)
+
+        if isinstance(values, list):
+            result[key] = [
+                value for value in values
+                if not (
+                    isinstance(value, str)
+                    and value.strip().lower() in disabled
+                )
+            ]
+
+    return result
+
+
 def _v434_build_bootstrap()->dict:
     """Disk-only shared LKG payload (sync, SQLite reads). Never calls external providers."""
     def data(key):
@@ -18867,8 +20332,18 @@ def _v434_build_bootstrap()->dict:
         payload=snap.get("data") if isinstance(snap.get("data"),dict) else None
         if payload is None and key=="news_verified_all":
             payload={"items":snap.get("items") or []}
+        if _ksn_v663_staging_football_only() and isinstance(payload,dict):
+            payload=_ksn_v663_filter_bootstrap_payload(payload)
         return {"payload":payload,"updatedAt":snap.get("updated_at")} if payload else None
-    widgets={name:data(key) for name,key in _V434_BOOTSTRAP_KEYS.items()}
+    # V663 STEP 087B: restrict staging bootstrap before snapshot reads
+    keys = _V434_BOOTSTRAP_KEYS
+    if _ksn_v663_staging_football_only():
+        keys = {
+            name: key
+            for name, key in keys.items()
+            if not name.lower().startswith(("rugby", "cricket"))
+        }
+    widgets={name:data(key) for name,key in keys.items()}
     widgets={k:v for k,v in widgets.items() if v and v.get("payload")}
     return {"version":"v407","cacheFirst":True,"widgets":widgets,"generatedAt":datetime.now(timezone.utc).isoformat()}
 
@@ -18888,20 +20363,27 @@ _V434_INLINE_LOCK=asyncio.Lock()
 async def _v434_inline_bootstrap_json()->str:
     """Serialized, script-safe bootstrap JSON, memoized for a few seconds so traffic spikes
     don't each hit SQLite. Returns '' when there is nothing worth inlining."""
+    # V663 STEP 091B: isolate inline bootstrap cache by staging mode
+    mode = "football-only" if _ksn_v663_staging_football_only() else "unrestricted"
     now=time.time()
     c=_V434_INLINE_CACHE
-    if c["json"] and now-c["t"]<_V434_INLINE_TTL: return c["json"]
+    if c.get("mode")==mode and c["json"] and now-c["t"]<_V434_INLINE_TTL:
+        return c["json"]
     async with _V434_INLINE_LOCK:
-        if c["json"] and time.time()-c["t"]<_V434_INLINE_TTL: return c["json"]
+        if c.get("mode")==mode and c["json"] and time.time()-c["t"]<_V434_INLINE_TTL:
+            return c["json"]
         try:
             body=await asyncio.to_thread(_v434_build_bootstrap)
             raw=json.dumps(body,ensure_ascii=False,separators=(",",":")) if body.get("widgets") else ""
             # Make the JSON safe inside an inline <script>: no </script>, <!--, or JS line terminators.
             raw=raw.replace("<","\\u003c").replace(">","\\u003e").replace("&","\\u0026").replace("\u2028","\\u2028").replace("\u2029","\\u2029")
-            c["json"]=raw; c["t"]=time.time()
+            c["json"]=raw; c["t"]=time.time(); c["mode"]=mode
         except Exception as exc:
             log.debug("v434 inline bootstrap failed: %s",exc)
-            return c["json"]   # serve slightly stale copy, or '' -> client falls back to fetch
+            # Do not serve stale JSON belonging to a different mode.
+            if c.get("mode")==mode:
+                return c["json"]
+            return str()
         return c["json"]
 
 _KSN_V621_SCORE_FIX_JS=r"""<script id="ksn-v621-score-format">(function(){
@@ -19046,6 +20528,10 @@ async def _v662_bounded_prediction_recovery():
                 "recoveredAt": datetime.now(timezone.utc).isoformat(),
             }
 
+            if _ksn_staging_seo_test_mode():
+                return {"skipped": "staging_publication_disabled"}
+            if os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging":
+                raise PermissionError("V663 staging recovery publication requires verified database isolation")
             _dashboard_snapshot_put(key, {"data": payload})
 
             return {
@@ -19103,10 +20589,30 @@ async def _v427_shared_cache_warmer():
     try:
       while True:
         try:
+            if _v448_api_football_provider_locked():
+                await asyncio.sleep(180)
+                continue
             transport=httpx.ASGITransport(app=app)
             # 90s timeout: the old 12s cut cold feeds off before they could be stored, so visitors paid for it.
             async with httpx.AsyncClient(transport=transport,base_url="http://ksn.internal",timeout=90.0) as c:
-                await asyncio.gather(*[hit(c,u) for u in (slow+date_urls()+["/sports/videos?sport=all&limit=8&offset=0","/sports/news/bulletin?limit=5"])])
+                # V663 STEP 057B: staging football-only warmer filter
+                warm_urls = slow + date_urls() + [
+                    "/sports/videos?sport=all&limit=8&offset=0",
+                    "/sports/news/bulletin?limit=5",
+                ]
+                if _ksn_v663_staging_football_only():
+                    warm_urls = [
+                        url for url in warm_urls
+                        if not _ksn_v663_disabled_sport_path(
+                            str(url).split("?", 1)[0]
+                        )
+                        and not str(url).startswith(
+                            "/sports/videos?sport=all"
+                        )
+                    ]
+                await asyncio.gather(
+                    *[hit(c, url) for url in warm_urls]
+                )
                 # V662: Recovery is opt-in and never runs for public requests.
                 if os.getenv("KSN_V662_PREDICTION_RECOVERY_ENABLED", "0") == "1":
                     try:
@@ -19507,7 +21013,7 @@ async def seo_news_article(slug: str, source: str = Query("")):
 <div class="ks-original"><a href="{escape(publisher_url,quote=True)}" target="_blank" rel="noopener noreferrer">Read Original Article</a></div>
 <nav class="ks-original" aria-label="Explore Kasi Sports News"><a href="/football">Football</a> · <a href="/rugby">Rugby</a> · <a href="/cricket">Cricket</a> · <a href="/about">About</a> · <a href="/privacy">Privacy</a></nav>
 </main></body></html>"""
-    return HTMLResponse(article_html,status_code=200)
+    return HTMLResponse(_ksn_v663_isolate_standalone_ads(article_html),status_code=200)
 
 @app.get("/sports/news/article")
 async def sports_news_article(url: str = Query(...)):
@@ -20294,7 +21800,8 @@ async def _fantasyplayoffs_midnight_refresh_loop():
     # The last-good player snapshot remains available during this brief delay.
     await asyncio.sleep(75)
     try:
-        await _fantasyplayoffs_refresh_all_big5()
+        if not _v448_api_football_provider_locked():
+            await _fantasyplayoffs_refresh_all_big5()
     except Exception as exc:
         log.warning("FantasyPlayoffs startup warm failed: %s", exc)
     while True:
@@ -20303,7 +21810,8 @@ async def _fantasyplayoffs_midnight_refresh_loop():
         target=datetime.combine(tomorrow, datetime.min.time(), tzinfo=tz)
         await asyncio.sleep(max(60,(target-now).total_seconds()))
         try:
-            await _fantasyplayoffs_refresh_all_big5()
+            if not _v448_api_football_provider_locked():
+                await _fantasyplayoffs_refresh_all_big5()
             log.info("FantasyPlayoffs Big-5 daily player snapshot refreshed at Johannesburg midnight")
         except Exception as exc:
             log.warning("FantasyPlayoffs midnight refresh failed: %s", exc)
@@ -20597,7 +22105,7 @@ def _init_growth_db():
         );
         """)
 
-if not _ksn_staging_seo_test_mode():
+if (not _ksn_staging_seo_test_mode() and _ksn_v663_staging_background_jobs_allowed()):
     _init_growth_db()
 
 SEO_PAGE_TYPES = {
@@ -20656,18 +22164,18 @@ def _seo_legacy_aliases() -> dict:
 def _seo_registry_pages():
     now = datetime.now(timezone.utc).isoformat()
     rows = [
-        {"path":"/", "pageType":"home", "title":"Kasi Sports News", "description":"Live scores, AI predictions, match intelligence, sports analysis and results."},
+        {"path":"/", "pageType":"home", "title":"KasiScore", "description":"Live scores, AI predictions, match intelligence, sports analysis and results."},
         {"path":"/today", "pageType":"today", "title":"Today's Sports Intelligence", "description":"Today's live matches, fixtures, predictions, results and AI sports intelligence.", "indexable":False},
         {"path":"/weekend", "pageType":"weekend", "title":"Weekend Sports Intelligence", "description":"Weekend football, rugby and sports fixtures, predictions, live matches and AI analysis."},
         {"path":"/football", "pageType":"sport", "title":"Football Scores, Fixtures & Competitions", "description":"Follow football scores, fixtures, results, predictions, tables, teams and competitions from around the world."},
         {"path":"/rugby", "pageType":"sport", "title":"Rugby Scores, Fixtures & Competitions", "description":"Follow rugby fixtures, results, standings, teams and competitions across supported leagues and tournaments."},
         {"path":"/cricket", "pageType":"sport", "title":"Cricket Scores, Fixtures & Competitions", "description":"Follow cricket scores, fixtures, results, teams and competitions across supported leagues and tournaments."},
         {"path":"/tennis", "pageType":"sport", "title":"Tennis Scores, Fixtures & Results", "description":"Tennis scores, fixtures, results and match intelligence across supported competitions."},
-        {"path":"/about", "pageType":"info", "title":"About", "description":"About Kasi Sports News and its sports coverage."},
-        {"path":"/contact", "pageType":"info", "title":"Contact Kasi Sports News", "description":"Contact Kasi Sports News for general and commercial enquiries."},
-        {"path":"/privacy", "pageType":"info", "title":"Privacy Policy", "description":"Kasi Sports News privacy information."},
-        {"path":"/terms", "pageType":"info", "title":"Terms of Use", "description":"Kasi Sports News terms of use."},
-        {"path":"/cookies", "pageType":"info", "title":"Cookie Policy", "description":"Kasi Sports News cookie information."},
+        {"path":"/about", "pageType":"info", "title":"About", "description":"About KasiScore and its sports coverage."},
+        {"path":"/contact", "pageType":"info", "title":"Contact KasiScore", "description":"Contact KasiScore for general and commercial enquiries."},
+        {"path":"/privacy", "pageType":"info", "title":"Privacy Policy", "description":"KasiScore privacy information."},
+        {"path":"/terms", "pageType":"info", "title":"Terms of Use", "description":"KasiScore terms of use."},
+        {"path":"/cookies", "pageType":"info", "title":"Cookie Policy", "description":"KasiScore cookie information."},
     ]
     country_hubs = {}
     for c in COMPETITION_REGISTRY:
@@ -20692,7 +22200,7 @@ def _seo_registry_pages():
         base = f"/{sport}/{country_slug}/{competition_slug}"
         name = c.get("name")
         rows.extend([
-            {"path":base,"pageType":"competition","title":f"{name} Fixtures, Results & Predictions","description":f"Follow {name} fixtures, results, predictions and standings on Kasi Sports News."},
+            {"path":base,"pageType":"competition","title":f"{name} Fixtures, Results & Predictions","description":f"Follow {name} fixtures, results, predictions and standings on KasiScore."},
             {"path":f"{base}/fixtures","pageType":"fixtures","title":f"{name} Fixtures","description":f"Upcoming {name} fixtures, match dates and kickoff times."},
             {"path":f"{base}/results","pageType":"results","title":f"{name} Results","description":f"Latest {name} results, completed matches and confirmed scores."},
             {"path":f"{base}/predictions","pageType":"predictions","title":f"{name} Predictions","description":f"{name} match predictions and supporting analysis when qualifying data is available."},
@@ -20700,7 +22208,7 @@ def _seo_registry_pages():
             # STEP 4 v324: these route families currently render mostly generic hub copy.
             # Keep the URLs functional for visitors, but do not advertise/index them
             # until each route has substantive first-party content.
-            {"path":f"{base}/today","pageType":"today","title":f"{name} Today","description":f"{name} matches today, live scores, statistics and Kasi Sports News AI intelligence.","indexable":False},
+            {"path":f"{base}/today","pageType":"today","title":f"{name} Today","description":f"{name} matches today, live scores, statistics and KasiScore AI intelligence.","indexable":False},
             {"path":f"{base}/news","pageType":"news","title":f"{name} News","description":f"Latest {name} news, team analysis, injuries and match intelligence.","indexable":False},
             {"path":f"{base}/injuries","pageType":"injuries","title":f"{name} Injuries","description":f"{name} injury updates, availability and match impact.","indexable":False},
             {"path":f"{base}/stats","pageType":"team-stats","title":f"{name} Statistics","description":f"{name} statistics, form, goals, corners and performance intelligence.","indexable":False},
@@ -20775,6 +22283,132 @@ def _ksn_v483_sitemap_team_rows() -> list[dict]:
              "pageType": "team"} for team_id in sorted(verified)]
 
 
+def _ksn_v663_seo_content_available(path: str, cached_data=None) -> bool:
+    """Validate supplied football SEO snapshots without external I/O."""
+    from datetime import datetime, timezone
+    import math
+    parts = [x for x in str(path or '').strip('/').split('/') if x]
+    if not parts or parts[0] != 'football':
+        return True
+    if len(parts) <= 3:
+        return True
+    if len(parts) != 4:
+        return False
+    section = parts[3]
+    keys = {'fixtures': 'matches', 'results': 'matches', 'predictions': 'predictions', 'table': 'table'}
+    if section not in keys or not isinstance(cached_data, dict):
+        return False
+    rows = cached_data.get(keys[section])
+    if not isinstance(rows, (list, tuple)):
+        return False
+
+    def text(value):
+        if value is None or isinstance(value, bool):
+            return ''
+        if isinstance(value, dict):
+            value = value.get('name') or value.get('value')
+        return str(value).strip() if value is not None else ''
+
+    def pick(row, *fields):
+        for field in fields:
+            item = row.get(field)
+            if item is not None and text(item):
+                return item
+        return None
+
+    def team(row, side):
+        teams = row.get('teams')
+        if isinstance(teams, dict):
+            name = text(teams.get(side))
+            if name:
+                return name
+        return text(pick(row, side, side + 'Team', side + 'Name', side + '_team', side + '_name'))
+
+    def kickoff(row):
+        fixture = row.get('fixture')
+        fixture = fixture if isinstance(fixture, dict) else {}
+        value = pick(row, 'date', 'datetime', 'kickoff', 'startTime', 'commenceTime', 'utcDate', 'fixtureDate') or fixture.get('date')
+        if not value:
+            return None
+        try:
+            stamp = str(value).strip().replace('Z', '+00:00')
+            parsed = datetime.fromisoformat(stamp)
+            if parsed.tzinfo is None:
+                return None
+            return parsed.astimezone(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def status(row):
+        fixture = row.get('fixture')
+        fixture = fixture if isinstance(fixture, dict) else {}
+        state = fixture.get('status')
+        state = state if isinstance(state, dict) else {}
+        return text(pick(row, 'statusShort', 'status', 'shortStatus') or state.get('short')).lower()
+
+    def score(row, side):
+        goals = row.get('goals')
+        scores = row.get('scores')
+        goals = goals if isinstance(goals, dict) else {}
+        scores = scores if isinstance(scores, dict) else {}
+        item = goals.get(side) if side in goals else row.get(side + 'Score') if row.get(side + 'Score') is not None else scores.get(side)
+        if isinstance(item, dict):
+            item = item.get('current') if item.get('current') is not None else item.get('total')
+        if isinstance(item, bool):
+            return None
+        try:
+            number = float(item)
+            if math.isfinite(number) and number.is_integer() and (0 <= number < 100):
+                return int(number)
+        except (TypeError, ValueError, OverflowError):
+            pass
+        return None
+
+    def prediction_value(row):
+        item = row.get('prediction')
+        if item is None:
+            for field in ('predictedWinner', 'tip', 'selection', 'pick'):
+                candidate = row.get(field)
+                if candidate is not None:
+                    item = candidate
+                    break
+        if isinstance(item, dict):
+            for key in ('selection', 'pick', 'tip', 'winner', 'predictedWinner', 'prediction', 'recommendedBet', 'outcome'):
+                selected = text(item.get(key))
+                if selected:
+                    return selected
+            return ''
+        return text(item)
+    completed = {'ft', 'aet', 'pen', 'final', 'finished', 'complete', 'completed'}
+    non_playable = {'canc', 'cancelled', 'canceled', 'pst', 'postponed', 'abd', 'abandoned', 'susp', 'suspended', 'int', 'interrupted', 'awd', 'wo', 'walkover'}
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        if not isinstance(row, dict) or not row:
+            continue
+        home = team(row, 'home')
+        away = team(row, 'away')
+        if section == 'fixtures':
+            date = kickoff(row)
+            if home and away and (date is not None) and (date > now) and (status(row) not in completed | non_playable):
+                return True
+        elif section == 'results':
+            if home and away and (status(row) in completed) and (score(row, 'home') is not None) and (score(row, 'away') is not None):
+                return True
+        elif section == 'predictions':
+            date = kickoff(row)
+            if home and away and (date is not None) and (date > now) and (status(row) not in completed | non_playable) and prediction_value(row):
+                return True
+        elif section == 'table':
+            name = text(pick(row, 'team', 'teamName', 'name'))
+            position = pick(row, 'position', 'rank')
+            try:
+                valid_position = not isinstance(position, bool) and str(position).strip().isdigit() and (int(position) > 0)
+            except (TypeError, ValueError, OverflowError):
+                valid_position = False
+            if name and valid_position:
+                return True
+    return False
+
 async def _seo_dynamic_rows() -> list[dict]:
     """SEO registry plus durable canonical team URLs; never call upstream APIs."""
     return list(_seo_registry_pages()) + _ksn_v483_sitemap_team_rows()
@@ -20782,13 +22416,46 @@ async def _seo_dynamic_rows() -> list[dict]:
 @app.get("/seo/sitemap.xml", response_class=Response)
 @app.get("//sitemap.xml", response_class=Response)
 async def seo_sitemap():
+    # V663: staging must never advertise production URLs.
+    staging_identity = " ".join(
+        os.getenv(key, "")
+        for key in (
+            "RENDER_SERVICE_NAME",
+            "RENDER_EXTERNAL_URL",
+            "KSN_ENV",
+            "KSN_ENVIRONMENT",
+        )
+    ).lower()
+
+    if "staging" in staging_identity:
+        return Response(
+            content=(
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                '</urlset>'
+            ),
+            media_type="application/xml",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+            },
+        )
     rows = await _seo_dynamic_rows()
     origin = KASI_PUBLIC_ORIGIN
     body = ['<?xml version="1.0" encoding="UTF-8"?>','<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     seen = set()
     for r in rows:
         path = r.get("path", "")
+        if _ksn_v663_staging_football_only():
+            normalized_path = str(path).lower().rstrip("/") or "/"
+            if _ksn_v663_disabled_sport_path(normalized_path):
+                continue
         if not path or path in seen or not r.get("indexable", True):
+            continue
+        if not _ksn_v663_seo_content_available(
+            path,
+            _SSR_CACHE.get("competition-data:" + str(path).strip("/")),
+        ):
             continue
         seen.add(path)
         meta = SEO_PAGE_TYPES.get(r.get("pageType", ""), {"priority":"0.5","changefreq":"daily"})
@@ -20995,6 +22662,10 @@ async def _ssr_player_section(slug: str, path: str) -> tuple[str,str,str]:
 
 def _v440_snapshot_get_exact(keys: list[str]) -> list[tuple[str, dict]]:
     """Targeted shared-LKG reads only; never scans the snapshot table."""
+    # V663 Step 241: never read shared snapshot SQLite in staging.
+    if _ksn_v663_staging_football_only():
+        return []
+
     rows=[]
     seen=set()
     for key in keys:
@@ -21618,12 +23289,51 @@ def _v440_cached_ssr_html(path: str) -> str:
         return ""
     section=parts[3] if len(parts)>3 else "overview"
     data=_v442_cached_competition_data(path)
+    _SSR_CACHE["competition-data:" + path.strip("/")] = data
     name=_ssr_text(comp.get("name") or parts[2].replace("-"," ").title())
     rows=data["matches"]
     finished={"ft","aet","pen","final","finished","complete","completed"}
 
     if section=="fixtures":
-        selected=[x for x in rows if _v441_status(x).lower() not in finished][:12]
+        # V663: only verified, future, active fixtures belong in SEO.
+        from datetime import datetime, timezone
+
+        def upcoming_kickoff(item):
+            value = str(_v441_date(item) or "").strip()
+            if not value:
+                return None
+            try:
+                kickoff = datetime.fromisoformat(
+                    value.replace("Z", "+00:00")
+                )
+                if kickoff.tzinfo is None:
+                    return None
+                return kickoff.astimezone(timezone.utc)
+            except (ValueError, TypeError, OverflowError):
+                return None
+
+        now_utc = datetime.now(timezone.utc)
+        excluded_statuses = finished | {
+            "canc", "cancelled", "canceled",
+            "pst", "postponed", "abd", "abandoned",
+            "susp", "suspended", "int", "interrupted",
+            "awd", "wo", "walkover"
+        }
+
+        future_rows = []
+        for item in rows:
+            status = str(_v441_status(item) or "").strip().lower()
+            kickoff = upcoming_kickoff(item)
+
+            if status in excluded_statuses:
+                continue
+            if kickoff is None or kickoff <= now_utc:
+                continue
+
+            future_rows.append((kickoff, item))
+
+        future_rows.sort(key=lambda pair: pair[0])
+        selected = [item for _, item in future_rows[:12]]
         heading=f"Cached {name} fixtures"
     elif section=="results":
         selected=[x for x in rows if _v441_status(x).lower() in finished or
@@ -21683,7 +23393,7 @@ def _v440_cached_ssr_html(path: str) -> str:
             return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
         except (ValueError, TypeError, OverflowError):
             return 0
-    selected=sorted(selected,key=sort_stamp,reverse=True)
+    selected=sorted(selected,key=sort_stamp,reverse=(section!="fixtures"))
     rows_html=[]
     for x in selected:
         home=_v441_team_name(x,"home"); away=_v441_team_name(x,"away")
@@ -21795,7 +23505,7 @@ async def _ssr_generic_section(path: str) -> tuple[str,str,str]:
     p=path.rstrip("/") or "/"
     registry={r.get("path"):r for r in _seo_registry_pages()}
     row=registry.get(p,{})
-    title=row.get("title") or "Kasi Sports News"
+    title=row.get("title") or "KasiScore"
     desc=row.get("description") or "Live scores, fixtures, predictions, results and sports intelligence."
     parts=[x for x in p.split("/") if x]
     sport_slug=parts[0] if parts else ""
@@ -21817,36 +23527,36 @@ async def _ssr_generic_section(path: str) -> tuple[str,str,str]:
 
     info_sections=""
     if p=="/about":
-        h1="About Kasi Sports News"
-        intro="Kasi Sports News is an independent sports information platform focused on making scores, fixtures, results, predictions and match intelligence easy to explore."
+        h1="About KasiScore"
+        intro="KasiScore is an independent sports information platform focused on making scores, fixtures, results, predictions and match intelligence easy to explore."
         info_sections=("<section><h2>What we cover</h2><p>Our coverage brings together football, rugby and cricket information with competition pages, match results, standings and data-led prediction features.</p></section>"
                        "<section><h2>How to use our information</h2><p>Scores and statistics are presented as sports information. Prediction features are analysis, not guarantees of an outcome. We aim to keep navigation clear so readers can move from a sport to a competition, fixture, result or table.</p></section>")
     elif p=="/contact":
-        h1="Contact Kasi Sports News"
-        intro="Contact Kasi Sports News for general, editorial, correction, privacy, advertising or commercial enquiries."
+        h1="Contact KasiScore"
+        intro="Contact KasiScore for general, editorial, correction, privacy, advertising or commercial enquiries."
         info_sections=('<section><h2>Get in touch</h2><p>Email <a href="mailto:admin@kasilivescore.com">admin@kasilivescore.com</a>. Please include enough detail for us to understand the page, article or enquiry you are referring to.</p></section>')
     elif p=="/privacy":
         h1="Privacy Policy"
-        intro="This privacy notice explains how Kasi Sports News processes information when you use the website and how advertising and measurement services may use data."
-        info_sections=("<section><h2>Information we process</h2><p>When you use Kasi Sports News, technical information such as your IP address, browser and device information, pages viewed, approximate location derived from network information, timestamps and diagnostic data may be processed to operate, secure, measure and improve the service. Cookies, web beacons, local storage and similar identifiers may also be used where applicable.</p></section>"
-                       "<section><h2>Google advertising and third parties</h2><p>Kasi Sports News uses or may use Google advertising services. Google and other third-party vendors may use cookies, web beacons, IP addresses or other identifiers to serve, measure and improve advertising, including personalized advertising where permitted and consented to. Third parties may place or read cookies on your browser or use similar technologies as a result of advertising or measurement on this site.</p></section>"
+        intro="This privacy notice explains how KasiScore processes information when you use the website and how advertising and measurement services may use data."
+        info_sections=("<section><h2>Information we process</h2><p>When you use KasiScore, technical information such as your IP address, browser and device information, pages viewed, approximate location derived from network information, timestamps and diagnostic data may be processed to operate, secure, measure and improve the service. Cookies, web beacons, local storage and similar identifiers may also be used where applicable.</p></section>"
+                       "<section><h2>Google advertising and third parties</h2><p>KasiScore uses or may use Google advertising services. Google and other third-party vendors may use cookies, web beacons, IP addresses or other identifiers to serve, measure and improve advertising, including personalized advertising where permitted and consented to. Third parties may place or read cookies on your browser or use similar technologies as a result of advertising or measurement on this site.</p></section>"
                        "<section><h2>Consent and your choices</h2><p>Where consent is legally required, visitors are offered choices for advertising and related technologies through the site's consent management platform. You can accept, reject or manage applicable consent choices and can also control cookies through your browser. Personalized advertising choices may also be managed through Google's advertising settings.</p></section>"
                        "<section><h2>Third-party services and links</h2><p>The site may use third-party services for advertising, analytics, media, sports data or site functionality. Those services may process information under their own privacy policies. Links to third-party websites are governed by the privacy practices of those sites.</p></section>"
                        "<section><h2>Privacy enquiries</h2><p>For privacy questions or requests, contact <a href=\"mailto:admin@kasilivescore.com\">admin@kasilivescore.com</a>. See our <a href=\"/cookies\">Cookie Policy</a> for more information about cookies and similar technologies.</p></section>")
     elif p=="/terms":
         h1="Terms of Use"
-        intro="These terms describe the conditions for using Kasi Sports News and its sports information."
+        intro="These terms describe the conditions for using KasiScore and its sports information."
         info_sections=("<section><h2>Sports information</h2><p>Scores, fixtures, statistics, standings, news, predictions and other sports information are provided for general informational purposes. Data may change as matches progress or source information is corrected, and uninterrupted availability or complete accuracy is not guaranteed.</p></section>"
                        "<section><h2>Predictions</h2><p>Prediction, probability and match-intelligence features are analytical outputs and do not guarantee sporting outcomes or financial returns. Users remain responsible for how they use the information.</p></section>"
-                       "<section><h2>Third-party data and links</h2><p>Kasi Sports News may display information, media or links supplied by third parties. Third-party services and websites operate under their own terms and policies, and their availability or content is outside our control.</p></section>"
-                       "<section><h2>Intellectual property</h2><p>The Kasi Sports News name, site design and original editorial or analytical content are protected by applicable intellectual-property laws. Team names, competition names, badges, trademarks and third-party media remain the property of their respective owners where applicable.</p></section>"
+                       "<section><h2>Third-party data and links</h2><p>KasiScore may display information, media or links supplied by third parties. Third-party services and websites operate under their own terms and policies, and their availability or content is outside our control.</p></section>"
+                       "<section><h2>Intellectual property</h2><p>The KasiScore name, site design and original editorial or analytical content are protected by applicable intellectual-property laws. Team names, competition names, badges, trademarks and third-party media remain the property of their respective owners where applicable.</p></section>"
                        "<section><h2>Site use</h2><p>Do not misuse the service, interfere with its operation, scrape or access restricted systems in an unauthorized manner, or use the site in a way that violates applicable law or the rights of others.</p></section>"
-                       "<section><h2>Availability and liability</h2><p>The service may be changed, suspended or temporarily unavailable, including when external data services are unavailable. To the extent permitted by applicable law, Kasi Sports News is not responsible for losses arising solely from reliance on delayed, incomplete or inaccurate sports information or third-party content.</p></section>")
+                       "<section><h2>Availability and liability</h2><p>The service may be changed, suspended or temporarily unavailable, including when external data services are unavailable. To the extent permitted by applicable law, KasiScore is not responsible for losses arising solely from reliance on delayed, incomplete or inaccurate sports information or third-party content.</p></section>")
     elif p=="/cookies":
         h1="Cookie Policy"
-        intro="This page explains how cookies and similar technologies are used on Kasi Sports News and the choices available to visitors."
+        intro="This page explains how cookies and similar technologies are used on KasiScore and the choices available to visitors."
         info_sections=("<section><h2>Cookies and similar technologies</h2><p>Cookies, local storage, web beacons and similar technologies may be used for essential site functions, preferences, security, audience measurement, performance and advertising. These technologies can store or access identifiers and information about a browser or device.</p></section>"
-                       "<section><h2>Google and advertising cookies</h2><p>Kasi Sports News uses or may use Google advertising services. Google and other third-party vendors may use cookies or similar identifiers to serve and measure ads. Advertising cookies may be used to personalize advertising where permitted and where the visitor has provided the required consent.</p></section>"
+                       "<section><h2>Google and advertising cookies</h2><p>KasiScore uses or may use Google advertising services. Google and other third-party vendors may use cookies or similar identifiers to serve and measure ads. Advertising cookies may be used to personalize advertising where permitted and where the visitor has provided the required consent.</p></section>"
                        "<section><h2>Consent choices</h2><p>Where consent is required, visitors can accept, reject or manage applicable advertising and measurement choices through the site's consent message. You can revisit available consent controls and can also delete or block cookies using your browser settings. Restricting cookies may affect some site functions.</p></section>"
                        "<section><h2>More information</h2><p>For more information about how information is processed, see our <a href=\"/privacy\">Privacy Policy</a>. Privacy questions can be sent to <a href=\"mailto:admin@kasilivescore.com\">admin@kasilivescore.com</a>.</p></section>")
     elif p=="/today":
@@ -21880,12 +23590,12 @@ async def _ssr_generic_section(path: str) -> tuple[str,str,str]:
             context_copy={
                 "Fixtures":f"Use this page to move between upcoming {competition} matches, the latest results, predictions and the current table. Match information is updated as supported data becomes available.",
                 "Results":f"Review completed {competition} matches here, then use the fixtures, predictions and table pages for the wider competition picture.",
-                "Predictions":f"Kasi Sports News prediction pages present data-led match probabilities and analysis when qualifying information is available. They are informational estimates, not guaranteed outcomes.",
+                "Predictions":f"KasiScore prediction pages present data-led match probabilities and analysis when qualifying information is available. They are informational estimates, not guaranteed outcomes.",
                 "Table":f"Use the {competition} table together with fixtures and results to understand competition position and recent match context."
             }
             info_sections += f'<section><h2>About this {section_name.lower()} page</h2><p>{_ssr_text(context_copy[section_name])}</p></section>'
     else:
-        h1=title.replace(" | Kasi Sports News",""); intro=desc
+        h1=title.replace(" | KasiScore",""); intro=desc
 
     # v455 Step 11: visitor-facing, registry/data-aware context. This remains deliberately
     # cache/registry-only and cannot trigger API-Football or OddsPAPI.
@@ -21894,7 +23604,7 @@ async def _ssr_generic_section(path: str) -> tuple[str,str,str]:
         info_sections += (f'<section class="v455-seo-context"><h2>About this {_ssr_text(section_name.lower() if section_name else "coverage")}</h2>'
                           f'<p>{_ssr_text(_v453_context)}</p></section>')
 
-    breadcrumb_items=[("Kasi Sports News","/")]
+    breadcrumb_items=[("KasiScore","/")]
     if parts: breadcrumb_items.append((sport,f"/{sport_slug}"))
     if country: breadcrumb_items.append((country,f"/{sport_slug}/{country_slug}"))
     if competition: breadcrumb_items.append((competition,f"/{sport_slug}/{country_slug}/{competition_slug}"))
@@ -21983,12 +23693,12 @@ def _seo_abs_url(path: str) -> str:
 
 def _seo_org_schema() -> dict:
     base=(KASI_PUBLIC_ORIGIN or "https://kasilivescore.com").rstrip("/")
-    return {"@type":"Organization","@id":base+"/#organization","name":"Kasi Sports News","url":base+"/",
+    return {"@type":"Organization","@id":base+"/#organization","name":"KasiScore","url":base+"/",
             "logo":{"@type":"ImageObject","@id":base+"/#logo","url":base+"/kasi-sports-news-logo.png","contentUrl":base+"/kasi-sports-news-logo.png","width":512,"height":512}}
 
 def _seo_site_schema() -> dict:
     base=(KASI_PUBLIC_ORIGIN or "https://kasilivescore.com").rstrip("/")
-    return {"@type":"WebSite","@id":base+"/#website","url":base+"/","name":"Kasi Sports News",
+    return {"@type":"WebSite","@id":base+"/#website","url":base+"/","name":"KasiScore",
             "publisher":{"@id":base+"/#organization"},"inLanguage":"en-ZA"}
 
 def _seo_breadcrumb_schema(path: str) -> dict | None:
@@ -21996,7 +23706,7 @@ def _seo_breadcrumb_schema(path: str) -> dict | None:
     if p == "/": return None
     parts=[x for x in p.split("/") if x]
     labels={"football":"Football","rugby":"Rugby","cricket":"Cricket","tennis":"Tennis","psl":"PSL","caf":"CAF","afcon":"AFCON","uefa":"UEFA","mls":"MLS"}
-    items=[{"@type":"ListItem","position":1,"name":"Kasi Sports News","item":_seo_abs_url("/")}]
+    items=[{"@type":"ListItem","position":1,"name":"KasiScore","item":_seo_abs_url("/")}]
     cur=""
     for i,part in enumerate(parts, start=2):
         cur += "/"+part
@@ -22201,6 +23911,27 @@ def _seo_graph_schema(path: str, title: str, desc: str) -> dict:
     if event_nodes:
         graph.extend(event_nodes)
         graph[2]["mainEntity"]={"@id":event_nodes[0]["@id"]}
+    # V663: describe verified football competitions without upstream calls.
+    try:
+        parts = [x for x in str(path or "").strip("/").split("/") if x]
+        if len(parts) >= 3 and parts[0] == "football":
+            competition = _v440_competition(path)
+            if isinstance(competition, dict):
+                competition_name = str(competition.get("name") or "").strip()
+                if competition_name:
+                    competition_url = _seo_abs_url('/'.join([''] + parts[:3]))
+                    competition_node = {
+                        "@type": "SportsOrganization",
+                        "@id": competition_url + "#competition",
+                        "name": competition_name,
+                        "url": competition_url,
+                        "sport": "Football",
+                    }
+                    graph.append(competition_node)
+                    graph[2]["about"] = {"@id": competition_node["@id"]}
+    except Exception:
+        # Structured-data enrichment must not break SSR.
+        pass
     return {"@context":"https://schema.org","@graph":graph}
 
 def _ksn_seo_route_shell() -> str:
@@ -22227,7 +23958,23 @@ def _ksn575_competition_workspace(path: str) -> str:
 
 async def _render_seo_document(path: str) -> str:
     key=f"doc:{path}"; cached=_SSR_CACHE.get(key)
-    if cached is not None: return cached
+    _ksn_seo_parts = [x for x in str(path).strip("/").split("/") if x]
+    _ksn_seo_section = (
+        len(_ksn_seo_parts) == 4
+        and _ksn_seo_parts[0] == "football"
+        and _ksn_seo_parts[3] in {"fixtures", "results", "predictions", "table"}
+    )
+    if cached is not None and not _ksn_seo_section:
+        return cached
+    if cached is not None and _ksn_seo_section:
+        _ksn_snapshot = _SSR_CACHE.get("competition-data:" + path.strip("/"))
+        _ksn_eligible = _ksn_v663_seo_content_available(path, _ksn_snapshot)
+        _ksn_cached_indexable = bool(
+            re.search(r"""<meta\s+name=["\']robots["\']\s+content=["\']index,""", cached, re.I)
+        )
+        if _ksn_eligible == _ksn_cached_indexable:
+            return cached
+        _SSR_CACHE.pop(key, None)
     if path.startswith("/match/"):
         match=await _ssr_match_data(path.split("/",2)[2]);
         if match: title,desc,section=_ssr_match_section(match,path)
@@ -22262,14 +24009,37 @@ async def _render_seo_document(path: str) -> str:
     )
     html=html.replace('</head>', branding_tags+'</head>', 1)
     public=KASI_PUBLIC_ORIGIN; canonical=f"{public}{path}"
-    clean_title=str(title or '').strip() or 'Kasi Sports News'
-    # STEP 2 v316: strip every trailing brand suffix, including legacy double-appended titles.
-    while re.search(r'\s*\|\s*Kasi Sports News\s*$', clean_title, flags=re.I):
-        clean_title=re.sub(r'\s*\|\s*Kasi Sports News\s*$', '', clean_title, flags=re.I).strip()
-    full_title = 'Kasi Sports News' if clean_title.lower() == 'kasi sports news' else f'{clean_title} | Kasi Sports News'
+    clean_title = str(title or "").strip() or "KasiScore"
+    while re.search(
+        r"\s*\|\s*(?:KasiScore|Kasi Sports News)\s*$",
+        clean_title,
+        flags=re.I
+    ):
+        clean_title = re.sub(
+            r"\s*\|\s*(?:KasiScore|Kasi Sports News)\s*$",
+            "",
+            clean_title,
+            flags=re.I
+        ).strip()
+    full_title = (
+        "KasiScore"
+        if clean_title.lower() in {"kasiscore", "kasi sports news", ""}
+        else f"{clean_title} | KasiScore"
+    )
     html=re.sub(r'<title>.*?</title>',f'<title>{escape(full_title)}</title>',html,count=1,flags=re.S|re.I)
     html=re.sub(r'<meta name="description" content="[^"]*">',f'<meta name="description" content="{escape(desc,quote=True)}">',html,count=1)
-    if re.search(r'<link rel="canonical"',html): html=re.sub(r'<link rel="canonical"[^>]*>',f'<link rel="canonical" href="{escape(canonical,quote=True)}">',html,count=1)
+    if re.search(r'<link\s+rel=["\']canonical["\']', html, flags=re.I):
+        html = re.sub(
+            r'<link\s+rel=["\']canonical["\'][^>]*>',
+            f'<link rel="canonical" href="{escape(canonical, quote=True)}">',
+            html, count=1, flags=re.I
+        )
+    else:
+        html = html.replace(
+            "</head>",
+            f'<link rel="canonical" href="{escape(canonical, quote=True)}"></head>',
+            1
+        )
     schema=json.dumps(_seo_graph_schema(path, full_title, desc),ensure_ascii=False)
     if '<script id="seoSchema"' in html: html=re.sub(r'<script id="seoSchema"[^>]*>.*?</script>',f'<script id="seoSchema" type="application/ld+json">{schema}</script>',html,count=1,flags=re.S)
     else: html=html.replace('</head>',f'<script id="seoSchema" type="application/ld+json">{schema}</script></head>',1)
@@ -22332,6 +24102,22 @@ async def _render_seo_document(path: str) -> str:
     html = re.sub(r"<meta\s+name=[\"\']robots[\"\'][^>]*>\s*", '', html, flags=re.I)
     registry_row = next((r for r in _seo_registry_pages() if r.get("path") == path), None)
     page_indexable = True if registry_row is None else bool(registry_row.get("indexable", True))
+
+    # V663: do not index empty or unverified football data sections.
+    # Only inspect existing in-memory data; never query providers or databases.
+    _seo_parts = [x for x in str(path).strip("/").split("/") if x]
+    if (
+        page_indexable
+        and len(_seo_parts) == 4
+        and _seo_parts[0] == "football"
+        and _seo_parts[3] in {"fixtures", "results", "predictions", "table"}
+    ):
+        _seo_snapshot = _SSR_CACHE.get("competition-data:" + path.strip("/"))
+        page_indexable = _ksn_v663_seo_content_available(
+            path,
+            _seo_snapshot,
+        )
+
     robots_value = ("index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"
                     if page_indexable else "noindex,follow")
     core_meta=(f'<meta name="description" content="{escape(final_desc,quote=True)}">'
@@ -22417,7 +24203,7 @@ async def launch_check():
         "football_api_configured": bool(os.getenv("AFOOT_API_KEY","").strip()),
         "search_console_configured": bool(os.getenv("GOOGLE_SITE_VERIFICATION","").strip()),
         "public_domain_configured": bool(os.getenv("PUBLIC_SITE_URL","").strip()),
-        "postgres_configured": bool(os.getenv("DATABASE_URL","").strip()),
+        "postgres_configured": bool(DATABASE_URL),
     }
     return {
         "ok_for_current_stage": all((
@@ -22759,24 +24545,124 @@ async def localized_home(lang:str):
         return HTMLResponse(await _render_seo_document(f"/{segment}"), headers={"Cache-Control":"public, max-age=300"})
     return _seo_localized_html(lang)
 
+
+# V663 STEP 076D: staging frontend football-only mode
+def _ksn_v663_inject_frontend_mode(html: str) -> str:
+    if not _ksn_v663_staging_football_only():
+        return html
+
+    marker = 'id="ksn-v663-football-only-mode"'
+
+    if marker in html:
+        return html
+
+    if "<head>" not in html.lower():
+        return html
+
+    flag = (
+        '<script id="ksn-v663-football-only-mode">'
+        'window.KSN_V663_FOOTBALL_ONLY=true;'
+        '</script>'
+    )
+
+    # V663 STEP 082: early staging flag initialization
+    head_start = html.lower().find("<head>")
+    insert_at = head_start + len("<head>")
+    return html[:insert_at] + flag + html[insert_at:]
+
+
 @app.get("/",response_class=HTMLResponse)
-async def root_webapp(): return HTMLResponse(_v434_inject_bootstrap(await _render_seo_document("/"),await _v434_inline_bootstrap_json()),headers={"Cache-Control":"no-cache, max-age=0, must-revalidate", "CDN-Cache-Control":"public, s-maxage=30, stale-while-revalidate=60", "X-KSN-Build":"v426"})
+async def root_webapp(): return HTMLResponse(_ksn_v663_inject_frontend_mode(_v434_inject_bootstrap(await _render_seo_document("/"),await _v434_inline_bootstrap_json())),headers={"Cache-Control":"no-cache, max-age=0, must-revalidate", "CDN-Cache-Control":"public, s-maxage=30, stale-while-revalidate=60", "X-KSN-Build":"v426"})
 @app.get("/today",response_class=HTMLResponse)
 async def ssr_today(): return HTMLResponse(await _render_seo_document("/today"),headers={"Cache-Control":"public, max-age=300"})
 @app.get("/weekend",response_class=HTMLResponse)
 async def ssr_weekend(): return HTMLResponse(await _render_seo_document("/weekend"),headers={"Cache-Control":"public, max-age=300"})
 
 
+
+# V663 STEP 174: isolate standalone AdSense in football-only staging.
+def _ksn_v663_isolate_standalone_ads(html_doc: str) -> str:
+    if not _ksn_v663_staging_football_only():
+        return html_doc
+
+    html_doc = re.sub(
+        r'<script\b(?=[^>]*\bsrc=["\'][^"\']*adsbygoogle\.js)[^>]*>\s*</script>',
+        '',
+        html_doc,
+        flags=re.I,
+    )
+
+    html_doc = re.sub(
+        r'<div\b(?=[^>]*\bclass=["\'][^"\']*ks-article-ad)[^>]*>'
+        r'.*?</div>',
+        '',
+        html_doc,
+        flags=re.I | re.S,
+    )
+
+    html_doc = re.sub(
+        r'<script\b[^>]*>[^<]*\badsbygoogle\b[^<]*</script>',
+        '',
+        html_doc,
+        flags=re.I | re.S,
+    )
+
+    html_doc = re.sub(
+        r'<meta\b[^>]*\bname=["\']google-adsense-account["\'][^>]*>',
+        '',
+        html_doc,
+        flags=re.I,
+    )
+
+    # V663 STEP 177-R2: disable dynamic Match Centre ads in staging.
+    # V663 STEP 194-R2: remove Match Centre advertising code
+    # in football-only staging without removing application JS.
+    ad_start = 'function ksnMatchAd(){'
+    ad_end = 'new MutationObserver(()=>ksnMatchAd()).observe(page,{childList:true,subtree:true});'
+
+    if ad_start in html_doc:
+        if html_doc.count(ad_start) != 1 or html_doc.count(ad_end) != 1:
+            raise ValueError("Unexpected Match Centre ad initializer structure")
+
+        start = html_doc.index(ad_start)
+        end = html_doc.index(ad_end, start) + len(ad_end)
+
+        html_doc = (
+            html_doc[:start]
+            + 'function ksnMatchAd(){}'
+            + html_doc[end:]
+        )
+
+    return html_doc
+
 def _standalone_match_stats_page(entity_id:str, sport:str="football", league:str="") -> str:
     eid=json.dumps(str(entity_id)); sp=json.dumps(str(sport)); lg=json.dumps(str(league or ""))
-    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Match Centre | Kasi Sports News</title><meta name="google-adsense-account" content="ca-pub-5442799591686279"><script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5442799591686279" crossorigin="anonymous"></script><style>
+    return _ksn_v663_isolate_standalone_ads(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Match Centre | KasiScore</title><meta name="google-adsense-account" content="ca-pub-5442799591686279"><script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5442799591686279" crossorigin="anonymous"></script><style>
 :root{{--bg:#000;--card:#000;--card2:#111;--line:#222;--text:#f5f5f5;--muted:#9b9b9b;--accent:#38bdf8;--green:#38bdf8;--yellow:#60a5fa;--red:#ef4444}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif}}a{{color:inherit;text-decoration:none}}main{{max-width:1180px;margin:auto;padding:16px}}.top{{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}}.back{{border:1px solid var(--line);padding:9px 13px;border-radius:9px;background:#111;cursor:pointer}}.ksn-head{{display:flex;align-items:center;gap:9px;font-weight:900}}.ksn-head img{{width:38px;height:38px;object-fit:contain;border-radius:50%}}.card{{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin:14px 0;box-shadow:0 10px 28px rgba(0,0,0,.14)}}.muted{{color:var(--muted)}}.tiny{{font-size:11px}}.hero{{display:grid;grid-template-columns:1fr 190px 1fr;gap:16px;align-items:center;text-align:center}}.team img{{width:72px;height:72px;object-fit:contain}}.team-name{{font-size:18px;font-weight:900;margin-top:8px}}.score{{font-size:38px;font-weight:900}}.status{{font-size:12px;color:var(--accent);font-weight:800}}.scorers{{font-size:12px;color:#d5d9df;line-height:1.7;margin-top:8px}}.tabs{{display:flex;gap:7px;overflow:auto;position:sticky;top:0;background:rgba(5,6,7,.96);padding:8px 0;z-index:5}}.tabs button{{background:var(--card);color:#fff;border:1px solid var(--line);border-radius:999px;padding:9px 13px;white-space:nowrap;cursor:pointer}}.tabs button.active{{border-color:var(--accent);color:var(--accent)}}.panel{{display:none}}.panel.active{{display:block}}.grid2{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}}.stat{{display:grid;grid-template-columns:1fr 1.3fr 1fr;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--line);text-align:center}}.stat b:first-child{{text-align:left}}.stat b:last-child{{text-align:right}}.bar{{height:5px;background:#222;border-radius:4px;overflow:hidden;margin-top:4px}}.bar>i{{display:block;height:100%;background:var(--accent)}}.event{{display:grid;grid-template-columns:52px 1fr;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}}.minute{{font-weight:900;color:var(--accent)}}.goal{{border-left:3px solid var(--green);padding-left:10px}}.cardevt{{border-left:3px solid var(--yellow);padding-left:10px}}.redevt{{border-left:3px solid var(--red);padding-left:10px}}.person{{display:grid;grid-template-columns:34px 1fr auto;gap:9px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);cursor:pointer}}.person img{{width:34px;height:34px;border-radius:50%;object-fit:cover;background:#222}}.pill{{font-size:10px;border:1px solid var(--line);padding:3px 6px;border-radius:999px;color:var(--muted)}}.metric{{padding:10px;background:var(--card2);border-radius:9px}}.metric b{{display:block;font-size:18px}}.compare-hero{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0}}.compare-team{{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:14px;padding:16px;background:linear-gradient(135deg,rgba(56,189,248,.13),rgba(0,0,0,.2))}}.compare-team.away{{background:linear-gradient(135deg,rgba(96,165,250,.09),rgba(0,0,0,.2));box-shadow:inset 4px 0 0 rgba(96,165,250,.65)}}.compare-team.home{{box-shadow:inset 4px 0 0 var(--accent)}}.compare-name{{font-size:18px;font-weight:900}}.compare-kpis{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}}.compare-kpi{{padding:9px;border-radius:9px;background:rgba(255,255,255,.045)}}.compare-kpi span{{display:block;color:var(--muted);font-size:10px;text-transform:uppercase}}.compare-kpi b{{font-size:17px}}.compare-bar{{display:grid;grid-template-columns:72px 1fr 72px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}}.compare-bar .track{{height:7px;border-radius:99px;background:#151a20;overflow:hidden;display:flex}}.compare-bar .homefill{{background:var(--accent);height:100%}}.compare-bar .awayfill{{background:#60a5fa;height:100%;margin-left:auto}}.section-title{{margin:20px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}}.standings-table{{width:100%;border-collapse:collapse;min-width:620px}}.standings-table th,.standings-table td{{padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle;text-align:center;white-space:nowrap}}.standings-table th{{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:800}}.standings-table th:nth-child(2),.standings-table td:nth-child(2){{text-align:left;min-width:180px}}.standings-table td:last-child{{font-weight:900}}.standings-wrap{{overflow:auto}}.standing-team{{display:flex;align-items:center;gap:9px}}.standing-team img{{width:25px;height:25px;object-fit:contain}}.standings-focus{{box-shadow:inset 4px 0 0 var(--accent);background:rgba(56,189,248,.06)}}.form-row{{display:flex;gap:4px;justify-content:center}}.form-pill{{display:inline-flex;align-items:center;justify-content:center;width:23px;height:23px;border-radius:5px;font-size:11px;font-weight:900;background:#555}}.form-w{{background:#16833a}}.form-d{{background:#777}}.form-l{{background:#c8273e}}.empty{{color:var(--muted);padding:14px 0}}.ksn-ad{{min-height:110px;margin:18px 0;border:1px solid var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;overflow:hidden;contain:layout paint}}.ksn-ad ins{{width:100%;min-height:90px}}pre{{font-size:11px}}
 @media(max-width:760px){{.compare-hero{{grid-template-columns:1fr}}.compare-kpis{{grid-template-columns:repeat(2,1fr)}}.compare-bar{{grid-template-columns:55px 1fr 55px}}.top{{gap:10px;align-items:flex-start}}.top>b{{font-size:12px;text-align:right}}.hero{{grid-template-columns:minmax(0,1fr) 88px minmax(0,1fr);gap:7px;padding:13px 8px}}.team img{{width:48px;height:48px}}.team-name{{font-size:13px;overflow-wrap:anywhere}}.score{{font-size:27px}}.scorers{{font-size:10px}}.grid2,.grid3{{grid-template-columns:1fr}}main{{padding:9px}}.tabs{{margin-left:-9px;margin-right:-9px;padding-left:9px;padding-right:9px}}}}
-</style></head><body><main><div class="top"><a class="back" href="/" onclick="event.preventDefault();return kasiBackHome();">← Back to Home</a><div class="ksn-head"><img src="/kasi-sports-news-logo.png" alt="Kasi Sports News"><b>Kasi Sports News · Match Centre</b></div></div><div id="page"><div class="card">Loading match data…</div></div></main><script>
+</style></head><body><main><div class="top"><a class="back" href="/" onclick="event.preventDefault();return kasiBackHome();">← Back to Home</a><div class="ksn-head"><img src="/kasi-sports-news-logo.png" alt="KasiScore"><b>KasiScore | Match Centre</b></div></div><div id="page"><div class="card">Loading match data…</div></div></main><script>
 const ID={eid},SPORT={sp},LEAGUE={lg},page=document.getElementById('page');function ksnMatchAd(){{if(document.getElementById('ksnMatchCentreAd'))return;const cards=page.querySelectorAll('.card');if(cards.length<2)return;const box=document.createElement('div');box.id='ksnMatchCentreAd';box.className='ksn-ad';box.innerHTML='<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-5442799591686279" data-ad-slot="3030391892" data-ad-format="auto" data-full-width-responsive="true"></ins>';cards[0].insertAdjacentElement('afterend',box);try{{(window.adsbygoogle=window.adsbygoogle||[]).push({{}})}}catch(_){{}};const ins=box.querySelector('ins');new MutationObserver((m,o)=>{{if(ins.getAttribute('data-ad-status')==='unfilled'){{box.remove();o.disconnect()}}else if(ins.getAttribute('data-ad-status')==='filled')o.disconnect()}}).observe(ins,{{attributes:true,attributeFilter:['data-ad-status']}});}}new MutationObserver(()=>ksnMatchAd()).observe(page,{{childList:true,subtree:true}});function kasiBackHome(){{try{{if(history.length>1){{history.back();return false}}}}catch(_){{}}location.replace('/');return false;}}const E=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
-const N=v=>{{const n=Number(String(v??'').replace('%',''));return Number.isFinite(n)?n:null}};const localDate=v=>{{try{{return new Date(v).toLocaleString(undefined,{{weekday:'short',day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}})}}catch(_){{return v||'—'}}}};async function J(u,timeout=20000){{let lastErr=null;for(let attempt=0;attempt<2;attempt++){{const c=new AbortController(),t=setTimeout(()=>c.abort('request-timeout'),timeout);try{{const r=await fetch(u,{{signal:c.signal,headers:{{Accept:'application/json'}},cache:attempt?'no-store':'default'}});if(!r.ok)throw Error('HTTP '+r.status);return await r.json()}}catch(e){{lastErr=e;if(attempt===0)await new Promise(r=>setTimeout(r,250));}}finally{{clearTimeout(t)}}}}throw new Error(lastErr?.name==='AbortError'||String(lastErr||'').toLowerCase().includes('abort')?'Data provider is taking longer than expected. Please retry.':(lastErr?.message||'Data temporarily unavailable.'))}}const playerUrl=id=>id?'/players/'+encodeURIComponent(id):'#';
+const ksnValidCalendarDate=s=>{{
+ const m=String(s).match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})T(\\d{{2}}):(\\d{{2}})(?::(\\d{{2}})(?:\\.\\d{{1,3}})?)?(Z|([+-])(\\d{{2}}):(\\d{{2}}))$/i);
+ if(!m)return false;
+ const y=Number(m[1]),mo=Number(m[2]),day=Number(m[3]);
+ const hh=Number(m[4]),mm=Number(m[5]),ss=Number(m[6]||0);
+ if(y<1||mo<1||mo>12||hh>23||mm>59||ss>59)return false;
+ const leap=y%4===0&&(y%100!==0||y%400===0);
+ const days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+ if(day<1||day>days[mo-1])return false;
+ if(m[8]&&(Number(m[9])>23||Number(m[10])>59))return false;
+ return true;
+}};
+const N=v=>{{const n=Number(String(v??'').replace('%',''));return Number.isFinite(n)?n:null}};const localDate=v=>{{if(!ksnValidCalendarDate(String(v??'').trim()))return 'Time unavailable';
+const s=String(v??'').trim();
+if(!/^\\d{{4}}-\\d{{2}}-\\d{{2}}T\\d{{2}}:\\d{{2}}(?::\\d{{2}}(?:\\.\\d{{1,9}})?)?(?:Z|[+-]\\d{{2}}:\\d{{2}})$/i.test(s))return 'Time unavailable';
+if(typeof s!=='string'||!/(?:Z|[+-][0-9]{{2}}:[0-9]{{2}})$/i.test(s.trim()))return 'Kickoff time unavailable';const d=new Date(s);if(!Number.isFinite(d.getTime()))return 'Kickoff time unavailable';
+if(!Number.isFinite(d.getTime()))return 'Time unavailable';
+try{{return d.toLocaleString(undefined,{{weekday:'short',day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}})}}catch(_){{return 'Time unavailable'}}
+}};async function J(u,timeout=20000){{let lastErr=null;for(let attempt=0;attempt<2;attempt++){{const c=new AbortController(),t=setTimeout(()=>c.abort('request-timeout'),timeout);try{{const r=await fetch(u,{{signal:c.signal,headers:{{Accept:'application/json'}},cache:attempt?'no-store':'default'}});if(!r.ok)throw Error('HTTP '+r.status);return await r.json()}}catch(e){{lastErr=e;if(attempt===0)await new Promise(r=>setTimeout(r,250));}}finally{{clearTimeout(t)}}}}throw new Error(lastErr?.name==='AbortError'||String(lastErr||'').toLowerCase().includes('abort')?'Data provider is taking longer than expected. Please retry.':(lastErr?.message||'Data temporarily unavailable.'))}}const playerUrl=id=>id?'/players/'+encodeURIComponent(id):'#';
 function matchTeamTheme(id,name){{
  const key=String(name||'').toLowerCase().replace(/[^a-z0-9]/g,'');
  const known={{
@@ -22835,9 +24721,23 @@ function wireTabs(){{
  window.addEventListener('hashchange',activate);
  activate();
 }}
+function ksnMatchStatus(fx){{
+ const st=fx?.status||{{}};
+ const code=String(st.short||'').trim().toUpperCase();
+ const label=String(st.long||'').trim();
+ if(['FT','AET','PEN'].includes(code))return label||'Full Time';
+ if(['1H','2H','HT','ET','BT','P','LIVE','INT'].includes(code))
+   return label||'Live';
+ if(['NS','TBD'].includes(code))return label||'Scheduled';
+ if(['PST','POSTPONED'].includes(code))return label||'Postponed';
+ if(['CANC','CANCELLED'].includes(code))return label||'Cancelled';
+ if(['ABD','ABANDONED'].includes(code))return label||'Abandoned';
+ if(['SUSP','SUSPENDED'].includes(code))return label||'Suspended';
+ return label||'Match status unavailable';
+}}
 async function load(force=false){{try{{const qs=new URLSearchParams();if(LEAGUE)qs.set('league',LEAGUE);if(force)qs.set('refresh','1');const tipMode=new URLSearchParams(location.search).get('tip')==='1';const d=tipMode?{{match:{{}}}}:await J('/sports/'+encodeURIComponent(SPORT)+'/match/'+encodeURIComponent(ID)+(qs.toString()?'?'+qs.toString():'')),m=d.match||{{}};if(SPORT!=='football'){{page.innerHTML=`<div class="card"><h1>${{E(m.home||m.homeTeam||'Home')}} vs ${{E(m.away||m.awayTeam||'Away')}}</h1><div class="score">${{E(m.homeScore??'—')}} - ${{E(m.awayScore??'—')}}</div><p class="muted">${{E(m.league||SPORT)}} · ${{E(m.status||'')}}</p></div><div class="card"><h2>Sport-specific match data</h2><pre style="white-space:pre-wrap">${{E(JSON.stringify(d.statistics?.sportSpecific||d.statistics||{{}},null,2))}}</pre></div>`;return}}const matchStatus=String(m.fixture?.status?.short||m.status?.short||m.fixture?.status?.long||m.status||'').toUpperCase();const isPreMatch=['NS','TBD','SCHEDULED','NOT STARTED','POSTPONED'].some(x=>matchStatus===x||matchStatus.includes(x));if(isPreMatch||!m.teams?.home?.name||!m.teams?.away?.name){{try{{const q=await J('/tip-stats/'+encodeURIComponent(ID),16000),h=q.home||{{}},a=q.away||{{}},o=q.odds||{{}},hh=q.headToHead||[],ht=matchTeamTheme(h.id,h.name),at=matchTeamTheme(a.id,a.name);page.innerHTML=`<div class="card hero"><div class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px">${{h.badge?`<img src="${{E(h.badge)}}">`:''}}<div class="team-name">${{E(h.name||'Home')}}</div></div><div><div class="status">TIP OF THE DAY · PRE-MATCH STATS</div><div class="score">vs</div><div class="tiny muted">Live match statistics will populate when available.</div></div><div class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px">${{a.badge?`<img src="${{E(a.badge)}}">`:''}}<div class="team-name">${{E(a.name||'Away')}}</div></div></div><div class="grid3"><div class="metric"><span class="tiny muted">Home wins · last 5</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}}/${{E(h.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">Away wins · last 5</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}}/${{E(a.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">H2H matches</span><b>${{E(hh.length)}}</b></div></div><div class="card"><h2>1X2 Odds</h2><p>${{E(h.name||'Home')}}: <b>${{E(o.home??'—')}}</b> · Draw: <b>${{E(o.draw??'—')}}</b> · ${{E(a.name||'Away')}}: <b>${{E(o.away??'—')}}</b></p><p class="tiny muted">${{E(o.bookmaker||'No bookmaker odds currently returned')}}</p></div><div class="grid2"><div class="card" style="${{teamCardStyle(ht)}}"><h2>${{E(h.name||'Home')}} · Last 5</h2>${{(h.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div><div class="card" style="${{teamCardStyle(at)}}"><h2>${{E(a.name||'Away')}} · Last 5</h2>${{(a.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div></div><div class="card"><h2>Head to Head</h2>${{hh.map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No H2H returned.</div>'}}</div><div class="card"><h2>Pre-match Statistics</h2><div class="grid3"><div class="metric"><span class="tiny muted">${{E(h.name||'Home')}} recent wins</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">${{E(a.name||'Away')}} recent wins</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">H2H sample</span><b>${{E(hh.length)}}</b></div></div><p class="tiny muted">These are pre-match indicators from available recent-form, H2H and bookmaker data. Live match statistics populate after kickoff when the provider returns them.</p></div><div class="card"><h2>Standings</h2>${{standingsTable(d.standings,m.teams?.home?.id,m.teams?.away?.id)}}</div>`;return}}catch(_){{}}}}
-const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(fx.status?.long||'Match')}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs"><button class="active" data-p="overview">Overview</button><button data-p="timeline">Timeline</button><button data-p="stats">Statistics</button><button data-p="standings">Standings</button><button data-p="lineups">Lineups</button><button data-p="players">Player Stats</button><button data-p="intel">Match Intelligence</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14))}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{lineups(lu)}}</div></section><section class="panel" id="players"><div class="card"><h2>Player Match Data</h2><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></section><section class="panel" id="intel">${{intelligence(d.insights)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}load();
-</script></body></html>"""
+const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs"><button class="active" data-p="overview">Overview</button><button data-p="timeline">Timeline</button><button data-p="stats">Statistics</button><button data-p="standings">Standings</button><button data-p="lineups">Lineups</button><button data-p="players">Player Stats</button><button data-p="intel">Match Intelligence</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14))}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{lineups(lu)}}</div></section><section class="panel" id="players"><div class="card"><h2>Player Match Data</h2><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></section><section class="panel" id="intel">${{intelligence(d.insights)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}load();
+</script></body></html>""")
 
 def _standalone_sports_page(kind:str, entity_id:str, sport:str="football", league:str="") -> str:
     # Small independent document: it never hydrates the dashboard underneath.
@@ -22867,7 +24767,25 @@ main{{max-width:1120px;margin:auto;padding:18px}}a{{color:var(--accent)}}.top{{d
 <script>
 const V622_TEAMS={json.dumps(_ksn_v622_teams_js())},KIND={json.dumps(kind)},ID={eid},SPORT={sp},LEAGUE={lg},page=document.getElementById('page');function kasiBackHome(){{try{{if(history.length>1){{history.back();return false}}}}catch(_){{}}location.replace('/');return false;}}
 const E=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
-const FD=v=>{{try{{return new Date(v).toLocaleString('en-ZA',{{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}}).replace(',', ' ·')}}catch(_){{return v||'—'}}}};
+const ksnValidCalendarDate=s=>{{
+ const m=String(s).match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})T(\\d{{2}}):(\\d{{2}})(?::(\\d{{2}})(?:\\.\\d{{1,3}})?)?(Z|([+-])(\\d{{2}}):(\\d{{2}}))$/i);
+ if(!m)return false;
+ const y=Number(m[1]),mo=Number(m[2]),day=Number(m[3]);
+ const hh=Number(m[4]),mm=Number(m[5]),ss=Number(m[6]||0);
+ if(y<1||mo<1||mo>12||hh>23||mm>59||ss>59)return false;
+ const leap=y%4===0&&(y%100!==0||y%400===0);
+ const days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+ if(day<1||day>days[mo-1])return false;
+ if(m[8]&&(Number(m[9])>23||Number(m[10])>59))return false;
+ return true;
+}};
+const FD=v=>{{if(!ksnValidCalendarDate(String(v??'').trim()))return '?';
+ const s=String(v??'').trim();
+ if(!/^\\d{{4}}-\\d{{2}}-\\d{{2}}T\\d{{2}}:\\d{{2}}(?::\\d{{2}}(?:\\.\\d{{1,3}})?)?(?:Z|[+-]\\d{{2}}:\\d{{2}})$/i.test(s))return '?';
+ const d=new Date(s);
+ if(!Number.isFinite(d.getTime()))return '?';
+ return d.toLocaleString('en-ZA',{{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}}).replace(',', ' ?');
+}};
 const TEAM_CACHE_KEY='ks:v481:team-page:'+ID;
 function teamTheme(id,name){{
  const key=String(name||'').toLowerCase().replace(/[^a-z0-9]/g,'');
@@ -23951,6 +25869,16 @@ def _ksn_v657_match_document(fixture_id):
 
 @app.get("/matches/{fixture_id}/stats",response_class=HTMLResponse)
 async def canonical_match_stats_page(fixture_id:str):
+    # V663 Step 115S: fail closed for database-dependent SEO in isolated staging.
+    if _ksn_v663_staging_football_only():
+        return Response(
+            content="Staging SEO rendering is temporarily disabled.",
+            status_code=503,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+            },
+        )
     return HTMLResponse(
         _ksn_v657_match_document(fixture_id),
         headers={
@@ -23961,6 +25889,15 @@ async def canonical_match_stats_page(fixture_id:str):
 
 @app.get("/teams/{team_id}",response_class=HTMLResponse)
 async def canonical_team_page(team_id:str):
+    if _ksn_v663_staging_football_only():
+        return Response(
+            content="Staging SEO rendering is temporarily disabled.",
+            status_code=503,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+            },
+        )
     # This is the first matching FastAPI route for /teams/{...}. Resolve public
     # tokens here, not in the later shadowed /teams/{slug:path} SEO handler.
     if re.fullmatch(r"[1-9][0-9]{0,11}", team_id):
@@ -23983,6 +25920,15 @@ async def canonical_team_page(team_id:str):
 
 @app.get("/players/{player_id}",response_class=HTMLResponse)
 async def canonical_player_page(player_id:str):
+    if _ksn_v663_staging_football_only():
+        return Response(
+            content="Staging SEO rendering is temporarily disabled.",
+            status_code=503,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+            },
+        )
     if re.fullmatch(r"[1-9][0-9]{0,11}",player_id):
         canonical_id=int(player_id)
     elif "--" in player_id:
@@ -25853,6 +27799,20 @@ def _ksn_v482_team_response(token: str):
 
 @app.middleware("http")
 async def ksn_v482_team_seo_guard(request: Request, call_next):
+    # V663 Step 115S: block database-dependent team SEO in isolated staging.
+    if (
+        _ksn_v663_staging_football_only()
+        and request.method in ("GET", "HEAD")
+        and re.fullmatch(r"/teams/[^/]+/?", request.url.path)
+    ):
+        return Response(
+            content="Staging SEO rendering is temporarily disabled.",
+            status_code=503,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+            },
+        )
     if _ksn_staging_seo_test_mode():
         return await ksn_staging_seo_test_gate(request, call_next)
     match = re.fullmatch(r"/teams/([^/]+)/?", request.url.path)
@@ -27057,6 +29017,10 @@ def ksn_v661_big5_snapshot_audit(
     season: int = Query(2026, ge=2026, le=2026),
     x_ksn_repair_token: str = Header(default=""),
 ):
+    # V663 STEP 232: block direct PostgreSQL access in football-only staging.
+    if _ksn_v663_staging_football_only():
+        raise HTTPException(status_code=503, detail="Staging database isolation")
+
     import os
     import secrets
     import psycopg2
