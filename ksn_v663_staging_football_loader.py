@@ -7,7 +7,7 @@ Only trusted server-side code may invoke publish_football_fixtures.
 
 from datetime import datetime, timezone
 
-MAX_FIXTURES = 100
+MAX_FIXTURES = 5000
 CACHE_KEY = "fixtures:V663_STAGING:verified"
 
 ALLOWED_STATUSES = frozenset({

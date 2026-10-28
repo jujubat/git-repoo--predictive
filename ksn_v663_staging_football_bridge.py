@@ -65,8 +65,8 @@ async def refresh_staging_football_memory(
     if not isinstance(response, list):
         raise ValueError("Provider fixtures list missing")
 
-    if len(response) > 100:
-        raise ValueError("Provider batch exceeds 100 fixtures")
+    if len(response) > 5000:
+        raise ValueError("Provider batch exceeds 5000-fixture safety limit")
 
     normalized = []
 
