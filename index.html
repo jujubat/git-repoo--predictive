@@ -17510,6 +17510,223 @@ else wire();
 })();
 </script>
 
+
+<script id="ksn-v663-public-football-text-only">
+/* V663 STEP 461: full dashboard decorative symbol cleanup.
+   Pure presentation: no data, route, API, or application logic changes. */
+(function(){
+  if(window.KSN_V663_FOOTBALL_ONLY!==true)return;
+  const NON_FOOTBALL=/\b(?:rugby|cricket)\b/i;
+  // Emoji, dingbats, checkmarks, blocks, geometric shapes, monochrome glyphs,
+  // arrows, pictographs, decorative bullets, and emoji variation sequences.
+  const DECOR=/[\p{Extended_Pictographic}\p{Regional_Indicator}\u200D\u20E3\u2190-\u21FF\u2300-\u23FF\u2500-\u259F\u25A0-\u27BF\u2900-\u297F\u2B00-\u2BFF\uFE0E\uFE0F\u2022\u2039\u203A\u00AB\u00BB]/gu;
+  const CHROME_ROOTS=['#ks537SportNav','#ks537Sidebar','#ks538Bar','#ks537Header'];
+  const PRESERVE='script,style,noscript,textarea,pre,code,svg,math,canvas,.recharts-wrapper,.apexcharts-canvas,.highcharts-container,[data-ksn-preserve-symbols]';
+  const GRAPHIC_PRESERVE='.chart,.chart-container,[class*="chart-"],.team-logo,.team-crest,.club-logo,.club-crest,.flag,.badge-logo';
+  const CONTROL='button,a,[role="button"],[role="tab"],[role="menuitem"],.nav-item,.group-toggle';
+  let busy=false;
+  let queued=false;
+
+  function textOnly(value){return (value||'').replace(DECOR,'').replace(/\s+/g,' ').trim();}
+  function isProtected(node){return !!(node.parentElement && node.parentElement.closest(PRESERVE));}
+  function readText(el){
+    const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
+    let str='';
+    while(walker.nextNode()){
+      if(!isProtected(walker.currentNode))str+=textOnly(walker.currentNode.nodeValue);
+    }
+    return str.trim();
+  }
+  function iconOwnerLabel(owner){
+    return textOnly(owner.getAttribute('aria-label')||owner.getAttribute('title')||
+      owner.getAttribute('data-label')||'');
+  }
+  function removeDecorativeIcon(el){
+    if(el.closest(GRAPHIC_PRESERVE))return;
+    const owner=el.closest(CONTROL);
+    if(!owner)return;
+    if(owner.closest(GRAPHIC_PRESERVE))return;
+    const label=readText(owner);
+    if(!label){
+      const replacement=iconOwnerLabel(owner);
+      // Never turn an icon-only functional action into an unnamed control.
+      if(!replacement)return;
+      owner.appendChild(document.createTextNode(replacement));
+    }
+    el.remove();
+  }
+  function scrubText(root){
+    const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+    const nodes=[];
+    while(walker.nextNode())nodes.push(walker.currentNode);
+    for(const node of nodes){
+      if(isProtected(node))continue;
+      const before=node.nodeValue||'';
+      const after=before.replace(DECOR,'');
+      if(after!==before)node.nodeValue=after;
+    }
+  }
+  function scrubControlGraphics(root){
+    for(const icon of [...root.querySelectorAll(
+      'button svg,a svg,[role="button"] svg,[role="tab"] svg,'+
+      'button i,a i,[role="button"] i,[role="tab"] i,'+
+      'button .material-icons,a .material-icons,'+
+      'button .material-symbols-outlined,a .material-symbols-outlined,'+
+      'button [class*="fa-"],a [class*="fa-"]'
+    )])removeDecorativeIcon(icon);
+  }
+  function clean(){
+    if(busy)return;
+    busy=true;
+    try{
+      // Preserve the earlier football-only navigation restriction.
+      for(const selector of CHROME_ROOTS){
+        const root=document.querySelector(selector);
+        if(!root)continue;
+        for(const item of [...root.querySelectorAll(CONTROL+',option')]){
+          if(NON_FOOTBALL.test(item.textContent||''))item.remove();
+        }
+      }
+      // Entire dashboard presentation, not only the sidebar: do not strip
+      // score delimiters, numerals, percent signs, written labels, or charts.
+      scrubText(document.body);
+      scrubControlGraphics(document.body);
+    }finally{busy=false;}
+  }
+  function schedule(){
+    if(queued)return;
+    queued=true;
+    requestAnimationFrame(()=>{queued=false;clean();});
+  }
+  function launch(){
+    if(!document.body)return;
+    const style=document.createElement('style');
+    style.id='ksn-v663-text-chrome-css';
+    style.textContent=[
+      '#ks537Sidebar .nav-item::before,#ks537Sidebar .nav-item::after,',
+      '#ks537Sidebar .group-toggle::before,#ks537Sidebar .group-toggle::after,',
+      '#ks537SportNav button::before,#ks537SportNav button::after,',
+      '#ks538Bar button::before,#ks538Bar button::after,',
+      '#ks537Header button::before,#ks537Header button::after',
+      '{content:none!important;background-image:none!important}',
+      '#ks537Sidebar .material-icons,#ks537Sidebar .material-symbols-outlined,',
+      '#ks537SportNav .material-icons,#ks538Bar .material-icons',
+      '{display:none!important}'
+    ].join('');
+    document.head.appendChild(style);
+    clean();
+    // Sidebar, cards and responsive controls can be re-created later.
+    const observer=new MutationObserver(schedule);
+    observer.observe(document.body,{childList:true,subtree:true,characterData:true});
+    window.addEventListener('pageshow',schedule);
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',launch,{once:true});
+  else launch();
+})();
+</script>
+
+<script id="ksn-v663-official-contact-sidebar">
+/* V663 STEP 455: contact navigation only; no external requests or decorative icons. */
+(function(){
+  function ensureContactLink(){
+    const sidebar=document.querySelector('#ks537Sidebar');
+    if(!sidebar)return;
+    if(sidebar.querySelector('a[data-ksn-contact-link="1"]'))return;
+    const existing=[...sidebar.querySelectorAll('a,button')]
+      .find(el=>(el.textContent||'').trim().toLowerCase()==='contact');
+    if(existing && existing.tagName==='A'){
+      existing.setAttribute('href','/contact');
+      existing.dataset.ksnContactLink='1';
+      return;
+    }
+    const link=document.createElement('a');
+    link.href='/contact';
+    link.className='nav-item';
+    link.dataset.ksnContactLink='1';
+    link.textContent='Contact';
+    sidebar.appendChild(link);
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',ensureContactLink,{once:true});
+  }else ensureContactLink();
+  /* The dashboard can re-render its sidebar after initial load. */
+  window.addEventListener('load',ensureContactLink,{once:true});
+})();
+</script>
+<script id="ksn-v663-tip-sidebar-focus">
+/* V663 STEP 465: Focus the existing Tip of the Day widget when its
+   sidebar button is chosen. Do not change routing, sources, or predictions. */
+(function(){
+  if (window.KSN_V663_FOOTBALL_ONLY !== true) return;
+  const SIDEBAR = '#ks537Sidebar';
+  const TIP_BUTTON = 'button[data-key="tip"]';
+  const TIP_WIDGET = '#ks537Tip';
+  let pending = [];
+  function cancelPending() {
+    pending.forEach(id => clearTimeout(id));
+    pending = [];
+  }
+  function tipCard() {
+    const widget = document.querySelector(TIP_WIDGET);
+    const card = widget && widget.closest('section.rail-card');
+    return card && card.contains(widget) ? card : null;
+  }
+  function focusTip() {
+    const sidebar = document.querySelector(SIDEBAR);
+    const button = sidebar && sidebar.querySelector(TIP_BUTTON);
+    const card = tipCard();
+    if (!button || !card || !button.isConnected) return;
+    // App's existing navigation handler may have selected Overview first.
+    sidebar.querySelectorAll('button.nav-item.active').forEach(el => {
+      if (el !== button) el.classList.remove('active');
+    });
+    button.classList.add('active');
+    button.setAttribute('aria-current', 'location');
+    card.classList.add('ksn-v663-tip-focus-target');
+    card.setAttribute('tabindex', '-1');
+    card.scrollIntoView({behavior:'auto', block:'center', inline:'nearest'});
+    try { card.focus({preventScroll:true}); } catch(_) {}
+  }
+  function clearFocus() {
+    cancelPending();
+    const sidebar = document.querySelector(SIDEBAR);
+    if (sidebar) {
+      const button = sidebar.querySelector(TIP_BUTTON);
+      if (button) {
+        button.classList.remove('active');
+        button.removeAttribute('aria-current');
+      }
+    }
+    const card = tipCard();
+    if (card) card.classList.remove('ksn-v663-tip-focus-target');
+  }
+  function start() {
+    if (!document.body || !document.querySelector(SIDEBAR)) return;
+    const style = document.createElement('style');
+    style.id = 'ksn-v663-tip-focus-style';
+    style.textContent = '.ksn-v663-tip-focus-target{outline:2px solid var(--accent,#4285f4)!important;outline-offset:3px!important}';
+    document.head.appendChild(style);
+    // Capture delegation survives sidebar re-render. Allow original handlers
+    // to continue unmodified, then select and scroll after SPA route settles.
+    document.addEventListener('click', function(ev) {
+      const target = ev.target;
+      if (!target || typeof target.closest !== 'function') return;
+      const control = target.closest('#ks537Sidebar button[data-key],#ks537Sidebar a.nav-item');
+      if (!control) return;
+      if (control.matches(TIP_BUTTON)) {
+        cancelPending();
+        focusTip();
+        pending.push(setTimeout(focusTip, 180));
+        pending.push(setTimeout(focusTip, 800));
+      } else {
+        clearFocus();
+      }
+    }, true);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded',start,{once:true});
+  else start();
+})();
+</script>
 </body>
 </html>
 

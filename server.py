@@ -5331,7 +5331,7 @@ async def google_sitemap_xml():
     for row in rows:
         path = str(row.get("path") or "").strip()
         # V663 STEP 073: football-only sitemap filtering
-        if _ksn_v663_staging_football_only():
+        if _ksn_v663_football_only_publication_active():
             normalized_path = path.lower().rstrip("/") or "/"
             if _ksn_v663_disabled_sport_path(normalized_path):
                 continue
@@ -5386,12 +5386,24 @@ def _ksn_v663_disabled_sport_path(path):
             return True
     return False
 
+# V663 public launch: explicit opt-in, independent of staging isolation.
+def _ksn_v663_public_football_only():
+    identity = " ".join(os.getenv(key, "") for key in (
+        "RENDER_SERVICE_NAME", "RENDER_EXTERNAL_URL", "KSN_ENV", "KSN_ENVIRONMENT"
+    )).lower()
+    return os.getenv("KSN_PUBLIC_FOOTBALL_ONLY", "0") == "1" and "staging" not in identity
+
+
+def _ksn_v663_football_only_publication_active():
+    return _ksn_v663_staging_football_only() or _ksn_v663_public_football_only()
+
+
 
 
 # V663 STEP 070: shared endpoint staging safety
 @app.middleware("http")
 async def ksn_v663_shared_endpoint_safety(request: Request, call_next):
-    if _ksn_v663_staging_football_only():
+    if _ksn_v663_football_only_publication_active():
         path = request.url.path.lower().rstrip("/") or "/"
 
         # Legacy provider probe is exclusively Rugby/Cricket.
@@ -5455,6 +5467,35 @@ async def ksn_v663_shared_endpoint_safety(request: Request, call_next):
 @app.middleware("http")
 async def ksn_v663_staging_football_only_gate(request: Request, call_next):
     # V663 STEP 213: temporary isolation until staging DB identity is verified.
+    # Public football-only launch: block unpublished sports before any route handler.
+    # V663 STEP 455: official contact route. Pure static response, no DB/provider calls.
+    if request.method in ("GET", "HEAD") and request.url.path.lower().rstrip("/") == "/contact":
+        _ksn_v663_contact_html = '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>Contact | Kasi Sports News</title>\n<meta name="description" content="Contact Kasi Sports News for general inquiries, advertising, partnerships and sponsorships. Call, WhatsApp Business or email the team.">\n<link rel="canonical" href="https://kasilivescore.com/contact">\n<style>\n:root{color-scheme:dark}*{box-sizing:border-box}\nbody{margin:0;background:#080e16;color:#f4f7fb;font:16px/1.6 system-ui,-apple-system,Segoe UI,Arial,sans-serif}\nmain{max-width:780px;margin:60px auto;padding:0 22px}\na{color:#9bd3ff;text-underline-offset:3px}a:hover{color:#fff}\n.brand{font-size:14px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}\nh1{font-size:clamp(2rem,5vw,3rem);line-height:1.2;margin:16px 0 12px}\np{color:#c6d4e3}.panel{background:#111d2b;border:1px solid #294059;border-radius:14px;padding:20px 24px;margin-top:25px}\nh2{font-size:1.2rem;margin:0 0 12px}\ndl{display:grid;grid-template-columns:minmax(135px,200px) 1fr;gap:12px 20px;margin:0}\ndt{font-weight:650}dd{margin:0;overflow-wrap:anywhere}\nfooter{margin:36px 0;color:#a3b4c8;font-size:13px}\n@media(max-width:550px){main{margin:32px auto}dl{grid-template-columns:1fr;gap:2px}dd{margin-bottom:12px}}\n</style>\n</head>\n<body>\n<main>\n<div class="brand">Kasi Sports News</div>\n<h1>Contact Us</h1>\n<p>For general inquiries, advertising, affiliate partnerships and direct sponsorship opportunities.</p>\n<section class="panel" aria-label="Official contact information">\n<h2>Contact Details</h2>\n<dl>\n<dt>Call only</dt><dd><a href="tel:+27730038480">+27 73 003 8480</a></dd>\n<dt>WhatsApp Business only</dt><dd><a href="https://wa.me/27660003590" rel="noopener noreferrer">+27 66 000 3590</a></dd>\n<dt>Email inquiries</dt><dd><a href="mailto:batwiineltdgroup@gmail.com">batwiineltdgroup@gmail.com</a></dd>\n</dl>\n</section>\n<section class="panel" aria-label="Official social media">\n<h2>Follow Kasi Sports News</h2>\n<dl>\n<dt>Facebook</dt><dd><a href="https://web.facebook.com/people/Kasi-Sports-News/61595257601570/" rel="noopener noreferrer">Kasi Sports News on Facebook</a></dd>\n<dt>Instagram</dt><dd><a href="https://www.instagram.com/kasilivescore/" rel="noopener noreferrer">@kasilivescore</a></dd>\n<dt>X (Twitter)</dt><dd><a href="https://x.com/KasiSportsNews" rel="noopener noreferrer">KasiLiveScore (@KasiSportsNews)</a></dd>\n</dl>\n</section>\n<p><a href="/">Back to Kasi Sports News</a></p>\n<footer>Copyright 2026 Kasi Sports News. All rights reserved.</footer>\n</main>\n</body>\n</html>'
+        _ksn_v663_staging_identity = " ".join(
+            os.getenv(key, "") for key in
+            ("RENDER_SERVICE_NAME", "RENDER_EXTERNAL_URL", "KSN_ENV", "KSN_ENVIRONMENT")
+        ).lower()
+        _ksn_v663_contact_headers = {"Cache-Control": "public, max-age=300"}
+        if "staging" in _ksn_v663_staging_identity:
+            _ksn_v663_contact_headers = {
+                "Cache-Control": "no-store",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+            }
+        return Response(
+            content=_ksn_v663_contact_html if request.method == "GET" else "",
+            status_code=200,
+            media_type="text/html; charset=utf-8",
+            headers=_ksn_v663_contact_headers,
+        )
+    if _ksn_v663_public_football_only():
+        requested_path = request.url.path
+        seo_target = request.query_params.get("path", "") if requested_path.startswith("/seo/") else ""
+        if (_ksn_v663_disabled_sport_path(requested_path)
+                or (seo_target.startswith("/") and _ksn_v663_disabled_sport_path(seo_target))):
+            return Response(
+                content="Not Found", status_code=404, media_type="text/plain",
+                headers={"X-Robots-Tag": "noindex, nofollow, noarchive", "Cache-Control": "no-store"},
+            )
     if _ksn_v663_staging_football_only():
         _v663_path = request.url.path.lower().rstrip('/') or '/'
         _v663_blocked_prefixes = (
@@ -22501,7 +22542,7 @@ async def seo_sitemap():
     seen = set()
     for r in rows:
         path = r.get("path", "")
-        if _ksn_v663_staging_football_only():
+        if _ksn_v663_football_only_publication_active():
             normalized_path = str(path).lower().rstrip("/") or "/"
             if _ksn_v663_disabled_sport_path(normalized_path):
                 continue
