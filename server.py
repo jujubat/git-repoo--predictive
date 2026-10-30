@@ -6518,7 +6518,9 @@ async def fixtures(
         _v663_store_path = BASE_DIR / "ksn_v663_staging_verified.sqlite"
 
         if _fixtures_cache.get(_v663_snapshot_key) is None:
-            _v663_restored = _v663_restore_snapshot(_v663_store_path)
+            _v663_restored = (__import__("ksn_v663_staging_pg_snapshots", fromlist=["read"]).read("fixtures:verified:football")
+                if os.getenv("KSN_STAGING_POSTGRES_SNAPSHOTS", "0") == "1"
+                else _v663_restore_snapshot(_v663_store_path))
             if _v663_restored is not None:
                 _fixtures_cache[_v663_snapshot_key] = _v663_restored
 
@@ -13040,7 +13042,9 @@ async def ksn529_staging_generate_predictions(request: Request):
             restore_snapshot as _ksn529_restore_snapshot,
         )
         if _fixtures_cache.get(_ksn529_cache_key) is None:
-            snapshot = _ksn529_restore_snapshot(BASE_DIR / "ksn_v663_staging_verified.sqlite")
+            snapshot = (__import__("ksn_v663_staging_pg_snapshots", fromlist=["read"]).read("fixtures:verified:football")
+                if os.getenv("KSN_STAGING_POSTGRES_SNAPSHOTS", "0") == "1"
+                else _ksn529_restore_snapshot(BASE_DIR / "ksn_v663_staging_verified.sqlite"))
             if snapshot is not None:
                 _fixtures_cache[_ksn529_cache_key] = snapshot
         fixture_payload = read_verified_fixtures(
@@ -29590,12 +29594,16 @@ async def ksn_v663_staging_football_refresh(request: Request):
         _v663_snapshot_saved = False
         if _v663_published is not None:
             try:
-                _v663_publish_snapshot(
-                    BASE_DIR / "ksn_v663_staging_verified.sqlite",
-                    _v663_published,
-                )
+                if os.getenv("KSN_STAGING_POSTGRES_SNAPSHOTS", "0") == "1":
+                    from ksn_v663_staging_pg_snapshots import write as _v663_pg_write
+                    _v663_pg_write("fixtures:verified:football", _v663_published)
+                else:
+                    _v663_publish_snapshot(
+                        BASE_DIR / "ksn_v663_staging_verified.sqlite",
+                        _v663_published,
+                    )
                 _v663_snapshot_saved = True
-            except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            except Exception as exc:
                 log.warning(
                     "V663 staging snapshot persistence failed (%s)",
                     type(exc).__name__,

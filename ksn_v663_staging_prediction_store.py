@@ -37,6 +37,9 @@ def _connect():
 def read_prediction_snapshot(key):
     if not _enabled() or not _key(key):
         return None
+    if os.getenv("KSN_STAGING_POSTGRES_SNAPSHOTS", "0") == "1":
+        from ksn_v663_staging_pg_snapshots import read
+        return read(key)
     try:
         with closing(_connect()) as db:
             row = db.execute("SELECT payload,updated FROM snapshots WHERE k=?", (key,)).fetchone()
@@ -54,6 +57,9 @@ def read_prediction_snapshot(key):
 def write_prediction_snapshot(key, payload):
     if not _enabled() or not _key(key) or not isinstance(payload, dict):
         return None
+    if os.getenv("KSN_STAGING_POSTGRES_SNAPSHOTS", "0") == "1":
+        from ksn_v663_staging_pg_snapshots import write
+        return write(key, payload)
     # Do not persist empty pools or unlimited/untrusted JSON.
     rows = payload.get("data", {}).get("predictions", []) if isinstance(payload.get("data"), dict) else []
     if not isinstance(rows, list) or not rows or len(rows) > 100:
