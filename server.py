@@ -20835,6 +20835,35 @@ async def _v427_shared_cache_warmer():
                     await hit(c,"/sports/live")
             except Exception as exc: log.debug("v432 live warm: %s",exc)
             await asyncio.sleep(30)
+    async def prediction_recovery_loop():
+        # Independent of unrelated sports/news cache-warming requests.
+        # Existing recovery lock, quota guard and cooldown remain authoritative.
+        while True:
+            try:
+                result = await _v662_bounded_prediction_recovery()
+                if isinstance(result, dict):
+                    log.info(
+                        "V663 prediction recovery result: %s",
+                        result,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning(
+                    "V663 prediction recovery execution failed: %s",
+                    type(exc).__name__,
+                )
+            await asyncio.sleep(180)
+
+    recovery_task = (
+        asyncio.create_task(
+            prediction_recovery_loop(),
+            name="ksn-v663-prediction-recovery",
+        )
+        if os.getenv("KSN_V662_PREDICTION_RECOVERY_ENABLED", "0") == "1"
+        and not _ksn_staging_seo_test_mode()
+        else None
+    )
     live_task = asyncio.create_task(live_loop(), name="ksn-live-cache-warm")
     try:
       while True:
@@ -20860,23 +20889,6 @@ async def _v427_shared_cache_warmer():
                             "/sports/videos?sport=all"
                         )
                     ]
-                # V663: Run bounded recovery before unrelated cache warming.
-                # Existing lock, cooldown, provider limits and environment gate apply.
-                if os.getenv("KSN_V662_PREDICTION_RECOVERY_ENABLED", "0") == "1":
-                    try:
-                        recovery_result = await _v662_bounded_prediction_recovery()
-                        if isinstance(recovery_result, dict):
-                            log.info(
-                                "V663 prediction recovery result: %s",
-                                recovery_result,
-                            )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        log.warning(
-                            "V663 prediction recovery execution failed: %s",
-                            type(exc).__name__,
-                        )
                 await asyncio.gather(
                     *[hit(c, url) for url in warm_urls]
                 )
@@ -20886,6 +20898,12 @@ async def _v427_shared_cache_warmer():
             log.debug("v502 shared warmer cycle: %s",exc)
         await asyncio.sleep(180)
     finally:
+        if recovery_task is not None:
+            recovery_task.cancel()
+            try:
+                await recovery_task
+            except asyncio.CancelledError:
+                pass
         live_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await live_task
