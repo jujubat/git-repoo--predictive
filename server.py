@@ -20610,9 +20610,30 @@ async def _v662_bounded_prediction_recovery():
         valid_leagues.sort(
             key=lambda item: big_five_ids.index(item[0])
         )
-        slot = _V662_RECOVERY_CURSOR % len(valid_leagues)
+        # V663: Prefer Big Five leagues missing from the persisted
+        # active snapshot, rather than restarting at Premier League.
+        league_counts = {lid: 0 for lid, _ in valid_leagues}
+        for row in active:
+            if not isinstance(row, dict):
+                continue
+            raw_id = row.get("_leagueId") or row.get("leagueId")
+            try:
+                lid = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if lid in league_counts:
+                league_counts[lid] += 1
+
+        # Lowest existing coverage first. Stable Big Five order breaks ties.
+        selected = min(
+            valid_leagues,
+            key=lambda item: (
+                league_counts[item[0]],
+                big_five_ids.index(item[0]),
+            ),
+        )
+        league_name = selected[1]
         _V662_RECOVERY_CURSOR += 1
-        league_name = valid_leagues[slot][1]
         recovery_date = datetime.now(timezone.utc).date().isoformat()
         recovery_end_date = (
             datetime.now(timezone.utc).date() + timedelta(days=6)
