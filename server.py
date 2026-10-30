@@ -20573,26 +20573,50 @@ async def _v662_bounded_prediction_recovery():
             ]
             # Continue filling a partial pool. A single valid fixture is
             # not sufficient evidence that the public pool is complete.
-            if len(active) >= 100:
+            represented = set()
+            for row in active:
+                raw_league = row.get("_leagueId") or row.get("leagueId")
+                try:
+                    represented.add(int(raw_league))
+                except (TypeError, ValueError):
+                    pass
+            if len(active) >= 100 and all(
+                lid in represented for lid in (39, 140, 78, 135, 61)
+            ):
                 return {"skipped": "healthy_snapshot"}
 
         if _v448_api_football_provider_locked():
             return {"skipped": "provider_locked"}
 
-        # V662: Rotate one league/date combination per permitted attempt.
-        valid_leagues = [
-            name for name in SCAN_LEAGUES
-            if isinstance(name, str) and name.strip()
-        ]
-        if not valid_leagues:
-            return {"skipped": "no_configured_leagues"}
+        # V663: Rotate only the Big Five, using the existing league resolver.
+        # Each attempt retains the original six-request provider budget.
+        big_five_ids = (39, 140, 78, 135, 61)
+        valid_leagues = []
+        for name in SCAN_LEAGUES:
+            if not isinstance(name, str) or not name.strip():
+                continue
+            try:
+                lid = int(_resolve_league_id(name))
+            except (TypeError, ValueError, KeyError):
+                continue
+            if lid in big_five_ids and lid not in [
+                item[0] for item in valid_leagues
+            ]:
+                valid_leagues.append((lid, name))
 
-        slot = _V662_RECOVERY_CURSOR % (len(valid_leagues) * 7)
+        if not valid_leagues:
+            return {"skipped": "no_configured_big_five_leagues"}
+
+        valid_leagues.sort(
+            key=lambda item: big_five_ids.index(item[0])
+        )
+        slot = _V662_RECOVERY_CURSOR % len(valid_leagues)
         _V662_RECOVERY_CURSOR += 1
-        league_name = valid_leagues[slot % len(valid_leagues)]
-        recovery_date = (
-            datetime.now(timezone.utc) + timedelta(days=slot // len(valid_leagues))
-        ).date().isoformat()
+        league_name = valid_leagues[slot][1]
+        recovery_date = datetime.now(timezone.utc).date().isoformat()
+        recovery_end_date = (
+            datetime.now(timezone.utc).date() + timedelta(days=6)
+        ).isoformat()
 
         for league_name in (league_name,):
             # Fail closed for unknown league names.
@@ -20610,7 +20634,7 @@ async def _v662_bounded_prediction_recovery():
                     league=league_name,
                     type="upcoming",
                     date_from=recovery_date,
-                    date_to=recovery_date,
+                    date_to=recovery_end_date,
                     max_odds_requests=2,
                 )
             finally:
