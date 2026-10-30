@@ -616,7 +616,7 @@ def _ksn_league_priority_bucket(row: dict, visitor_country: str="") -> int:
         lid = None
     # Do not allow an inconsistent name/country to override a known provider ID.
     verified = {39: 0, 140: 1, 78: 2, 135: 3, 61: 4,
-                2: 5, 3: 6, 848: 9, 203: 7}
+                2: 5, 3: 6, 848: 7, 203: 8}
     if lid in verified:
         return verified[lid]
     # If a provider supplies an unrecognised ID, do not reclassify that
@@ -635,13 +635,13 @@ def _ksn_league_priority_bucket(row: dict, visitor_country: str="") -> int:
         if country in ("world", "europe", "international", "uefa", "europe (uefa)"):
             uefa = {"uefa champions league": 5, "champions league": 5,
                     "uefa europa league": 6, "europa league": 6,
-                    "uefa europa conference league": 9,
-                    "uefa conference league": 9, "conference league": 9}
+                    "uefa europa conference league": 7,
+                    "uefa conference league": 7, "conference league": 7}
             if name in uefa:
                 return uefa[name]
         if country in ("turkey", "türkiye") and name in (
                 "super lig", "süper lig", "turkish super lig"):
-            return 7
+            return 8
     visitor = str(visitor_country or "").strip()
     visitor = _KSN_COUNTRY_NAMES.get(visitor.upper(), visitor.casefold())
     domestic = lid in (288,235,233,88,71,128) or bool(re.search(
@@ -649,8 +649,8 @@ def _ksn_league_priority_bucket(row: dict, visitor_country: str="") -> int:
     excluded = bool(re.search(
         r"\b(cup|copa|coupe|coppa|pokal|trophy|shield|supercup|friendly|friendlies|champions league|europa league|conference league|international)\b", name))
     if visitor and country == visitor and domestic and not excluded:
-        return 8
-    return 9
+        return 9
+    return 10
 
 def _ksn_sort_football_rows(rows, visitor_country: str="", newest_first: bool=False):
     rows=list(rows or [])
@@ -5661,6 +5661,18 @@ async def ksn_staging_seo_test_gate(request: Request, call_next):
             return response
         return Response(content="Staging diagnostic disabled", status_code=404,
                         media_type="text/plain", headers={"Cache-Control":"no-store"})
+    # V663 Step 529: private, provider-free snapshot prediction generation.
+    if (request.url.path == "/__ksn_v663/staging/predictions/generate"
+            and request.method == "POST"):
+        if (_ksn499_diagnostic_authorized(request)
+                and os.getenv("KSN_STAGING_MODEL_GENERATION", "0") == "1"
+                and os.getenv("KSN_STAGING_PREDICTION_SNAPSHOTS", "0") == "1"):
+            response = await call_next(request)
+            response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return Response(content="Staging generation disabled", status_code=404,
+                        headers={"Cache-Control": "no-store"})
     # V663 Step 492: explicitly allowed, isolated, staging-only ballot routes.
     # Production fails closed. Does not authorize other API routes.
     if (
@@ -12932,6 +12944,97 @@ async def ksn499_staging_prediction_readiness(request: Request):
                  "Cache-Control":"no-store"},
     )
 
+# V663 Step 529: zero-provider, opt-in generation from VERIFIED staging fixtures only.
+# Does not call API-Football, odds APIs or the production learning database.
+_KSN529_GENERATE_LOCK = asyncio.Lock()
+_KSN529_LAST_ATTEMPT = 0.0
+
+@app.post("/__ksn_v663/staging/predictions/generate")
+async def ksn529_staging_generate_predictions(request: Request):
+    global _KSN529_LAST_ATTEMPT
+    if (not _ksn499_diagnostic_authorized(request)
+            or os.getenv("KSN_STAGING_MODEL_GENERATION", "0") != "1"
+            or os.getenv("KSN_STAGING_PREDICTION_SNAPSHOTS", "0") != "1"):
+        raise HTTPException(404, detail="Not found")
+    if _KSN529_GENERATE_LOCK.locked():
+        raise HTTPException(429, detail="Generation already running")
+    async with _KSN529_GENERATE_LOCK:
+        from datetime import date as _date
+        now = datetime.now(timezone.utc)
+        start_text = request.query_params.get("date_from", now.date().isoformat())
+        end_text = request.query_params.get("date_to", (now + timedelta(days=7)).date().isoformat())
+        try:
+            start, end = _date.fromisoformat(start_text), _date.fromisoformat(end_text)
+        except ValueError:
+            raise HTTPException(400, detail="Invalid date")
+        if (start_text != start.isoformat() or end_text != end.isoformat()
+                or start < now.date() or end < start or (end-start).days > 7
+                or (start-now.date()).days > 7):
+            raise HTTPException(400, detail="Dates must be within the next seven days")
+        current = time.monotonic()
+        if _KSN529_LAST_ATTEMPT and current - _KSN529_LAST_ATTEMPT < 900:
+            raise HTTPException(429, detail="Generation cooldown (15 minutes)")
+        _KSN529_LAST_ATTEMPT = current
+        # `fixtures` returns exclusively verified snapshot data in staging.
+        # Fail closed rather than invoking the normal provider route if mode changes.
+        if not _ksn_v663_staging_football_only():
+            raise HTTPException(404, detail="Not found")
+        from ksn_v663_staging_football_consumer import read_verified_fixtures
+        from ksn_v663_verified_snapshot_store import (
+            CACHE_KEY as _ksn529_cache_key,
+            restore_snapshot as _ksn529_restore_snapshot,
+        )
+        if _fixtures_cache.get(_ksn529_cache_key) is None:
+            snapshot = _ksn529_restore_snapshot(BASE_DIR / "ksn_v663_staging_verified.sqlite")
+            if snapshot is not None:
+                _fixtures_cache[_ksn529_cache_key] = snapshot
+        fixture_payload = read_verified_fixtures(
+            _fixtures_cache, league="ALL", fixture_type="upcoming",
+            date_from=start_text, date_to=end_text, today=now.date(),
+            resolve_league_id=_resolve_league_id,
+        )
+        matches = fixture_payload.get("matches", []) if isinstance(fixture_payload, dict) else []
+        if not isinstance(matches, list):
+            matches = []
+        # Preserve the locked Big Five > UEFA > Türkiye > visitor > rest ranking.
+        rows, qualified, errors = [], 0, 0
+        for match in _ksn_sort_football_rows(matches)[:100]:
+            if not isinstance(match, dict) or not _ksn_active_prediction(match):
+                continue
+            try:
+                calculated = _prediction(match)
+                odds_ok = _valid_1x2(match.get("odds") or {})
+                qualified += int(bool(odds_ok))
+                rows.append({**match, **calculated,
+                             "oddsAvailable":bool(odds_ok),
+                             "bookmakerGatePassed":bool(odds_ok),
+                             "predictionEligible":bool(odds_ok),
+                             "gamesOfDayEligible":bool(odds_ok),
+                             "modelOnly":not odds_ok,
+                             "predictionBasis":("verified bookmaker 1X2" if odds_ok
+                                                else "statistical model only; no verified bookmaker 1X2")})
+            except (ValueError, KeyError, TypeError, ZeroDivisionError, OverflowError) as exc:
+                errors += 1
+                log.debug("V663 staging prediction calculation skipped: %s", type(exc).__name__)
+        rows = _ksn_sort_football_rows(rows)[:100]
+        payload = {"predictions":rows,"matches":rows,"count":len(rows),
+                   "eligibleFixtures":qualified,
+                   "modelOnlyFixtures":len(rows)-qualified,
+                   "source":"verified_staging_fixture_snapshot",
+                   "generatedAt":now.isoformat(),"refreshRequired":not bool(rows)}
+        saved = bool(rows and _dashboard_snapshot_put(
+            "predictions:last_good:ALL:upcoming", {"data":payload}))
+        return Response(content=json.dumps({
+            "status":"generated" if saved else "no_snapshot_published",
+            "fixturesScanned":len(matches),"predictionsCount":len(rows),
+            "bookmakerQualifiedTipCandidates":qualified,
+            "modelOnlyPredictions":len(rows)-qualified,
+            "calculationErrors":errors,"snapshotSaved":saved,
+            "providerRequests":0,"productionDatabaseReads":0,
+            "notice":"No odds are fetched; qualified tips require verified odds on source fixtures."
+        }), media_type="application/json",headers={
+            "X-Robots-Tag":"noindex, nofollow, noarchive","Cache-Control":"no-store"})
+
 @app.get("/tip-of-day")
 async def tip_of_day(request: Request):
     """Top two current bookmaker-qualified Kasi picks using the locked global league hierarchy."""
@@ -20178,9 +20281,12 @@ def _v485_snapshot_sqlite_get(key):
     return None
 
 def _dashboard_snapshot_get(key):
-    # V663 STEP 216: no shared snapshot DB I/O in football-only staging.
+    # V663 STEP 523: isolated, opt-in staging prediction snapshots.
     if _ksn_v663_staging_football_only():
-        return None
+        if not str(key).startswith("predictions:last_good:"):
+            return None
+        from ksn_v663_staging_prediction_store import read_prediction_snapshot
+        return read_prediction_snapshot(key)
     if DATABASE_URL and psycopg2 is not None:
         try:
             c=_v485_snapshot_pg_connection()
@@ -20200,9 +20306,12 @@ def _dashboard_snapshot_get(key):
     return _v485_snapshot_sqlite_get(key)
 
 def _dashboard_snapshot_put(key,payload):
-    # V663 STEP 216: no shared snapshot DB I/O in football-only staging.
+    # V663 STEP 523: isolated, opt-in staging prediction snapshots.
     if _ksn_v663_staging_football_only():
-        return None
+        if not str(key).startswith("predictions:last_good:"):
+            return None
+        from ksn_v663_staging_prediction_store import write_prediction_snapshot
+        return write_prediction_snapshot(key,payload)
     if not isinstance(payload,dict):
         return
     serialized=json.dumps(payload,ensure_ascii=False)
