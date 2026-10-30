@@ -5606,8 +5606,80 @@ async def ksn_v663_staging_football_only_gate(request: Request, call_next):
     return await call_next(request)
 
 
+# V663 Step 492: staging-only community ballot. Reads primary fixture memory only.
+# Opt-in must be explicit; no provider/database/cache access to resolve fixtures.
+from ksn_v663_step492_voting import router as _ksn492_vote_router, enabled as _ksn492_vote_enabled
+
+def _ksn492_trusted_fixture_resolver():
+    if not _ksn492_vote_enabled():
+        return []
+    # Read only the fresh in-memory fixture cache; do not call providers or SQL.
+    cache = globals().get("_fixtures_cache")
+    if cache is None:
+        return []
+    try:
+        payloads = list(cache.values())
+    except (RuntimeError, KeyError):
+        return []
+    converted = []
+    for payload in payloads:
+        if not isinstance(payload, dict) or payload.get("stale") or payload.get("providerLocked"):
+            continue
+        rows = payload.get("matches") or payload.get("fixtures") or []
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            fid = row.get("_afootFixtureId") or row.get("id")
+            league = row.get("league")
+            if isinstance(league, dict):
+                league = league.get("name")
+            converted.append({
+                "id": str(fid or ""),
+                "home": str(row.get("home") or ""),
+                "away": str(row.get("away") or ""),
+                "league": str(league or row.get("leagueName") or ""),
+                "league_id": str(row.get("leagueId") or row.get("_leagueId") or ""),
+                "kickoff": str(row.get("fixtureDate") or row.get("datetime") or row.get("date") or ""),
+                "status": str(row.get("statusShort") or ""),
+                "sport": str(row.get("sport") or "football"),
+            })
+    return converted
+
+app.state.ksn_vote_fixture_resolver = _ksn492_trusted_fixture_resolver
+app.include_router(_ksn492_vote_router)
+
 @app.middleware("http")
 async def ksn_staging_seo_test_gate(request: Request, call_next):
+    # V663 STEP 499: token-gated, read-only predictions diagnostic.
+    if request.url.path == "/__ksn_v663/staging/predictions/readiness" and request.method == "GET":
+        if _ksn499_diagnostic_authorized(request):
+            response = await call_next(request)
+            response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return Response(content="Staging diagnostic disabled", status_code=404,
+                        media_type="text/plain", headers={"Cache-Control":"no-store"})
+    # V663 Step 492: explicitly allowed, isolated, staging-only ballot routes.
+    # Production fails closed. Does not authorize other API routes.
+    if (
+        request.url.path in (
+            "/__ksn_v663/staging/community-votes/matches",
+            "/__ksn_v663/staging/community-votes/vote",
+        )
+        and (
+            (request.url.path.endswith("/matches") and request.method == "GET")
+            or (request.url.path.endswith("/vote") and request.method == "POST")
+        )
+        and _ksn492_vote_enabled()
+        and os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1"
+        and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+    ):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+        return response
     # V663 Step 400E: permit provider-free fixture reads in football-only staging.
     if (
         request.url.path == "/fixtures"
@@ -12812,6 +12884,53 @@ async def ai_predictions(
                 "staleReason": "Current prediction scan returned no qualified fixtures"}, _ksn_request_country(request) if isinstance(request, Request) else "")
     return _ksn_public_prediction_response(payload, _ksn_request_country(request) if isinstance(request, Request) else "")
 
+
+# V663 STEP 499: NO provider calls, NO DB reads/writes, NO public prediction route changes.
+def _ksn499_diagnostic_authorized(request: Request) -> bool:
+    import secrets as _ksn499_secrets
+    service = " ".join(os.getenv(x, "") for x in
+        ("RENDER_SERVICE_NAME", "RENDER_EXTERNAL_URL", "KSN_ENV")).lower()
+    secret = os.getenv("KSN_STAGING_TEST_TOKEN", "")
+    supplied = request.headers.get("X-KSN-Staging-Token", "")
+    return (
+        os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+        and os.getenv("KSN_STAGING_FOOTBALL_ONLY", "0") == "1"
+        and os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1"
+        and os.getenv("KSN_STAGING_PREDICTION_DIAGNOSTICS", "0") == "1"
+        and "staging" in service
+        and len(secret) >= 32 and bool(supplied)
+        and _ksn499_secrets.compare_digest(secret, supplied)
+    )
+
+@app.get("/__ksn_v663/staging/predictions/readiness")
+async def ksn499_staging_prediction_readiness(request: Request):
+    if not _ksn499_diagnostic_authorized(request):
+        raise HTTPException(status_code=404, detail="Not found")
+    # refresh=0 is snapshot-only: no provider/odds/fixture scans. The staging
+    # snapshot reader is deliberately disconnected from production storage.
+    payload = await ai_predictions(request=None, limit=100, refresh=0,
+                                   league="ALL", type="upcoming")
+    predictions = payload.get("predictions") or []
+    future = [row for row in predictions if isinstance(row, dict)
+              and _ksn_active_prediction(row)]
+    tips = [row for row in future if row.get("predictionEligible")
+            and _valid_1x2(row.get("odds") or {})]
+    return Response(
+        content=json.dumps({
+            "status": "snapshot_only", "source": "staging_isolated_snapshot",
+            "predictionsCount": len(future),
+            "bookmakerQualifiedTipCandidates": len(tips),
+            "snapshotAvailable": bool(predictions),
+            "refreshRequired": bool(payload.get("refreshRequired", not bool(predictions))),
+            "providerRequests": 0,
+            "productionDatabaseReads": 0,
+            "note": ("Candidates available" if predictions else
+                     "No isolated staging prediction snapshot; controlled generation needs separate authorization"),
+        }),
+        media_type="application/json",
+        headers={"X-Robots-Tag":"noindex, nofollow, noarchive",
+                 "Cache-Control":"no-store"},
+    )
 
 @app.get("/tip-of-day")
 async def tip_of_day(request: Request):

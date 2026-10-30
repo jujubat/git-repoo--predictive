@@ -26,7 +26,7 @@ window.KSN_V663_FOOTBALL_ONLY = true;
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <!-- v491: request the above-the-fold brand image early, with no provider API calls. -->
-<link rel="preload" as="image" href="/kasi-sports-news-logo.png" fetchpriority="high"/>
+<link rel="preload" as="image" href="/kasi-sports-news-logo.png?v=663-new-brand-20261030" fetchpriority="high"/>
 <!-- V663 STEP 089: staging disabled-sport cache protection -->
 <script id="ksn-v663-sport-cache-protection">
 (function(){
@@ -450,8 +450,8 @@ input,select,textarea,button{border-color:#222!important;background:#111!importa
 .home-news-grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}.home-news-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer}.home-news-card img{width:100%;height:150px;object-fit:cover;display:block;background:#111}.home-news-card:first-child img{height:220px}.home-news-card .hn-body{padding:10px}.home-news-card h3{font-size:14px;line-height:1.3;margin:0 0 7px}.home-news-card:first-child h3{font-size:18px}.source-tag{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);font-weight:800}.transfer-media{display:flex;align-items:center;gap:10px}.transfer-media img{width:48px;height:48px;border-radius:50%;object-fit:cover;background:#111;border:1px solid var(--line)}.match-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.match-section{margin-top:12px}.match-section h3{margin:0 0 9px;font-size:15px}.neutral-stat .stat-val-home,.neutral-stat .stat-val-away{color:var(--text)!important;font-weight:700}.match-team-link{display:flex;align-items:center;gap:8px;justify-content:center;cursor:pointer}.match-team-link img,.league-mark{width:30px;height:30px;object-fit:contain}.commentary-row{display:grid;grid-template-columns:55px 80px 1fr;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}.odds-market{border:1px solid var(--line);border-radius:9px;padding:9px}.odds-market h4{margin:0 0 7px;font-size:11px}.odds-values{display:flex;gap:6px;flex-wrap:wrap}.odds-values span{border:1px solid var(--line);border-radius:6px;padding:5px 7px;font-size:11px}.table-mini{width:100%;border-collapse:collapse;font-size:11px}.table-mini th,.table-mini td{padding:6px;border-bottom:1px solid var(--line);text-align:left}.table-mini .playing{font-weight:800}.last5{display:flex;gap:5px}.last5 span{width:25px;height:25px;border-radius:50%;display:grid;place-items:center;border:1px solid var(--line);font-weight:800}.last5 .W{color:#38bdf8}.last5 .L{color:#f87171}.last5 .D{color:#fbbf24}@media(max-width:900px){.home-news-grid{grid-template-columns:1fr}.home-news-card:first-child img,.home-news-card img{height:180px}.match-detail-grid{grid-template-columns:1fr}.commentary-row{grid-template-columns:45px 65px 1fr}}
 </style>
 <meta content="Kasi Sports News — cross-sport live scores, predictions, news, AI analysis and sports intelligence." name="description"/>
-<meta content="website" property="og:type"/><meta content="Kasi Sports News" property="og:title"/><meta content="Cross-sport sports intelligence, predictions, live events and AI analysis." property="og:description"/><meta content="https://kasilivescore.com/" property="og:url"/><meta content="https://kasilivescore.com/kasi-sports-news-logo.png" property="og:image"/><meta content="image/png" property="og:image:type"/><meta content="512" property="og:image:width"/><meta content="512" property="og:image:height"/>
-<meta content="summary_large_image" name="twitter:card"/><meta content="Kasi Sports News" name="twitter:title"/><meta content="Cross-sport sports intelligence and AI analysis." name="twitter:description"/><meta content="https://kasilivescore.com/kasi-sports-news-logo.png" name="twitter:image"/>
+<meta content="website" property="og:type"/><meta content="Kasi Sports News" property="og:title"/><meta content="Cross-sport sports intelligence, predictions, live events and AI analysis." property="og:description"/><meta content="https://kasilivescore.com/" property="og:url"/><meta content="https://kasilivescore.com/kasi-sports-news-logo.png?v=663-new-brand-20261030" property="og:image"/><meta content="image/png" property="og:image:type"/><meta content="1254" property="og:image:width"/><meta content="1254" property="og:image:height"/>
+<meta content="summary_large_image" name="twitter:card"/><meta content="Kasi Sports News" name="twitter:title"/><meta content="Cross-sport sports intelligence and AI analysis." name="twitter:description"/><meta content="https://kasilivescore.com/kasi-sports-news-logo.png?v=663-new-brand-20261030" name="twitter:image"/>
 <link href="https://kasilivescore.com/" rel="canonical"/>
 <meta content="#071426" name="theme-color"/>
 <meta content="yes" name="mobile-web-app-capable"/>
@@ -1162,6 +1162,14 @@ table, th, td { font-size: 12px; }
 })();
 </script>
 
+
+<style id="ksn-v663-step493-branding-logo">
+/* Transparent site logo; no background tile, border or crop. */
+header .brand .logo.ksn-official-logo,
+header .brand .logo.ksn-logo { background:transparent!important; background-image:none!important; border:0!important; box-shadow:none!important; overflow:visible!important; }
+header .brand .logo.ksn-official-logo img { object-fit:contain!important; background:transparent!important; border:0!important; }
+#ks537Header .brand > img { object-fit:contain!important; background:transparent!important; border:0!important; border-radius:0!important; }
+</style>
 </head>
 <body><!-- KSN v386 PRODUCTION STRUCTURE LOCK
 Public navigation: Home | Live | Fixtures | Predictions | Teams & Players Data | News | Search | Admin.
@@ -1180,7 +1188,7 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
 <noscript id="kasiscore--noscript"><div style="max-width:1100px;margin:20px auto;padding:18px;background:#242424;color:#eef6ff;border:1px solid #1d3a5b;border-radius:14px;font-family:Arial,sans-serif"><h1>Kasi Sports News</h1><p>Live scores, football fixtures, predictions, bookmaker odds intelligence, team and player analysis.</p><p><a href="/today">Today's Sports Intelligence</a> · <a href="/weekend">Weekend Intelligence</a> · <a href="/football/england/premier-league">Premier League</a> · <a href="/football/spain/la-liga">La Liga</a> · <a href="/football/germany/bundesliga">Bundesliga</a> · <a href="/football/italy/serie-a">Serie A</a> · <a href="/football/france/ligue-1">Ligue 1</a> · <a href="/football/south-africa/psl">South African PSL</a> · <a href="/football/europe/champions-league">Champions League</a></p></div></noscript>
 <div class="app">
 <header>
-<div class="brand"><div class="logo ksn-logo ksn-official-logo"><img alt="Kasi Sports News" decoding="async" fetchpriority="high" height="52" src="/kasi-sports-news-logo.png" width="52"/></div><div><h1>Kasi <span style="color:var(--accent)">Sports News</span></h1><div class="sub">Football · Rugby · Cricket · News · AI Intelligence</div></div></div>
+<div class="brand"><div class="logo ksn-logo ksn-official-logo"><img alt="Kasi Sports News" decoding="async" fetchpriority="high" height="52" src="/kasi-sports-news-logo.png?v=663-new-brand-20261030" width="52"/></div><div><h1>Kasi <span style="color:var(--accent)">Sports News</span></h1><div class="sub">Football · Rugby · Cricket · News · AI Intelligence</div></div></div>
 </header>
 <div class="toolbar">
 <input aria-label="Server URL" id="serverUrl" style="display:none" value=""/>
@@ -1444,6 +1452,76 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
 <div class="card"><div class="l">Waiting for odds</div><div class="n" id="kNoOdds">—</div><div class="sub">Visible, but not prediction-qualified</div></div>
 <div class="card"><div class="l">Kasi Prediction Line</div><div class="n" id="kTop">—</div><div class="sub" id="kTopName">Kasi model vs bookmaker market</div></div>
 </div>
+<!-- V663 Step 490: Four-league supporter picks. Personal browser votes; no invented community totals. -->
+<section class="card section" id="ksn490VoteWidget" aria-labelledby="ksn490VoteHeading" data-ksn-structure="home-only">
+  <div class="home-section-head"><div>
+    <h2 id="ksn490VoteHeading" style="margin:0">Vote the Expected Team to Win</h2>
+    <div class="sub">Up to four verified upcoming football matches from different leagues. Vote for a winner; verified shared percentages appear after your vote.</div>
+  </div><button type="button" id="ksn490VoteRefresh">Refresh matches</button></div>
+  <div id="ksn490VoteMatches" class="ksn490-grid" aria-live="polite"><div class="empty">Checking available upcoming matches…</div></div>
+  <p id="ksn490VoteNote" class="sub" role="status">Community voting is staging-only until the backend is enabled and verified.</p>
+</section>
+<style id="ksn490-vote-style">
+  .ksn490-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px}
+  .ksn490-match{border:1px solid var(--line);padding:13px;border-radius:10px;background:var(--card-bg)}
+  .ksn490-match h3{font-size:15px;margin:8px 0}.ksn490-match .sub{margin:5px 0}
+  .ksn490-choices{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .ksn490-choices button[aria-pressed="true"]{border-color:var(--accent)!important;color:var(--accent)!important;box-shadow:inset 0 -2px 0 var(--accent)}
+  @media(max-width:720px){.ksn490-grid{grid-template-columns:1fr}}
+</style>
+<script id="ksn490-vote-js">
+(()=>{'use strict';
+  const BASE='/__ksn_v663/staging/community-votes';
+  const target=document.getElementById('ksn490VoteMatches');
+  const note=document.getElementById('ksn490VoteNote');
+  let busy=false;
+  function element(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n}
+  async function request(path,opts={}){
+    const c=new AbortController(),timeout=setTimeout(()=>c.abort(),12000);
+    try{const r=await fetch(BASE+path,{...opts,signal:c.signal,credentials:'same-origin',headers:{Accept:'application/json',...(opts.headers||{})},cache:'no-store'});
+      if(!r.ok)throw Error('HTTP '+r.status);return await r.json()
+    }finally{clearTimeout(timeout)}
+  }
+  function showResults(host,m){
+    const r=m.results||{},tot=Number(r.totalVotes||0);
+    if(!m.yourVote){host.append(element('p','sub','Vote to reveal community results.'));return}
+    host.append(element('p','sub','Community vote results · '+tot+' vote'+(tot===1?'':'s')+' · Not actual win probabilities'));
+    for(const [label,pct] of [[m.home,Number(r.homePercent||0)],[m.away,Number(r.awayPercent||0)]]){
+      const line=element('div','sub',label+' — '+pct.toFixed(1)+'%');host.append(line);
+      const outer=element('div','');outer.style.cssText='height:8px;background:#222;border-radius:8px;overflow:hidden;margin:5px 0 10px';
+      const fill=element('div','');fill.style.cssText='height:100%;background:var(--accent);width:'+Math.max(0,Math.min(100,pct))+'%';outer.append(fill);host.append(outer)
+    }
+  }
+  async function refresh(){
+    if(busy||!target)return;busy=true;
+    try{const data=await request('/matches');target.replaceChildren();const matches=Array.isArray(data.matches)?data.matches:[];
+      if(note)note.textContent='Staging community poll: one ballot per browser identity and fixture. Results are not predicted win probabilities.';
+      if(!matches.length){target.append(element('div','empty','No verified upcoming fixtures available for community voting.'));return}
+      for(const m of matches.slice(0,4)){
+        const card=element('article','ksn490-match');card.append(element('div','sub',m.league),element('h3','',m.home+' vs '+m.away));
+        card.append(element('p','sub',new Date(m.kickoff).toLocaleString('en-ZA',{timeZone:'Africa/Johannesburg',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:true})));
+        const actions=element('div','ksn490-choices');const status=element('div','sub',m.yourVote?'Your vote: '+(m.yourVote==='H'?m.home:m.away):'Choose the expected winner');
+        for(const [choice,name] of [['H',m.home],['A',m.away]]){
+          const btn=element('button','',name);btn.type='button';btn.disabled=!!m.yourVote;btn.setAttribute('aria-pressed',String(choice===m.yourVote));
+          btn.addEventListener('click',async()=>{if(busy||m.yourVote)return;busy=true;actions.querySelectorAll('button').forEach(b=>b.disabled=true);
+            try{const result=await request('/vote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fixtureId:m.id,choice})});
+              m.yourVote=result.yourVote;m.results=result.results;status.textContent='Your vote: '+(m.yourVote==='H'?m.home:m.away);
+              actions.querySelectorAll('button').forEach((b,i)=>b.setAttribute('aria-pressed',String((i===0?'H':'A')===m.yourVote)));
+              showResults(card,m);
+            }catch(e){status.textContent='Vote not saved ('+e.message+'). Refresh and try again.';actions.querySelectorAll('button').forEach(b=>b.disabled=false)}
+            finally{busy=false}
+          });actions.append(btn)
+        }
+        card.append(actions,status);showResults(card,m);target.append(card)
+      }
+    }catch(e){target.replaceChildren(element('div','empty','Community voting is not available in this environment ('+e.message+').'));if(note)note.textContent='Staging-only feature; production voting is not enabled.'}
+    finally{busy=false}
+  }
+  window.ksn490RefreshVoting=refresh;
+  document.getElementById('ksn490VoteRefresh')?.addEventListener('click',refresh);
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',refresh,{once:true});else refresh();
+})();
+</script>
 <div class="card section" data-ksn-structure="home-only" id="totdCard" style="display:none;border-color:var(--accent);background:linear-gradient(135deg,rgba(34,211,238,.08),var(--card-bg));margin-bottom:12px">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
 <h2 style="margin:0;font-size:14px;display:flex;align-items:center;gap:7px"> Tip of the Day</h2>
@@ -1557,7 +1635,16 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
 <div class="card section" data-sport="rugby"><div class="home-section-head"><div><h3>Rugby · Predictions</h3><div class="sub">Verified fixtures → Kasi rugby prediction engine.</div></div></div><div id="v246RugbyPredictions"><div class="empty">Loading rugby predictions…</div></div></div>
 <div class="card section" data-sport="cricket"><div class="home-section-head"><div><h3>Cricket · Predictions</h3><div class="sub">Normalized cricket feed with subscribed bookmaker odds where available.</div></div></div><div id="v246CricketPredictions"><div class="empty">Loading cricket predictions…</div></div></div>
 </div>
+<!-- V663 STEP 487: Pending features stay visible as Coming Soon under Predictions. -->
+<style id="ksn-v663-step487-scoring-coming-soon">
+/* Display-only release gate. Keep the legacy module source for future activation. */
+#predictions #lowscoring > :not(.ksn-scoring-coming-soon),
+#predictions #highscoring > :not(.ksn-scoring-coming-soon) { display:none !important; }
+#predictions .ksn-scoring-coming-soon { display:block !important; margin:12px 0; }
+#predictions .ksn-scoring-coming-soon .ksn-scoring-label { display:inline-block; margin-top:8px; padding:4px 10px; border:1px solid var(--line); border-radius:12px; font-size:12px; color:var(--muted); }
+</style>
 <section class="prediction-subsection" data-ksn-parent="predictions" id="lowscoring">
+<div class="card ksn-scoring-coming-soon" role="status"><h2>Low-Scoring Match</h2><span class="ksn-scoring-label">Coming Soon</span><p class="sub">Low-scoring match predictions are not yet available.</p></div>
 <div id="lsGateBanner" style="display:none;background:linear-gradient(135deg,var(--panel2),var(--panel2));border:1px solid #3b82f6;border-radius:14px;padding:32px;text-align:center;margin-bottom:12px">
 <div style="font-size:36px;margin-bottom:10px"></div>
 <div style="font-size:20px;font-weight:800;margin-bottom:8px;color:var(--text)">Low Scoring Analysis — Pro Feature</div>
@@ -1882,6 +1969,7 @@ ${M.map((m,i)=>`<div style="padding:8px 8px;border-right:1px solid rgba(255,255,
 <div id="lsGuideGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px"></div>
 </div>
 </section><section class="prediction-subsection" data-ksn-parent="predictions" id="highscoring">
+<div class="card ksn-scoring-coming-soon" role="status"><h2>High Scoring Fixtures</h2><span class="ksn-scoring-label">Coming Soon</span><p class="sub">High-scoring fixture predictions are not yet available.</p></div>
 <div id="hsGateBanner" style="display:none;background:linear-gradient(135deg,var(--panel2),var(--panel2));border:1px solid #f97316;border-radius:14px;padding:32px;text-align:center;margin-bottom:12px">
 <div style="font-size:36px;margin-bottom:10px"></div>
 <div style="font-size:20px;font-weight:800;margin-bottom:8px;color:var(--text)">High Scoring Analysis — Pro Feature</div>
@@ -9780,7 +9868,7 @@ window.loadExpectedScorers = async function() {
 })();
 </script>
 <section class="tab hidden" id="platform">
-<div class="section-title"><div><h2> Platform &amp; Growth</h2><div class="sub"> accounts, personalisation, notifications, advertising and data controls.</div></div></div>
+<div class="section-title"><div><h2>My Kasi</h2><div class="sub">Follow as many football teams as you like. Your choices are stored in this browser.</div></div></div>
 <div class="fc-grid">
 <div class="fc-card"><h3> Routed URLs</h3><div class="sub">SPA routes are available for sport, team, player and match pages.</div>
 <div class="fc-statgrid"><div class="fc-stat"><b>/football/psl</b><span>Football competition</span></div><div class="fc-stat"><b>/rugby/springboks</b><span>Dedicated team</span></div><div class="fc-stat"><b>/rugby/springboks-vs-new-zealand</b><span>Match page</span></div></div>
@@ -9790,8 +9878,8 @@ window.loadExpectedScorers = async function() {
 <div class="sports-filter-row"><button onclick="loadEntitlement()">Check entitlement</button><button onclick="logoutAccount()">Logout</button></div>
 </div>
 <div class="fc-card" id="ksnV663MyKasi">
-<h3>? My Kasi ? Favourite Football Teams</h3>
-<div class="sub">Choose as many football teams as you want. No login required.</div>
+<h3>My Kasi · Favourite Football Teams</h3>
+<div class="sub">Choose as many football teams as you want. No login required. Scores appear when cached live or finished match data is available.</div>
 <div class="sports-filter-row">
 <input id="favTeam" maxlength="120" placeholder="Football team name" aria-label="Football team name"/>
 <button type="button" onclick="addFavourite()">Add favourite</button>
@@ -9799,7 +9887,50 @@ window.loadExpectedScorers = async function() {
 <div id="ksnV663TeamSuggestions" class="sub"
      role="status" aria-live="polite"></div>
 <div id="favouritesList" class="sub" aria-live="polite"></div>
+<div id="ksnMyKasiScores" class="sub" role="status" aria-live="polite">Select teams to see their available scores and match highlights.</div>
+<button type="button" id="ksnMyKasiRefresh" onclick="window.ksnMyKasiRenderScores?.()">Refresh saved scores</button>
+<p class="sub">Scores use the website’s existing locally cached match data. Highlight links appear only when provided by a match record. Push notifications are not yet enabled.</p>
 </div>
+<script id="ksn-v663-mykasi-scores-v488">
+(function(){'use strict';
+  const FAV='ksn:v663:my-kasi:football-favourites';
+  const STORE=['ksn:canonical:live.matches','ksn:canonical:live.finished','ks:v340:live:last-good','ks:v340:finished:last-good'];
+  const read=k=>{try{return JSON.parse(localStorage.getItem(k)||'null')}catch(_){return null}};
+  const rows=v=>Array.isArray(v)?v:(v?.games||v?.matches||v?.items||[]);
+  const team=(r,k)=>{const x=r?.teams?.[k]||r?.[k+'Team']||r?.[k];return typeof x==='string'?x:(x?.name||r?.[k+'Name']||'')};
+  const clean=x=>String(x||'').trim().toLocaleLowerCase();
+  const distinct=rs=>{const seen=new Set();return rs.filter(r=>{if(!r||typeof r!=='object')return false;const k=String(r.id||r.fixtureId||r.providerFixtureId||[team(r,'home'),team(r,'away'),r.date||r.datetime].join('|'));if(seen.has(k))return false;seen.add(k);return true})};
+  window.ksnMyKasiRenderScores=function(){
+    const box=document.getElementById('ksnMyKasiScores');if(!box)return;
+    box.replaceChildren();
+    const favourites=read(FAV);const names=Array.isArray(favourites)?favourites.map(clean).filter(Boolean):[];
+    const p=(text)=>{const el=document.createElement('p');el.textContent=text;box.append(el)};
+    if(!names.length){p('Add your favourite teams above to see their available match scores.');return}
+    const found=distinct(STORE.flatMap(k=>rows(read(k)))).filter(r=>{
+      const sport=clean(r.sport||'football');if(sport!=='football')return false;
+      return names.includes(clean(team(r,'home')))||names.includes(clean(team(r,'away')));
+    }).slice(0,30);
+    if(!found.length){p('No saved live or finished results found for your teams yet. Open Live Scores or Finished Games to populate the local feed.');return}
+    const title=document.createElement('h4');title.textContent='My Kasi · Recent team scores';box.append(title);
+    const list=document.createElement('ul');
+    for(const r of found){
+      const li=document.createElement('li');const home=team(r,'home'),away=team(r,'away');
+      const h=r.homeScore??r.goals?.home??r.score?.home??'–';const a=r.awayScore??r.goals?.away??r.score?.away??'–';
+      li.textContent=home+' '+h+' - '+a+' '+away+' · '+String(r.statusShort||r.status?.short||r.status||'Match');
+      const highlight=r.highlightsUrl||r.highlightUrl||r.videoUrl||'';
+      if(typeof highlight==='string'&&/^https:\/\/[^\s]+$/i.test(highlight)){
+        const a=document.createElement('a');a.href=highlight;a.target='_blank';a.rel='noopener noreferrer';a.textContent=' · Watch highlights';li.append(a);
+      }
+      list.append(li);
+    }
+    box.append(list);
+  };
+  document.addEventListener('DOMContentLoaded',()=>window.ksnMyKasiRenderScores());
+  document.addEventListener('ksn:shared-lkg-ready',()=>window.ksnMyKasiRenderScores());
+  window.addEventListener('storage',e=>{if(e.key===FAV||STORE.includes(e.key))window.ksnMyKasiRenderScores()});
+  document.addEventListener('click',e=>{if(e.target.closest('#ks537Sidebar [data-key="mykasi"],#ksnV663MyKasi button'))setTimeout(window.ksnMyKasiRenderScores,80)});
+})();
+</script>
 <script id="ksn-v663-my-kasi-favourites-js">
 (function(){
 'use strict';
@@ -13905,7 +14036,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
    return false
  }
  async function predLoad(s){const key='pred:'+s,g=nextOwner(key),saved=read(key);if(saved.length)predPaint(s,saved,true);let url=s==='football'?'/ai-predictions?league=ALL&type=upcoming&limit=100&refresh=0':'/sports/'+s+'/predictions?limit=12';try{const d=await json(url),rows=goodRows(d);if(!current(key,g))return;if(rows.length){store(key,rows);predPaint(s,rows,false)}else if(saved.length){predPaint(s,saved,true)}}catch(_){if(current(key,g)&&saved.length)predPaint(s,saved,true)}}
- window.ksn409RefreshPredictions=()=>Promise.all((window.KSN_V663_FOOTBALL_ONLY===true?['football']:['football','rugby','cricket']).map(predLoad));
+ window.ksn409RefreshPredictions=()=>typeof window.ksn429Predictions==='function'?window.ksn429Predictions():Promise.all((window.KSN_V663_FOOTBALL_ONLY===true?['football']:['football','rugby','cricket']).map(predLoad));
 })();
 </script>
 <!-- v410 final pre-SEO locked corrections: public predictions, clean team rendering, 50/17/8/25 fixtures, one Live owner -->
@@ -14777,14 +14908,47 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
  const pct=v=>{let n=Number(v);if(!Number.isFinite(n)||n<0)return null;if(n<=1)n*=100;return Math.max(0,Math.min(100,n))},odd=v=>{const n=Number(v);return Number.isFinite(n)&&n>1?n.toFixed(2):null};
  function img(src,alt){return src?`<img src="${E(src)}" alt="${E(alt)}" loading="eager" decoding="async" onerror="this.style.visibility='hidden'">`:''}
  function target(s){return s==='football'?$('predictionList'):$(s==='rugby'?'v246RugbyPredictions':'v246CricketPredictions')}
- function paint(s,a){const t=target(s);if(!t||!a.length)return false;t.innerHTML=window.ksn432PredTable?window.ksn432PredTable(a,s):'';t.dataset.ksnOwner='predictions.'+s;t.dataset.ksnKind='predictions';return true}
- function paintSaved(){for(const s of (window.KSN_V663_FOOTBALL_ONLY===true?['football']:['football','rugby','cricket'])){const a=read(predKeys[s]);if(a.length)paint(s,a)}}
- async function load(s){const owner='predictions.'+s,g=lock.claim(owner),saved=read(predKeys[s]);if(saved.length)paint(s,saved);const url=s==='football'?'/ai-predictions?league=ALL&type=upcoming&limit=100&refresh=0':'/sports/'+s+'/predictions?limit=24';try{const r=await (window.__KSN_NATIVE_FETCH__||fetch.bind(window))(url,{headers:{Accept:'application/json'},cache:'default'});if(!r.ok)throw 0;const a=rows(await r.json());if(!lock.valid(owner,g))return;if(a.length){
-      write(predKeys[s],a);
-      if(s==='football')write('ksn:v406:predictions:last-good',a);
-      paint(s,a);
-    }else if(saved.length)paint(s,saved)}catch(_){if(lock.valid(owner,g)&&saved.length)paint(s,saved)}}
- window.ksn429Predictions=()=>{lock.setPage('predictions');paintSaved();return Promise.all((window.KSN_V663_FOOTBALL_ONLY===true?['football']:['football','rugby','cricket']).map(load))};
+  function paint(s,a){
+    const t=target(s);if(!t||!a.length||typeof window.ksn432PredTable!=='function')return false;
+    t.innerHTML=window.ksn432PredTable(a,s);
+    t.dataset.ksnOwner='predictions.'+s;t.dataset.ksnKind='predictions';
+    return true;
+  }
+  function state(s,message,kind){
+    const t=target(s);if(!t)return;
+    t.textContent='';const div=document.createElement('div');
+    div.className='empty';div.textContent=message;
+    t.appendChild(div);t.dataset.ksnOwner='predictions.'+s;
+    t.dataset.ksnKind=kind;
+  }
+  function paintSaved(){for(const s of (window.KSN_V663_FOOTBALL_ONLY===true?['football']:['football','rugby','cricket'])){const a=read(predKeys[s]);if(a.length)paint(s,a)}}
+  const pending=new Map(), recently=new Map();
+  async function load(s){
+    if(pending.has(s))return pending.get(s);
+    if(Date.now()-(recently.get(s)||0)<1500)return;
+    const owner='predictions.'+s,g=lock.claim(owner),saved=read(predKeys[s]);
+    if(saved.length)paint(s,saved);
+    const url=s==='football'?'/ai-predictions?league=ALL&type=upcoming&limit=100&refresh=0':'/sports/'+s+'/predictions?limit=24';
+    const task=(async()=>{
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+      try{
+        const r=await (window.__KSN_NATIVE_FETCH__||fetch.bind(window))(url,{headers:{Accept:'application/json'},cache:'default',signal:controller.signal});
+        if(!r.ok)throw Error('HTTP '+r.status);
+        const a=rows(await r.json());
+        if(!lock.valid(owner,g))return;
+        if(a.length){write(predKeys[s],a);if(s==='football')write('ksn:v406:predictions:last-good',a);if(!paint(s,a))state(s,'Predictions temporarily unavailable.','error');}
+        else if(saved.length)paint(s,saved);
+        else state(s,'No upcoming predictions available.','empty');
+      }catch(_){
+        if(!lock.valid(owner,g))return;
+        if(saved.length)paint(s,saved);
+        else state(s,'Predictions temporarily unavailable. Please retry shortly.','error');
+      }finally{clearTimeout(timer)}
+    })();
+    pending.set(s,task);
+    try{return await task}finally{if(pending.get(s)===task)pending.delete(s);recently.set(s,Date.now())}
+  }
+  window.ksn429Predictions=()=>{lock.setPage('predictions');paintSaved();return Promise.all((window.KSN_V663_FOOTBALL_ONLY===true?['football']:['football','rugby','cricket']).map(load))};
  // Any historical call to renderPredictions is redirected to the canonical professional football renderer.
  window.renderPredictions=function(data){const a=rows(data)||[];const use=a.length?a:(window.S?.predictions||read(predKeys.football));if(use.length){write(predKeys.football,use);paint('football',use)}return use.length};
  const oldNav=window.kasiscorePrimaryNav;if(typeof oldNav==='function')window.kasiscorePrimaryNav=function(tab,btn){lock.setPage(tab);const r=oldNav.apply(this,arguments);if(String(tab).toLowerCase()==='predictions')queueMicrotask(window.ksn429Predictions);return r};
@@ -15649,7 +15813,7 @@ function go(page,mode){
   if(mode==='finished')setTimeout(()=>click('ksn422FinishedTab'),140);
   if(mode==='live')setTimeout(()=>click('ksn422LiveTab'),140);
   if(mode==='news')setTimeout(()=>$('homeLatestNewsSection')?.scrollIntoView({block:'start',behavior:'smooth'}),160);
-  if(mode==='tip')setTimeout(()=>$('totdCard')?.scrollIntoView({block:'start',behavior:'smooth'}),160);
+  if(mode==='tip')setTimeout(()=>{const tip=$('ks537Tip');const card=tip?.closest('section.rail-card');if(card){card.setAttribute('tabindex','-1');card.scrollIntoView({block:'center',behavior:'auto'});try{card.focus({preventScroll:true})}catch(_){}}},180);
   if(page!=='admin')window.scrollTo({top:0});
 }
 function showFinishedOn(dateStr){
@@ -15676,6 +15840,7 @@ const SIDE_MAIN=[
  ['news','📰','Sports News',()=>go('sportsnews')],
  ['bulletin','🗞','Live Bulletin',()=>go('overview','news')],
  ['teams','◈','Teams & Players',()=>go('sportshub')],
+ ['mykasi','★','My Kasi',()=>go('platform')],
  ['admin','⚙','Admin',()=>{window.toggleAdminWidget&&window.toggleAdminWidget(null);window.scrollTo({top:0})}]
 ];
 const SIDEBAR_COMPETITIONS=Object.freeze({
@@ -15687,7 +15852,7 @@ const SIDE_GROUPS=[
  {title:'Big 5 Leagues',icon:'🏆',items:[['🇬🇧','Premier League'],['🇪🇸','La Liga'],['🇩🇪','Bundesliga'],['🇮🇹','Serie A'],['🇫🇷','Ligue 1']]},
  {title:'Top Competitions',icon:'🏆',items:[['🏆','UEFA Champions League'],['🏆','Europa League'],['🌍','Africa Cup of Nations'],['🇬🇧','English Championship'],['🇬🇧','FA Cup'],['🇬🇧','EFL Cup']]}
 ];
-const SPORTS=[['football','⚽','Football',()=>go('live','live')],['rugby_intel','🏉','Rugby',()=>go('rugby_intel')],['cricket_intel','🏏','Cricket',()=>go('cricket_intel')],['news','📰','News',()=>go('sportsnews')],['predictions','📊','Predictions',()=>go('predictions')]];
+const SPORTS=[['football','⚽','Football',()=>go('live','live')],['rugby_intel','🏉','Rugby',()=>go('rugby_intel')],['cricket_intel','🏏','Cricket',()=>go('cricket_intel')],['news','📰','News',()=>go('sportsnews')],['predictions','📊','Predictions',()=>go('predictions')],['mykasi','★','My Kasi',()=>go('platform')]];
 let activeSport='football', lastRoute='';
 
 function navBtn(cls,ico,label,fn,key){
@@ -15866,7 +16031,7 @@ function updateSidebarFromRoute(){
   let key='';
   if(t==='live')key=view==='finished'?'finished':'live';
   else if(t==='fixtures')key='fixtures';else if(t==='predictions')key='predictions';
-  else if(t==='sportsnews')key='news';else if(t==='sportshub')key='teams';
+  else if(t==='sportsnews')key='news';else if(t==='sportshub')key='teams';else if(t==='platform')key='mykasi';
   if(t==='live'&&!LEAGUE_FILTER.name){} 
   setSidebarActive(key);
 }
@@ -15881,7 +16046,7 @@ function buildSportNav(){
 function paintSportActive(){
   const t=document.body.dataset.kasiTab||'';
   let key=activeSport;
-  if(t==='predictions')key='predictions';else if(t==='sportsnews')key='news';
+  if(t==='predictions')key='predictions';else if(t==='platform')key='mykasi';else if(t==='sportsnews')key='news';
   else if(t==='live'&&(activeSport==='football'||activeSport==='news'||activeSport==='predictions'))key=t==='live'?'football':key;
   document.querySelectorAll('#ks537SportNav button').forEach(b=>b.classList.toggle('active',b.dataset.sport===key));
 }
@@ -15890,7 +16055,7 @@ function paintSportActive(){
 function buildRail(){
   const rail=document.createElement('aside');rail.id='ks537Rail';rail.setAttribute('aria-label','Latest match intelligence');
   rail.innerHTML=
-   '<section class="rail-card"><div class="rail-head"><h3>💡 Tip of the Day</h3><button class="link-btn" type="button" data-go="tip">See all</button></div><div id="ks537Tip"><div class="status">Loading tip…</div></div><button class="cta" type="button" data-go="predictions">View full predictions</button></section>'+
+   '<section class="rail-card"><div class="rail-head"><h3>💡 Tip of the Day</h3><button class="link-btn" type="button" data-go="tip">See all</button></div><div id="ks537Tip"><div class="status">Loading tip…</div></div><button class="cta" type="button" data-go="tip">View Tip of the Day</button></section>'+
    '<section class="rail-card"><div class="rail-head"><h3>Latest Sports News</h3><button class="link-btn" type="button" data-go="news">See all</button></div><div id="ks537News"><div class="status">Loading latest articles…</div></div></section>'+
    '<section class="rail-card live-cta"><h3>Live Match Centre</h3><p>Detailed statistics, line-ups, player ratings and match detail for every live fixture.</p><button class="cta" type="button" data-go="live">View Match Centre →</button></section>';
   rail.addEventListener('click',e=>{const b=e.target.closest('[data-go]');if(!b)return;const g=b.dataset.go;
@@ -16041,24 +16206,17 @@ function tidyLists(){
   applyLeagueFilter();
   const visibleCount=sel=>[...document.querySelectorAll(sel+' > .k432-group')].filter(g=>g.style.display!=='none').reduce((n,g)=>n+g.querySelectorAll('.k432-match').length,0);
   const live=$('ks538CtLive');if(live){const n=visibleCount('#ksn422LiveResults');live.textContent=n?'('+n+')':''}
-  const fin=$('ks538CtFin');if(fin){const n=visibleCount('#ksn422FinishedResults');fin.textContent=n?'('+n+')':''}
+  const fin=$('ks538CtFin');if(fin)fin.textContent=''; // V663 Step 482: no Finished tab totals.
   paintPills();
 }
 
 /* ---------- header ---------- */
 function buildHeader(){
   const h=document.createElement('header');h.id='ks537Header';
-  h.innerHTML='<div class="brand"><img src="/kasi-sports-news-logo.png" alt="Kasi Sports News logo"><div><strong>KASI <span>SPORTS NEWS</span></strong><small>LIVE SCORES · NEWS · PREDICTIONS · STATISTICS</small></div></div>'+
-    '<input type="search" name="ksn_public_sports_query_no_autofill" autocomplete="off" autocapitalize="off" spellcheck="false" readonly aria-label="Search sports" placeholder="Search teams, leagues or players…">'+
+  h.innerHTML='<div class="brand"><img src="/kasi-sports-news-logo.png?v=663-new-brand-20261030" alt="Kasi Sports News logo"><div><strong>KASI <span>SPORTS NEWS</span></strong><small>LIVE SCORES · NEWS · PREDICTIONS</small></div></div>'+
     '<div class="header-actions"></div>';
   const actions=h.querySelector('.header-actions');
   const home=document.createElement('button');home.type='button';home.textContent='⌂ Home';home.addEventListener('click',()=>go('overview'));actions.append(home);
-  const publicSearch=h.querySelector('input');
-  publicSearch.addEventListener('focus',()=>{publicSearch.removeAttribute('readonly');if(publicSearch.value.includes('@'))publicSearch.value=''});
-  publicSearch.addEventListener('blur',()=>{if(!publicSearch.value.trim())publicSearch.setAttribute('readonly','')});
-  publicSearch.value='';
-  h.querySelector('input').addEventListener('keydown',e=>{if(e.key!=='Enter')return;const q=e.target.value.trim();if(!q)return;
-    go('search');setTimeout(()=>{const f=document.querySelector('#searchInput,#globalSearchInput,#ks245SearchInput,input[placeholder*="Search"]:not(#ks537Header input)');if(f){f.value=q;f.dispatchEvent(new Event('input',{bubbles:true}))}},160)});
   return h;
 }
 
@@ -17271,7 +17429,12 @@ body[data-kasi-live-view="finished"] #ksn662FinishedArchive{display:block!import
 .ksn662-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid #29394d;border-radius:12px;background:#101c2b;padding:14px;min-width:0}
 .ksn662-meta{font-size:11px;color:#9db0c7;margin-bottom:8px;overflow-wrap:anywhere}
 .ksn662-teams{display:grid;gap:7px}
-.ksn662-team{font-size:14px;font-weight:650;overflow-wrap:anywhere}
+.ksn662-team{font-size:14px;font-weight:650;overflow-wrap:anywhere;display:flex;align-items:center;gap:9px;min-width:0}
+.ksn662-team-name{min-width:0;overflow-wrap:anywhere}
+.ksn662-team-badge{width:30px;height:30px;object-fit:contain;flex:0 0 30px;border-radius:4px}
+.ksn662-team-badge-fallback{width:30px;height:30px;flex:0 0 30px;border:1px solid #425873;border-radius:50%;display:inline-grid;place-items:center;color:#cbd5e1;font-size:12px;font-weight:700}
+.ksn662-country-flag{width:22px;height:16px;object-fit:contain;vertical-align:middle;margin-right:7px;border-radius:2px}
+.ksn662-meta{display:flex;align-items:center;flex-wrap:wrap;gap:4px}
 .ksn662-score{font-size:22px;font-weight:800;white-space:nowrap;font-variant-numeric:tabular-nums}
 .ksn662-stats{grid-column:1/-1;display:flex;justify-content:flex-end}
 .ksn662-stats a{color:#dbeafe;border:1px solid #425873;border-radius:8px;padding:8px 13px;text-decoration:none;font-size:12px}
@@ -17349,7 +17512,7 @@ function normal(x){
  const home=text(x?.home||x?.homeTeam||x?.teams?.home);
  const away=text(x?.away||x?.awayTeam||x?.teams?.away);
  const league=text(x?.competition||x?.league);
- const country=text(x?.country);
+ const country=text(x?.country)||text(x?.countryName);
  const date=String(x?.date||x?.datetime||x?.kickoff||x?.fixture?.date||'');
  return {sport,home,away,league,country,date,h:sport==='cricket'?cricketScore(x,'home'):score(x,'home'),a:sport==='cricket'?cricketScore(x,'away'):score(x,'away')};
 }
@@ -17363,17 +17526,83 @@ function href(x,m){
   return typeof value==='string'&&value.startsWith('/')&&!value.startsWith('//')?value:'';
  }catch(_){return ''}
 }
+// Presentation-only: show the archived kickoff in DD/MM/YYYY and 12-hour time.
+// Explicit UTC/offset timestamps convert to South African time; naive timestamps
+// retain their supplied wall-clock time instead of assuming an unknown timezone.
+function archiveDisplayDate(raw){
+ const value=String(raw||'').trim();
+ const match=value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+ if(!match)return 'Date unavailable';
+ let day=match[3],month=match[2],year=match[1];
+ let hours=match[4],minutes=match[5];
+ if(hours===undefined)return `${day}/${month}/${year}`;
+ if(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)){
+  const instant=new Date(value);
+  if(Number.isFinite(instant.getTime())){
+   const parts=new Intl.DateTimeFormat('en-GB',{
+    timeZone:'Africa/Johannesburg',year:'numeric',month:'2-digit',day:'2-digit',
+    hour:'2-digit',minute:'2-digit',hourCycle:'h23'
+   }).formatToParts(instant);
+   const field=k=>parts.find(p=>p.type===k)?.value;
+   day=field('day');month=field('month');year=field('year');
+   hours=field('hour');minutes=field('minute');
+  }
+ }
+ const hour=Number(hours);
+ if(!Number.isInteger(hour)||hour>23||Number(minutes)>59)return `${day}/${month}/${year}`;
+ return `${day}/${month}/${year}  ${String(hour%12||12).padStart(2,'0')}:${minutes} ${hour>=12?'PM':'AM'}`;
+}
+// V663 STEP 484: Display only source-provided team badges and country/league flags.
+// A verified football team ID can use the existing same-origin badge endpoint.
+// No synthetic team logos, flag URLs or invented team identities are generated.
+function archiveSafeImage(value){
+ const v=typeof value==='string'?value.trim():'';
+ return /^(?:https:\/\/[^\s<>"']+|\/(?!\/)[^\s<>"']+)$/.test(v)?v:'';
+}
+function archiveFirstImage(...values){
+ for(const value of values){const url=archiveSafeImage(value);if(url)return url}
+ return '';
+}
+function archiveBadgeUrl(x,side,m){
+ const t=x?.teams?.[side], obj=x?.[side+'Team'];
+ const url=archiveFirstImage(
+  x?.[side+'Logo'],x?.[side+'Badge'],x?.[side+'_logo'],x?.[side+'_badge'],
+  x?.[side+'TeamLogo'],x?.[side+'TeamBadge'],t?.logo,t?.badge,t?.image,
+  obj?.logo,obj?.badge,obj?.image
+ );
+ if(url)return url;
+ const id=x?.[side+'Id']??x?.[side+'TeamId']??x?.[side+'_id']??t?.id??obj?.id;
+ if(m.sport==='football'&&/^[1-9]\d{0,11}$/.test(String(id??'')))
+  return '/sports/football/team-badge/'+encodeURIComponent(String(id));
+ return '';
+}
+function archiveTeamMarkup(x,side,m){
+ const name=side==='home'?m.home:m.away;
+ const url=archiveBadgeUrl(x,side,m);
+ const fallback=`<span class="ksn662-team-badge-fallback" aria-hidden="true">${E(name.charAt(0).toUpperCase()||'?')}</span>`;
+ const badge=url?`<img class="ksn662-team-badge" src="${E(url)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-grid'"><span class="ksn662-team-badge-fallback" style="display:none" aria-hidden="true">${E(name.charAt(0).toUpperCase()||'?')}</span>`:fallback;
+ return `<div class="ksn662-team">${badge}<span class="ksn662-team-name">${E(name)}</span></div>`;
+}
+function archiveFlagUrl(x){
+ return archiveFirstImage(
+  x?.countryFlag,x?.country?.flag,x?.country?.logo,x?.flag,
+  x?.leagueFlag,x?.league?.flag,x?.competition?.flag,
+  x?.leagueLogo,x?.league?.logo,x?.competition?.logo
+ );
+}
 function renderRow(x){
- const m=normal(x);
+  const m=normal(x);
  if(!m.home||!m.away||m.h===null||m.a===null)return '';
  const url=href(x,m);
- const when=m.date?m.date.slice(0,16).replace('T',' '):'Date unavailable';
- const head=[m.sport.toUpperCase(),m.country,m.league,when].filter(Boolean).join(' \u00b7 ');
+ const when=archiveDisplayDate(m.date);
+ const head=[m.sport.toUpperCase(),m.country,m.league,when].filter(Boolean).join(' | ');
+  const flag=archiveFlagUrl(x);
+  const flagHtml=flag?`<img class="ksn662-country-flag" src="${E(flag)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">`:'';
  return `<article class="ksn662-card">
-  <div><div class="ksn662-meta">${E(head)}</div>
-   <div class="ksn662-teams"><div class="ksn662-team">${E(m.home)}</div>
-   <div class="ksn662-team">${E(m.away)}</div></div>
-  </div><div class="ksn662-score">${m.h} &#8211; ${m.a}</div>
+  <div><div class="ksn662-meta">${flagHtml}<span>${E(head)}</span></div>
+   <div class="ksn662-teams">${archiveTeamMarkup(x,'home',m)}
+    ${archiveTeamMarkup(x,'away',m)}</div>
+  </div><div class="ksn662-score">${E(m.h)} - ${E(m.a)}</div>
   <div class="ksn662-stats">${url?`<a href="${E(url)}">Match details</a>`:
   '<span class="ksn662-meta">Match details unavailable</span>'}</div>
  </article>`;
@@ -17391,7 +17620,7 @@ function mount(){
   <div class="ksn662-filters">
    <label class="ksn662-field">Sport<select data-k="sport">
     <option value="all">All sports</option><option value="football">Football</option>
-    <option value="rugby">Rugby</option><option value="cricket">Cricket</option></select></label>
+    <option value="rugby" disabled>Rugby (Coming Soon)</option><option value="cricket" disabled>Cricket (Coming Soon)</option></select></label>
    <label class="ksn662-field">Search teams / matches<input data-k="q" placeholder="Search results"></label>
    <label class="ksn662-field">Competition<input data-k="competition" placeholder="Competition"></label>
    <label class="ksn662-field">Country<input data-k="country" placeholder="Country"></label>
@@ -17406,13 +17635,15 @@ function mount(){
   <div class="ksn662-actions"><button data-action="more" hidden>Load more</button></div>
  </div>`;
  old.appendChild(root);
+  // Keep unavailable sports visible as roadmap items in football-only mode.
+  // Disabled options cannot trigger a Rugby or Cricket archive request.
   if(window.KSN_V663_FOOTBALL_ONLY===true){
    const sportControl=root.querySelector('[data-k="sport"]');
    if(sportControl){
-    sportControl.innerHTML='<option value="football">Football</option>';
-    sportControl.value='football';
-    const label=sportControl.closest('label');
-    if(label)label.style.display='none';
+    sportControl.value='all';
+    for(const option of sportControl.options){
+     if(option.value==='rugby'||option.value==='cricket')option.disabled=true;
+    }
    }
   }
  root.addEventListener('click',e=>{
@@ -17422,7 +17653,7 @@ function mount(){
   if(a==='search')load(false);
   if(a==='more')load(true);
   if(a==='reset'){
-   root.querySelectorAll('[data-k]').forEach(el=>el.value=el.dataset.k==='sport'?(window.KSN_V663_FOOTBALL_ONLY===true?'football':'all'):'');
+   root.querySelectorAll('[data-k]').forEach(el=>el.value=el.dataset.k==='sport'?'all':'');
    load(false);
   }
  });
@@ -17440,7 +17671,7 @@ function draw(note=''){
  const cards=S.rows.map(renderRow).filter(Boolean);
  list.innerHTML=cards.join('')||
   `<div class="ksn662-empty">${E(note||'No confirmed results matched your filters.')}</div>`;
- count.textContent=`${cards.length} displayed${S.total?` \u00b7 ${S.total} archive matches`:''}${S.loading?' ? Loading?':''}`;
+ count.textContent=''; // V663 Step 482: hide archive/display totals; keep internal pagination counts.
  more.hidden=S.loading||S.rows.length>=S.total||S.total<=0;
 }
 async function load(append){
