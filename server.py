@@ -20634,9 +20634,14 @@ async def _v662_bounded_prediction_recovery():
         )
         league_name = selected[1]
         _V662_RECOVERY_CURSOR += 1
-        recovery_date = datetime.now(timezone.utc).date().isoformat()
-        recovery_end_date = (
-            datetime.now(timezone.utc).date() + timedelta(days=6)
+        # Bounded ai_predictions requires date_from == date_to.
+        # Rotate the selected UTC day across process restarts.
+        recovery_now = datetime.now(timezone.utc)
+        recovery_day_offset = int(
+            recovery_now.timestamp() // 3600
+        ) % 7
+        recovery_date = (
+            recovery_now.date() + timedelta(days=recovery_day_offset)
         ).isoformat()
 
         for league_name in (league_name,):
@@ -20655,7 +20660,7 @@ async def _v662_bounded_prediction_recovery():
                     league=league_name,
                     type="upcoming",
                     date_from=recovery_date,
-                    date_to=recovery_end_date,
+                    date_to=recovery_date,
                     max_odds_requests=2,
                 )
             finally:
