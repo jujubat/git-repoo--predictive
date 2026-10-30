@@ -5613,38 +5613,33 @@ from ksn_v663_step492_voting import router as _ksn492_vote_router, enabled as _k
 def _ksn492_trusted_fixture_resolver():
     if not _ksn492_vote_enabled():
         return []
-    # Read only the fresh in-memory fixture cache; do not call providers or SQL.
-    cache = globals().get("_fixtures_cache")
-    if cache is None:
+    # Staging PG is the authoritative verified fixture snapshot, not per-worker RAM.
+    # Fail closed: never use provider calls or production storage for voting.
+    from ksn_v663_staging_pg_snapshots import read, FIXTURE_KEY
+    payload = read(FIXTURE_KEY)
+    if not isinstance(payload, dict) or payload.get("stale") or payload.get("providerLocked"):
         return []
-    try:
-        payloads = list(cache.values())
-    except (RuntimeError, KeyError):
+    rows = payload.get("matches")
+    if not isinstance(rows, list):
         return []
     converted = []
-    for payload in payloads:
-        if not isinstance(payload, dict) or payload.get("stale") or payload.get("providerLocked"):
+    for row in rows:
+        if not isinstance(row, dict):
             continue
-        rows = payload.get("matches") or payload.get("fixtures") or []
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            fid = row.get("_afootFixtureId") or row.get("id")
-            league = row.get("league")
-            if isinstance(league, dict):
-                league = league.get("name")
-            converted.append({
-                "id": str(fid or ""),
-                "home": str(row.get("home") or ""),
-                "away": str(row.get("away") or ""),
-                "league": str(league or row.get("leagueName") or ""),
-                "league_id": str(row.get("leagueId") or row.get("_leagueId") or ""),
-                "kickoff": str(row.get("fixtureDate") or row.get("datetime") or row.get("date") or ""),
-                "status": str(row.get("statusShort") or ""),
-                "sport": str(row.get("sport") or "football"),
-            })
+        fid = row.get("_afootFixtureId") or row.get("id")
+        league = row.get("league")
+        if isinstance(league, dict):
+            league = league.get("name")
+        converted.append({
+            "id": str(fid or ""),
+            "home": str(row.get("home") or ""),
+            "away": str(row.get("away") or ""),
+            "league": str(league or row.get("leagueName") or ""),
+            "league_id": str(row.get("leagueId") or row.get("_leagueId") or ""),
+            "kickoff": str(row.get("fixtureDate") or ""),
+            "status": str(row.get("statusShort") or ""),
+            "sport": str(row.get("sport") or "football"),
+        })
     return converted
 
 app.state.ksn_vote_fixture_resolver = _ksn492_trusted_fixture_resolver

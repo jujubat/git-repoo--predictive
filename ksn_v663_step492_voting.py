@@ -7,7 +7,6 @@ import hashlib
 import hmac
 import os
 import secrets
-import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,19 +34,31 @@ def guard():
 
 
 def connect():
-    p = Path(os.environ['KSN_STAGING_VOTE_DB']).resolve()
-    expected = (Path(__file__).resolve().parent / 'data' / 'v663_staging_isolated' / 'community_votes.sqlite3').resolve()
-    if p != expected:
-        raise HTTPException(503, 'Vote database must use dedicated isolated staging path')
-    if not p.parent.exists():
-        raise HTTPException(503, 'Vote database directory does not exist')
-    db = sqlite3.connect(str(p), timeout=5, isolation_level=None)
-    db.row_factory = sqlite3.Row
-    db.execute('PRAGMA busy_timeout=5000')
-    db.execute('CREATE TABLE IF NOT EXISTS votes (fixture_id TEXT NOT NULL, voter_id TEXT NOT NULL, choice TEXT NOT NULL CHECK(choice IN (\'H\',\'A\')), created_at INTEGER NOT NULL, PRIMARY KEY(fixture_id, voter_id))')
-    db.execute('CREATE TABLE IF NOT EXISTS rate_events (key_hash TEXT NOT NULL, ts INTEGER NOT NULL)')
-    db.execute('CREATE INDEX IF NOT EXISTS rate_events_idx ON rate_events(key_hash,ts)')
-    return db
+    # Shared staging-only PG adapter independently checks service and DB identity.
+    from ksn_v663_staging_pg_snapshots import connection, enabled as pg_enabled
+    if not pg_enabled():
+        raise HTTPException(503, 'Persistent staging voting disabled')
+    db = connection()
+    try:
+        db.set_session(readonly=False, autocommit=False)
+        with db.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '5000ms'")
+            cur.execute("""CREATE TABLE IF NOT EXISTS ksn_v663_staging_votes (
+                fixture_id TEXT NOT NULL,
+                voter_id TEXT NOT NULL,
+                choice CHAR(1) NOT NULL CHECK(choice IN ('H','A')),
+                created_at BIGINT NOT NULL,
+                PRIMARY KEY(fixture_id, voter_id))""")
+            cur.execute("""CREATE TABLE IF NOT EXISTS ksn_v663_staging_vote_rate_events (
+                key_hash TEXT NOT NULL, ts BIGINT NOT NULL)""")
+            cur.execute("""CREATE INDEX IF NOT EXISTS ksn_v663_staging_vote_rate_idx
+                ON ksn_v663_staging_vote_rate_events(key_hash,ts)""")
+        db.commit()
+        return db
+    except BaseException:
+        db.rollback()
+        db.close()
+        raise
 
 
 def digest(data):
@@ -75,7 +86,7 @@ def fixture_rows(request: Request):
         raise HTTPException(503, 'Fixture resolver returned invalid data')
     now = time.time()
     valid = []
-    for x in source[:300]:
+    for x in source[:2500]:
         if not isinstance(x, dict): continue
         fid, home, away = str(x.get('id', '')), str(x.get('home', '')), str(x.get('away', ''))
         league, league_id = str(x.get('league', '')), str(x.get('league_id', ''))
@@ -101,7 +112,9 @@ def fixture_rows(request: Request):
 
 
 def outcome(db, fid):
-    counts = dict(db.execute('SELECT choice, COUNT(*) AS n FROM votes WHERE fixture_id=? GROUP BY choice',(fid,)).fetchall())
+    with db.cursor() as cur:
+        cur.execute('SELECT choice, COUNT(*) FROM ksn_v663_staging_votes WHERE fixture_id=%s GROUP BY choice', (fid,))
+        counts = dict(cur.fetchall())
     h, a = int(counts.get('H', 0)), int(counts.get('A', 0))
     total = h+a
     return {'fixtureId':fid,'totalVotes':total,'homeVotes':h,'awayVotes':a,
@@ -122,45 +135,62 @@ def matches(request: Request, response: Response):
     token, new_cookie = voter(request)
     if new_cookie:
         response.set_cookie(COOKIE,new_cookie,max_age=31536000,httponly=True,secure=True,samesite='lax',path='/')
-    with connect() as db:
-        return {'matches':[{k:v for k,v in m.items() if not k.startswith('_')} |
-                          {'results': outcome(db,m['id']),
-                           'yourVote': next((r['choice'] for r in db.execute('SELECT choice FROM votes WHERE fixture_id=? AND voter_id=?',(m['id'],digest(token)))),None)}
-                           for m in selected]}
+    db = connect()
+    try:
+        output = []
+        for match in selected:
+            with db.cursor() as cur:
+                cur.execute('SELECT choice FROM ksn_v663_staging_votes WHERE fixture_id=%s AND voter_id=%s',
+                            (match['id'], digest(token)))
+                existing = cur.fetchone()
+            output.append({k:v for k,v in match.items() if not k.startswith('_')} |
+                          {'results':outcome(db,match['id']),
+                           'yourVote':existing[0] if existing else None})
+        db.rollback()
+        return {'matches':output}
+    finally:
+        db.close()
 
 
 @router.post('/vote', status_code=200)
 def vote(body: VoteIn, request: Request, response: Response):
     guard()
-    matches = {m['id']:m for m in fixture_rows(request)}
-    if body.fixtureId not in matches:
+    allowed = {m['id']:m for m in fixture_rows(request)}
+    if body.fixtureId not in allowed:
         raise HTTPException(409, 'Match unavailable or voting closed')
     token, new_cookie = voter(request)
     ip = request.client.host if request.client else 'unknown'
     ip_key = digest('ip:'+ip)
     voter_key = digest(token)
     now = int(time.time())
-    with connect() as db:
-        try:
-            db.execute('BEGIN IMMEDIATE')
-            db.execute('DELETE FROM rate_events WHERE ts < ?', (now-3600,))
-            recent = db.execute('SELECT COUNT(*) FROM rate_events WHERE key_hash=? AND ts>?',(ip_key,now-60)).fetchone()[0]
+    db = connect()
+    try:
+        # Serializable transaction prevents concurrent rate-limit bypass.
+        db.set_session(isolation_level='SERIALIZABLE', readonly=False, autocommit=False)
+        with db.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '5000ms'")
+            cur.execute('DELETE FROM ksn_v663_staging_vote_rate_events WHERE ts < %s', (now-3600,))
+            cur.execute('SELECT COUNT(*) FROM ksn_v663_staging_vote_rate_events WHERE key_hash=%s AND ts>%s',
+                        (ip_key, now-60))
+            recent = cur.fetchone()[0]
             if recent >= 12:
-                db.rollback()
                 raise HTTPException(429,'Too many vote attempts; please retry later')
-            db.execute('INSERT INTO rate_events(key_hash,ts) VALUES (?,?)',(ip_key,now))
-            existing = db.execute('SELECT choice FROM votes WHERE fixture_id=? AND voter_id=?',(body.fixtureId,voter_key)).fetchone()
-            if existing:
-                result = 'already-voted'
-            else:
-                db.execute('INSERT INTO votes(fixture_id,voter_id,choice,created_at) VALUES(?,?,?,?)',
-                           (body.fixtureId,voter_key,body.choice,now))
-                result = 'accepted'
-            results = outcome(db,body.fixtureId)
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
+            cur.execute('INSERT INTO ksn_v663_staging_vote_rate_events(key_hash,ts) VALUES (%s,%s)',
+                        (ip_key,now))
+            cur.execute('INSERT INTO ksn_v663_staging_votes(fixture_id,voter_id,choice,created_at) '
+                        'VALUES(%s,%s,%s,%s) ON CONFLICT (fixture_id,voter_id) DO NOTHING',
+                        (body.fixtureId,voter_key,body.choice,now))
+            accepted = cur.rowcount == 1
+            cur.execute('SELECT choice FROM ksn_v663_staging_votes WHERE fixture_id=%s AND voter_id=%s',
+                        (body.fixtureId,voter_key))
+            actual = cur.fetchone()[0]
+        results = outcome(db,body.fixtureId)
+        db.commit()
+    except BaseException:
+        db.rollback()
+        raise
+    finally:
+        db.close()
     if new_cookie:
         response.set_cookie(COOKIE,new_cookie,max_age=31536000,httponly=True,secure=True,samesite='lax',path='/')
-    return {'state':result,'yourVote':existing['choice'] if existing else body.choice,'results':results}
+    return {'state':'accepted' if accepted else 'already-voted', 'yourVote':actual,'results':results}
