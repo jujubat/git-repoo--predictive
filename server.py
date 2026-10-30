@@ -11612,6 +11612,28 @@ def _ksn_v590_team_view(profile, team_id, season):
     base["players"] = [p for p in (base.get("players") or [])
                        if isinstance(p, dict) and str(p.get("id") or "").isdigit()
                        and int(p["id"]) > 0]
+    # V663 STEP 757: verified fixture mirror final recovery.
+    # A partial team profile must not hide a stored exact-team/season fixture mirror.
+    # This is read-only; no provider calls or snapshots written on page views.
+    if not base.get("future"):
+        try:
+            _key = f"team_verified_fixtures_v607:{team_id}:{season}"
+            _bulk = _ksn_v617_snapshots_bulk([_key])
+            _snap = (_bulk or {}).get(_key) or {}
+            _data = _snap.get("data") or {}
+            if (isinstance(_data, dict)
+                    and int(_data.get("teamId") or 0) == int(team_id)
+                    and int(_data.get("season") or 0) == int(season)):
+                _valid_raw = _ksn_v607_valid_raw_fixtures(
+                    _data.get("fixtures") or [], team_id, season)
+                _valid_future = _ksn_v607_future_rows(_valid_raw, team_id)
+                _valid_future = [r for r in _valid_future
+                                 if _ksn_v588_match_ok(r, team_id, True)]
+                if _valid_future:
+                    base["future"] = _valid_future[:10]
+        except Exception as exc:
+            log.warning("V663 Step 757 fixture recovery skipped team=%s: %s",
+                        team_id, type(exc).__name__)
     base["cached"] = True
     base["refreshing"] = False
     return base
