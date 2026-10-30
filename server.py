@@ -11650,6 +11650,38 @@ def _ksn_v590_team_view(profile, team_id, season):
         except Exception as exc:
             log.warning("V663 Step 757 fixture recovery skipped team=%s: %s",
                         team_id, type(exc).__name__)
+    # V663 Step 791: final read-only verified EPL standings recovery.
+    # Preserve full tables; do not trust partial one-row identity fallbacks.
+    if (
+        int(season) == 2026
+        and not _ksn_v663_staging_football_only()
+        and len(base.get("standings") or []) < 20
+    ):
+        try:
+            _league = base.get("league") or {}
+            if isinstance(_league, dict) and str(_league.get("id")) == "39":
+                _key = "canonical_standings:39:2026"
+                _snaps = _ksn_v617_snapshots_bulk([_key])
+                _snap = (_snaps or {}).get(_key) or {}
+                _data = _snap.get("data") or {}
+                _table = _data.get("standings") if isinstance(_data, dict) else None
+                if isinstance(_table, list) and len(_table) == 20:
+                    _ids = [
+                        str((r.get("team") or {}).get("id") or "")
+                        for r in _table if isinstance(r, dict)
+                    ]
+                    if (
+                        len(_ids) == 20
+                        and all(s.isdigit() and int(s) > 0 for s in _ids)
+                        and len(set(_ids)) == 20
+                        and str(team_id) in _ids
+                    ):
+                        base["standings"] = _table
+        except Exception as exc:
+            log.warning(
+                "V663 Step 791 standings recovery skipped team=%s: %s",
+                team_id, type(exc).__name__
+            )
     base["cached"] = True
     base["refreshing"] = False
     return base
