@@ -20558,10 +20558,22 @@ async def _v662_bounded_prediction_recovery():
                 )
                 if isinstance(row, dict)
                 and _ksn_active_prediction(row)
-                and _valid_1x2(row.get("odds") or {})
-                and row.get("predictionEligible")
+                and (
+                    (
+                        _valid_1x2(row.get("odds") or {})
+                        and row.get("predictionEligible") is True
+                        and not row.get("modelOnly")
+                    )
+                    or (
+                        row.get("modelOnly") is True
+                        and row.get("predictionEligible") is False
+                        and row.get("bookmakerGatePassed") is False
+                    )
+                )
             ]
-            if active:
+            # Continue filling a partial pool. A single valid fixture is
+            # not sufficient evidence that the public pool is complete.
+            if len(active) >= 100:
                 return {"skipped": "healthy_snapshot"}
 
         if _v448_api_football_provider_locked():
@@ -20611,15 +20623,110 @@ async def _v662_bounded_prediction_recovery():
                 [result], limit=100
             )
 
-            if not qualified:
+            # V663: Retain valid model-only results from the bounded
+            # generation path, without treating them as bookmaker picks.
+            model_only = []
+            seen_ids = {
+                str(row.get("_afootFixtureId") or row.get("fixtureId")
+                    or row.get("fixture_id") or row.get("id"))
+                for row in qualified
+            }
+            for row in (result.get("predictions") or []):
+                if not isinstance(row, dict):
+                    continue
+                if not _ksn_active_prediction(row):
+                    continue
+                if row.get("modelOnly") is not True:
+                    continue
+                if row.get("predictionEligible") is not False:
+                    continue
+                if row.get("bookmakerGatePassed") is not False:
+                    continue
+                fid = (
+                    row.get("_afootFixtureId")
+                    or row.get("fixtureId")
+                    or row.get("fixture_id")
+                    or row.get("id")
+                )
+                if fid is None or str(fid) in seen_ids:
+                    continue
+                seen_ids.add(str(fid))
+                model_only.append(dict(row))
+
+            recovered = _ksn_sort_football_rows(
+                qualified + model_only, ""
+            )[:100]
+
+            if not recovered:
                 continue
 
+            # Merge with existing active predictions, favouring the latest
+            # recovered row for duplicate fixture identities.
+            previous_rows = (
+                existing_data.get("predictions")
+                or existing_data.get("matches")
+                or []
+            ) if isinstance(existing_data, dict) else []
+
+            merged_by_id = {}
+
+            for row in previous_rows:
+                if not isinstance(row, dict) or not _ksn_active_prediction(row):
+                    continue
+                fid = (
+                    row.get("_afootFixtureId")
+                    or row.get("fixtureId")
+                    or row.get("fixture_id")
+                    or row.get("id")
+                )
+                if fid is None:
+                    continue
+                is_qualified = (
+                    _valid_1x2(row.get("odds") or {})
+                    and row.get("predictionEligible") is True
+                    and row.get("modelOnly") is not True
+                )
+                is_model = (
+                    row.get("modelOnly") is True
+                    and row.get("predictionEligible") is False
+                    and row.get("bookmakerGatePassed") is False
+                )
+                if is_qualified or is_model:
+                    merged_by_id[str(fid)] = dict(row)
+
+            for row in recovered:
+                fid = (
+                    row.get("_afootFixtureId")
+                    or row.get("fixtureId")
+                    or row.get("fixture_id")
+                    or row.get("id")
+                )
+                if fid is not None:
+                    merged_by_id[str(fid)] = dict(row)
+
+            recovered = _ksn_sort_football_rows(
+                list(merged_by_id.values()), ""
+            )[:100]
+
+            qualified = [
+                row for row in recovered
+                if row.get("predictionEligible") is True
+                and row.get("modelOnly") is not True
+                and _valid_1x2(row.get("odds") or {})
+            ]
+            model_only = [
+                row for row in recovered
+                if row.get("modelOnly") is True
+                and row.get("predictionEligible") is False
+                and row.get("bookmakerGatePassed") is False
+            ]
+
             payload = {
-                "predictions": qualified,
-                "matches": qualified,
-                "count": len(qualified),
+                "predictions": recovered,
+                "matches": recovered,
+                "count": len(recovered),
                 "eligibleFixtures": len(qualified),
-                "modelOnlyFixtures": 0,
+                "modelOnlyFixtures": len(model_only),
                 "fromBoundedRecovery": True,
                 "recoveredAt": datetime.now(timezone.utc).isoformat(),
             }
@@ -20631,7 +20738,9 @@ async def _v662_bounded_prediction_recovery():
             _dashboard_snapshot_put(key, {"data": payload})
 
             return {
-                "recovered": len(qualified),
+                "recovered": len(recovered),
+                "bookmakerQualified": len(qualified),
+                "modelOnly": len(model_only),
                 "league": league_name,
                 "date": recovery_date,
             }
