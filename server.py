@@ -13108,10 +13108,31 @@ async def ksn579_staging_enrich_odds(request: Request):
             return {"status":"verified_odds_saved","providerRequests":calls,
                     "saved":True,"fixtureId":str(local_fixture.get("_afootFixtureId") or ""),
                     "bookmaker":str(prices.get("_bookmaker") or "verified")}
-        except RuntimeError:
-            # No provider errors or API URLs are exposed to unauthenticated clients.
-            log.warning("V663 staging bounded odds enrichment unavailable")
-            raise HTTPException(503, detail="Bounded odds enrichment unavailable")
+        except RuntimeError as exc:
+            # Fixed diagnostic categories only; never return raw provider details,
+            # URLs, response bodies, credentials, or internal exception text.
+            error = str(exc).lower()
+            if "credentials rejected" in error or "http 401" in error:
+                reason = "authentication_rejected"
+            elif "http 403" in error:
+                reason = "provider_access_denied"
+            elif "http 429" in error:
+                reason = "provider_rate_limited"
+            elif ("budget" in error or "quota" in error
+                  or "request limit" in error):
+                reason = "quota_exhausted"
+            elif "http 400" in error or "http 422" in error:
+                reason = "invalid_provider_request"
+            elif "http 404" in error:
+                reason = "provider_resource_missing"
+            else:
+                reason = "provider_unavailable"
+            log.warning("V663 staging bounded odds enrichment failed: category=%s", reason)
+            return Response(status_code=503, media_type="application/json",
+                content=json.dumps({
+                    "status": "provider_unavailable", "reason": reason,
+                    "saved": False, "productionDatabaseReads": 0,
+                }), headers={"Cache-Control": "no-store"})
         finally:
             _KSN579_AUTHORIZED_ODDS_CONTEXT.reset(token)
 
