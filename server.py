@@ -5661,6 +5661,16 @@ async def ksn_staging_seo_test_gate(request: Request, call_next):
             return response
         return Response(content="Staging diagnostic disabled", status_code=404,
                         media_type="text/plain", headers={"Cache-Control":"no-store"})
+    # V663 Step 551: authenticated, staging-only database identity check.
+    if (request.url.path == "/__ksn_v663/staging/database/identity"
+            and request.method == "GET"):
+        if _ksn499_diagnostic_authorized(request):
+            response = await call_next(request)
+            response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return Response(content="Staging database diagnostic disabled",
+                        status_code=404, headers={"Cache-Control": "no-store"})
     # V663 Step 529: private, provider-free snapshot prediction generation.
     if (request.url.path == "/__ksn_v663/staging/predictions/generate"
             and request.method == "POST"):
@@ -12943,6 +12953,51 @@ async def ksn499_staging_prediction_readiness(request: Request):
         headers={"X-Robots-Tag":"noindex, nofollow, noarchive",
                  "Cache-Control":"no-store"},
     )
+
+# V663 Step 551: read-only identity of the DB used by THIS staging web service.
+@app.get("/__ksn_v663/staging/database/identity")
+def ksn551_staging_database_identity(request: Request):
+    if not _ksn499_diagnostic_authorized(request):
+        raise HTTPException(status_code=404, detail="Not found")
+    expected = "kasilivescore_staging_db"
+    expected_user = "kasilivescore_staging_db_user"
+    expected_service = "srv-db9agalg1s2s73fvpgeg"
+    service_id = os.getenv("RENDER_SERVICE_ID", "")
+    if service_id != expected_service:
+        raise HTTPException(status_code=503, detail="Staging service identity mismatch")
+    url = os.getenv("DATABASE_URL", "")
+    if not url or psycopg2 is None:
+        raise HTTPException(status_code=503, detail="Staging database not configured")
+    connection = None
+    try:
+        connection = psycopg2.connect(url, connect_timeout=5)
+        connection.set_session(readonly=True, autocommit=False)
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL statement_timeout = '5000ms'")
+            cursor.execute("SELECT current_database(), current_user")
+            name, user = cursor.fetchone()
+        verified = (name == expected and user == expected_user)
+        return Response(
+            content=json.dumps({
+                "status": "verified" if verified else "mismatch",
+                "database": name if verified else "redacted",
+                "userMatchesExpected": user == expected_user,
+                "serviceMatchesExpected": True,
+                "databaseMatchesExpected": name == expected,
+                "readonly": True, "writes": 0, "providerRequests": 0,
+            }), media_type="application/json",
+            status_code=200 if verified else 503,
+            headers={"Cache-Control": "no-store",
+                     "X-Robots-Tag": "noindex, nofollow, noarchive"})
+    except Exception:
+        log.warning("V663 step551 staging database identity check unavailable")
+        raise HTTPException(status_code=503, detail="Staging DB identity check unavailable")
+    finally:
+        if connection is not None:
+            try:
+                connection.rollback()
+            finally:
+                connection.close()
 
 # V663 Step 529: zero-provider, opt-in generation from VERIFIED staging fixtures only.
 # Does not call API-Football, odds APIs or the production learning database.
