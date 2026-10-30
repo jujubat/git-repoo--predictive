@@ -20595,14 +20595,22 @@ async def _v662_bounded_prediction_recovery():
         for name in SCAN_LEAGUES:
             if not isinstance(name, str) or not name.strip():
                 continue
-            try:
-                lid = int(_resolve_league_id(name))
-            except (TypeError, ValueError, KeyError):
+
+            # Never call the HTTP-raising resolver while filtering.
+            # Unrelated or unsupported configured leagues are skipped.
+            configured_name = name.strip()
+            lid = LEAGUE_IDS.get(configured_name)
+
+            if lid is None and configured_name.isdecimal():
+                lid = int(configured_name)
+
+            if lid not in big_five_ids:
                 continue
-            if lid in big_five_ids and lid not in [
-                item[0] for item in valid_leagues
-            ]:
-                valid_leagues.append((lid, name))
+
+            if any(existing_id == lid for existing_id, _ in valid_leagues):
+                continue
+
+            valid_leagues.append((lid, configured_name))
 
         if not valid_leagues:
             return {"skipped": "no_configured_big_five_leagues"}
