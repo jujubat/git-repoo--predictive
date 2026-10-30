@@ -20815,17 +20815,26 @@ async def _v427_shared_cache_warmer():
                             "/sports/videos?sport=all"
                         )
                     ]
-                await asyncio.gather(
-                    *[hit(c, url) for url in warm_urls]
-                )
-                # V662: Recovery is opt-in and never runs for public requests.
+                # V663: Run bounded recovery before unrelated cache warming.
+                # Existing lock, cooldown, provider limits and environment gate apply.
                 if os.getenv("KSN_V662_PREDICTION_RECOVERY_ENABLED", "0") == "1":
                     try:
-                        await _v662_bounded_prediction_recovery()
+                        recovery_result = await _v662_bounded_prediction_recovery()
+                        if isinstance(recovery_result, dict):
+                            log.info(
+                                "V663 prediction recovery result: %s",
+                                recovery_result,
+                            )
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:
-                        log.warning("V662 bounded prediction recovery failed: %s", exc)
+                        log.warning(
+                            "V663 prediction recovery execution failed: %s",
+                            type(exc).__name__,
+                        )
+                await asyncio.gather(
+                    *[hit(c, url) for url in warm_urls]
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
