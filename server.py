@@ -20849,10 +20849,24 @@ async def _v427_shared_cache_warmer():
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log.warning(
-                    "V663 prediction recovery execution failed: %s",
-                    type(exc).__name__,
-                )
+                if isinstance(exc, HTTPException):
+                    detail = exc.detail
+                    error_code = (
+                        detail.get("code", "unspecified")
+                        if isinstance(detail, dict)
+                        else "unspecified"
+                    )
+                    log.warning(
+                        "V663 prediction recovery HTTP failure: "
+                        "status=%s code=%s",
+                        exc.status_code,
+                        str(error_code)[:80],
+                    )
+                else:
+                    log.warning(
+                        "V663 prediction recovery execution failed: %s",
+                        type(exc).__name__,
+                    )
             await asyncio.sleep(180)
 
     recovery_task = (
