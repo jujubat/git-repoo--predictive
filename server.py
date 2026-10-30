@@ -9834,6 +9834,10 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
         try: league_hint=int(((((snaps.get(lastgood_key) or {}).get("data")) or {}).get("league") or {}).get("id") or 0) or None
         except (TypeError,ValueError): league_hint=None
     if not league_hint and SPORTS_DB_ENABLED: league_hint=_team_league_hint_db(team,current)
+    # V663 Step 740: verified Arsenal ID 42 is in Premier League ID 39.
+    # Fail closed for all other teams; do not create synthetic season rows.
+    if not league_hint and team == 42:
+        league_hint = 39
     if league_hint:
         snaps.update(_ksn_v617_snapshots_bulk([f"canonical_standings:{league_hint}:{y}" for y in years]))
     for yr in years:
