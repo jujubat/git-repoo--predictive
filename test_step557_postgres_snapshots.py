@@ -7,7 +7,10 @@ class StagingPersistenceTests(unittest.TestCase):
  def test_compile(self):
   for x in (S,P,A): ast.parse(x)
  def test_all_fixture_consumers(self):
-  self.assertEqual(S.count('"fixtures:verified:football"'),3)
+     self.assertIn('_ksn579_read("fixtures:verified:football")', S)
+     self.assertIn('_ksn579_write("fixtures:verified:football", saved)', S)
+     self.assertIn('_v663_pg_write("fixtures:verified:football", _v663_published)', S)
+     self.assertGreaterEqual(S.count('"fixtures:verified:football"'), 5)
  def test_opt_in(self):
   self.assertIn('KSN_STAGING_POSTGRES_SNAPSHOTS',A)
   self.assertIn('srv-db9agalg1s2s73fvpgeg',A)

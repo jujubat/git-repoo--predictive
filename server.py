@@ -2203,13 +2203,17 @@ async def _oddspapi_take_budget():
 
 
 
+import contextvars as _ksn579_contextvars
+_KSN579_AUTHORIZED_ODDS_CONTEXT = _ksn579_contextvars.ContextVar("ksn579_staging_odds", default=False)
+
 async def _oddspapi_get(path: str, params: Optional[dict] = None, base: Optional[str] = None, *, max_attempts: int = 2) -> Any:
     """Rate-safe OddsPAPI GET. Serializes requests, spaces them, and retries one 429."""
     global _oddspapi_last_request_at
 
     # V659: Never perform external OddsPAPI requests while
     # staging SEO test mode is enabled.
-    if os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1":
+    if (os.getenv("KSN_STAGING_SEO_TEST_MODE", "0") == "1"
+            and not _KSN579_AUTHORIZED_ODDS_CONTEXT.get()):
         raise RuntimeError(
             "OddsPAPI external requests disabled in staging SEO test mode"
         )
@@ -5666,6 +5670,18 @@ async def ksn_staging_seo_test_gate(request: Request, call_next):
             return response
         return Response(content="Staging database diagnostic disabled",
                         status_code=404, headers={"Cache-Control": "no-store"})
+    # V663 Step 579: narrowly authorised, two-request staging odds enrichment.
+    if (request.url.path == "/__ksn_v663/staging/odds/enrich"
+            and request.method == "POST"):
+        if (_ksn499_diagnostic_authorized(request)
+                and os.getenv("KSN_STAGING_ODDS_ENRICHMENT", "0") == "1"
+                and os.getenv("KSN_STAGING_POSTGRES_SNAPSHOTS", "0") == "1"):
+            response = await call_next(request)
+            response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return Response(content="Staging odds enrichment disabled",status_code=404,
+                        headers={"Cache-Control":"no-store"})
     # V663 Step 529: private, provider-free snapshot prediction generation.
     if (request.url.path == "/__ksn_v663/staging/predictions/generate"
             and request.method == "POST"):
@@ -12995,6 +13011,109 @@ def ksn551_staging_database_identity(request: Request):
                 connection.rollback()
             finally:
                 connection.close()
+
+# V663 Step 579: opt-in, authenticated, staging-only bounded bookmaker 1X2 enrichment.
+# Exactly one v4 fixture lookup and at most one v4 odds lookup. No retry/fallback.
+_KSN579_ENRICH_LOCK = asyncio.Lock()
+_KSN579_LAST_ATTEMPT = 0.0
+
+@app.post("/__ksn_v663/staging/odds/enrich")
+async def ksn579_staging_enrich_odds(request: Request):
+    global _KSN579_LAST_ATTEMPT
+    if (not _ksn499_diagnostic_authorized(request)
+            or os.getenv("KSN_STAGING_ODDS_ENRICHMENT", "0") != "1"
+            or os.getenv("KSN_STAGING_POSTGRES_SNAPSHOTS", "0") != "1"
+            or not _ksn_v663_staging_football_only()):
+        raise HTTPException(404, detail="Not found")
+    from ksn_v663_staging_pg_snapshots import read as _ksn579_read, write as _ksn579_write
+    if not ODDSPAPI_ENABLED or not ODDSPAPI_API_KEY:
+        raise HTTPException(503, detail="OddsPAPI not configured")
+    if _KSN579_ENRICH_LOCK.locked():
+        raise HTTPException(429, detail="Odds enrichment running")
+    async with _KSN579_ENRICH_LOCK:
+        current = time.monotonic()
+        if _KSN579_LAST_ATTEMPT and current - _KSN579_LAST_ATTEMPT < 900:
+            raise HTTPException(429, detail="Odds enrichment cooldown (15 minutes)")
+        # Set cooldown before any external call, even on a failed/empty result.
+        _KSN579_LAST_ATTEMPT = current
+        stored = _ksn579_read("fixtures:verified:football")
+        matches = stored.get("matches") if isinstance(stored, dict) else None
+        if not isinstance(matches, list) or not matches:
+            raise HTTPException(409, detail="No verified staging fixtures")
+        now = datetime.now(timezone.utc)
+        # Strict single-day window. No arbitrary dates, team IDs, or client-supplied URLs.
+        target_day = (now + timedelta(days=1)).date()
+        start = datetime.combine(target_day, datetime.min.time(), tzinfo=timezone.utc)
+        end = start + timedelta(hours=23, minutes=59)
+        eligible = [m for m in matches if isinstance(m, dict)
+                    and _ksn_active_prediction(m)
+                    and (_parse_provider_time(m.get("fixtureDate") or m.get("datetime")) or now).date()==target_day]
+        if not eligible:
+            return {"status":"no_eligible_fixtures","providerRequests":0,"saved":False}
+        if _v448_oddspapi_provider_locked():
+            raise HTTPException(429, detail="OddsPAPI request budget protected")
+        calls = 0
+        token = _KSN579_AUTHORIZED_ODDS_CONTEXT.set(True)
+        try:
+            # 1: v4 fixtures query, documented by OddsPAPI; no retries.
+            calls += 1
+            fixture_data = await _oddspapi_get("fixtures", {
+                "sportId": ODDSPAPI_SPORT_FOOTBALL,
+                "from": start.isoformat().replace("+00:00", "Z"),
+                "to": end.isoformat().replace("+00:00", "Z"),
+                "statusId": 0, "hasOdds": "true",
+                "bookmakers": ",".join(ODDSPAPI_BOOKMAKERS),
+            }, base=ODDSPAPI_V4_FALLBACK_BASE, max_attempts=1)
+            provider_rows = _oddspapi_rows(fixture_data)
+            chosen = None
+            for fixture in _ksn_sort_football_rows(eligible):
+                hit = _oddspapi_match_fixture(fixture, provider_rows)
+                if hit and hit.get("fixtureId"):
+                    chosen = (fixture, hit)
+                    break
+            if not chosen:
+                return {"status":"no_verified_fixture_match","providerRequests":calls,
+                        "providerFixtures":len(provider_rows),"saved":False}
+            local_fixture, provider_fixture = chosen
+            provider_id = str(provider_fixture["fixtureId"])
+            # 2: odds for that one exactly matched fixture only; no retries.
+            calls += 1
+            odds_data = await _oddspapi_get("odds", {
+                "fixtureId": provider_id,
+                "bookmakers": ",".join(ODDSPAPI_BOOKMAKERS),
+                "oddsFormat": "decimal", "language": "en", "verbosity":3,
+            }, base=ODDSPAPI_V4_FALLBACK_BASE, max_attempts=1)
+            odds_rows = _oddspapi_rows(odds_data)
+            odds_snapshot = (next((r for r in odds_rows
+                 if str(r.get("fixtureId")) == provider_id), {}) if odds_rows
+                 else odds_data if isinstance(odds_data,dict) else {})
+            if not isinstance(odds_snapshot,dict) or str(odds_snapshot.get("fixtureId")) != provider_id:
+                return {"status":"odds_fixture_id_unverified","providerRequests":calls,"saved":False}
+            prices = _oddspapi_1x2(odds_snapshot)
+            if not _valid_1x2(prices):
+                return {"status":"no_valid_bookmaker_1x2","providerRequests":calls,"saved":False}
+            new_matches = []
+            for original in matches:
+                if original is local_fixture:
+                    new_matches.append({**original, "odds":prices,
+                        "oddsSource":"OddsPAPI verified 1X2",
+                        "bookmakerOddsVerifiedAt":now.isoformat(),
+                        "bookmakerOddsFixtureId":provider_id})
+                else:
+                    new_matches.append(original)
+            saved = {**stored,"matches":new_matches}
+            _ksn579_write("fixtures:verified:football", saved)
+            from ksn_v663_verified_snapshot_store import CACHE_KEY as _ksn579_cache_key
+            _fixtures_cache[_ksn579_cache_key] = saved
+            return {"status":"verified_odds_saved","providerRequests":calls,
+                    "saved":True,"fixtureId":str(local_fixture.get("_afootFixtureId") or ""),
+                    "bookmaker":str(prices.get("_bookmaker") or "verified")}
+        except RuntimeError:
+            # No provider errors or API URLs are exposed to unauthenticated clients.
+            log.warning("V663 staging bounded odds enrichment unavailable")
+            raise HTTPException(503, detail="Bounded odds enrichment unavailable")
+        finally:
+            _KSN579_AUTHORIZED_ODDS_CONTEXT.reset(token)
 
 # V663 Step 529: zero-provider, opt-in generation from VERIFIED staging fixtures only.
 # Does not call API-Football, odds APIs or the production learning database.
