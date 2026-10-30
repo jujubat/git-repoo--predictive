@@ -12524,12 +12524,12 @@ def _v662_saved_prediction_candidates(snapshots, limit=100):
             candidates.append(dict(row))
 
     ranked = _ksn_sort_football_rows(candidates, "")
-    return ranked[:max(0, min(int(limit), 100))]
+    return ranked if limit == 0 else ranked[:max(0, min(int(limit), 100))]
 
 @app.get("/ai-predictions")
 async def ai_predictions(
     request: Request = None,
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(100, ge=0),
     refresh: int = Query(1, ge=0, le=1),
     league: str = Query("ALL"),
     type: str = Query("upcoming"),
@@ -12543,6 +12543,10 @@ async def ai_predictions(
     # V662: internal-only, bounded prediction diagnostic.
     # Public requests must not activate this path.
     bounded_prediction = max_odds_requests is not None
+    if limit == 0 and (refresh != 0 or bounded_prediction):
+        raise ValueError(
+            "Unlimited prediction results require saved-snapshot refresh=0"
+        )
     if bounded_prediction:
         if isinstance(request, Request):
             raise ValueError("Bounded prediction mode is internal-only")
@@ -20764,7 +20768,7 @@ async def _v662_bounded_prediction_recovery():
 
             recovered = _ksn_sort_football_rows(
                 list(merged_by_id.values()), ""
-            )[:100]
+            )
 
             qualified = [
                 row for row in recovered

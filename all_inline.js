@@ -1637,7 +1637,7 @@ async function refreshAll(){
 
   // v231: Predictions start only after fixture/odds loading has finished and warmed the server cache.
   try{
-    const pv=await get('/ai-predictions',{league:lg,type:'upcoming',limit:100,refresh:0});
+    const pv=await get('/ai-predictions',{league:lg,type:'upcoming',limit:0,refresh:0});
     S.predictions=pv?.predictions||pv?.matches||[];
     if(typeof window.ks211SyncPredictionsToFixtures==='function')window.ks211SyncPredictionsToFixtures();
     safeRender(renderPredictions,renderTipOfDay,renderOverview);
@@ -8711,7 +8711,7 @@ window.loadHomeSportsNews=async function(){const el=document.getElementById('hom
    if(!(window.S?.fixtures||[]).length)return false;
    try{
      const lg=document.getElementById('league')?.value||'ALL';
-     const d=await getJSON('/ai-predictions',{league:lg,type:'upcoming',limit:100,refresh:0});
+     const d=await getJSON('/ai-predictions',{league:lg,type:'upcoming',limit:0,refresh:0});
      const rows=d.predictions||d.matches||[];
      if(rows.length){
        S.predictions=rows;
@@ -9942,7 +9942,7 @@ window.__KASI_NEWS_WARM_FIX__=true;
  };
 
  // Prediction Pool: retry the canonical endpoint and keep model-only rows; never blank good cached rows.
- let predBusy=false;window.ks318LoadPredictionPool=async function(){if(predBusy)return;predBusy=true;try{const lg=document.getElementById('league')?.value||'ALL';const d=await J('/ai-predictions',{league:lg,type:'upcoming',limit:100,refresh:0}),rows=d.predictions||d.matches||[];if(rows.length){window.S=window.S||{};S.predictions=rows;try{renderPredictions();renderOverview()}catch(_){}}else if(!(window.S?.predictions||[]).length){const el=document.getElementById('predictionList');if(el)el.innerHTML='<div class="empty">No prediction data available for the current upcoming fixture window.</div>'}}catch(_){if(!(window.S?.predictions||[]).length){const el=document.getElementById('predictionList');if(el)el.innerHTML='<div class="empty">Prediction data is temporarily unavailable. Cached data will remain when available.</div>'}}finally{predBusy=false}};
+ let predBusy=false;window.ks318LoadPredictionPool=async function(){if(predBusy)return;predBusy=true;try{const lg=document.getElementById('league')?.value||'ALL';const d=await J('/ai-predictions',{league:lg,type:'upcoming',limit:0,refresh:0}),rows=d.predictions||d.matches||[];if(rows.length){window.S=window.S||{};S.predictions=rows;try{renderPredictions();renderOverview()}catch(_){}}else if(!(window.S?.predictions||[]).length){const el=document.getElementById('predictionList');if(el)el.innerHTML='<div class="empty">No prediction data available for the current upcoming fixture window.</div>'}}catch(_){if(!(window.S?.predictions||[]).length){const el=document.getElementById('predictionList');if(el)el.innerHTML='<div class="empty">Prediction data is temporarily unavailable. Cached data will remain when available.</div>'}}finally{predBusy=false}};
 
  // Tip: fail soft. Do not expose raw 502/provider wording to visitors.
  window.ks318LoadTip=async function(){const body=document.getElementById('totdBody'),badge=document.getElementById('totdConf');if(!body)return;try{const d=await J('/tip-of-day'),rows=d.tips||[];if(rows.length){if(badge)badge.textContent=d.state==='current'?'Current top 2':d.state==='model-current'?'Current model top 2':'Previous best 2';body.innerHTML=rows.map(x=>{const p=x.prediction||{};return `<div style="padding:10px 0;border-bottom:1px solid var(--line)"><b>${E(x.home)} vs ${E(x.away)}</b><div class="sub">${E(p.bestPick||p.winner||x.bestOutcome||'—')} · ${Number(p.confidence||x.confidence||0).toFixed(1)}%</div></div>`}).join('');try{localStorage.setItem('kasi:last-tip-of-day',JSON.stringify(d))}catch(_){}}else{let c=null;try{c=JSON.parse(localStorage.getItem('kasi:last-tip-of-day')||'null')}catch(_){}if(c?.tips?.length){if(badge)badge.textContent='Last cached';body.innerHTML=c.tips.map(x=>`<div style="padding:10px 0;border-bottom:1px solid var(--line)"><b>${E(x.home)} vs ${E(x.away)}</b><div class="sub">${E(x.prediction?.bestPick||x.prediction?.winner||'—')} · ${Number(x.prediction?.confidence||x.confidence||0).toFixed(1)}%</div></div>`).join('')}else{if(badge)badge.textContent='No data';body.innerHTML='<div class="empty">No Tip of the Day data is currently available.</div>'}}}catch(_){let c=null;try{c=JSON.parse(localStorage.getItem('kasi:last-tip-of-day')||'null')}catch(_){}if(c?.tips?.length){if(badge)badge.textContent='Last cached';body.innerHTML=c.tips.map(x=>`<div style="padding:10px 0;border-bottom:1px solid var(--line)"><b>${E(x.home)} vs ${E(x.away)}</b><div class="sub">${E(x.prediction?.bestPick||x.prediction?.winner||'—')} · ${Number(x.prediction?.confidence||x.confidence||0).toFixed(1)}%</div></div>`).join('')}else{if(badge)badge.textContent='Temporarily unavailable';body.innerHTML='<div class="empty">Tip of the Day is temporarily unavailable. Please retry shortly.</div>'}}};
