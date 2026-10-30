@@ -10160,6 +10160,56 @@ async def players_team_squad(team:int=Query(0,ge=0),league:int=Query(0,ge=0),fan
             await asyncio.to_thread(_persist_verified_squad)
 
         players=[{"name":p.get("name"),"photo":p.get("photo"),"age":p.get("age"),"number":p.get("number"),"position":p.get("position"),"publicRef":_public_ref("player",int(p["id"]),p.get("name") or "player"),"source":"API-Football"} for p in rows if p.get("id")]
+    # V663 Step 693: publish verified provider squads to the existing durable
+    # PostgreSQL-backed snapshot consumed by _ksn_v590_team_view. SQLite alone
+    # is not reliable across Render instances or deployments.
+    if rows and team and not _ksn_v663_staging_football_only():
+        try:
+            season = _current_season()
+            snapshot_key = f"team_verified_squad_v609:{int(team)}:{season}"
+            previous = _dashboard_snapshot_get(snapshot_key) or {}
+            previous_data = (previous.get("data") or {}) if isinstance(previous, dict) else {}
+            previous_players = previous_data.get("players") or []
+            existing = {
+                int(item["id"]): item for item in previous_players
+                if isinstance(item, dict) and str(item.get("id") or "").isdigit()
+            }
+            provider_roster = {}
+            for item in rows:
+                if not isinstance(item, dict) or not str(item.get("id") or "").isdigit():
+                    continue
+                pid = int(item["id"])
+                prior = existing.get(pid) or {}
+                # The squad API may omit nationality. Reuse only an already
+                # verified identity from SQLite/PostgreSQL, never guess it.
+                stored = _db_player(pid) if SPORTS_DB_ENABLED else None
+                stored = stored if isinstance(stored, dict) else {}
+                provider_roster[pid] = {
+                    "id": pid,
+                    "name": item.get("name") or prior.get("name") or stored.get("name"),
+                    "photo": item.get("photo") or prior.get("photo") or stored.get("photo") or _ksn_api_player_photo(pid),
+                    "number": item.get("number") if item.get("number") is not None else prior.get("number"),
+                    "position": item.get("position") or prior.get("position"),
+                    "nationality": item.get("nationality") or stored.get("nationality") or prior.get("nationality"),
+                    "age": item.get("age") if item.get("age") is not None else prior.get("age"),
+                    "publicRef": _public_ref("player", pid, item.get("name") or stored.get("name") or "player"),
+                    "source": "API-Football",
+                }
+            # Preserve an already larger verified roster; don't erase records
+            # when a provider response is incomplete.
+            combined = dict(existing)
+            combined.update(provider_roster)
+            if combined and (not existing or len(combined) >= len(existing)):
+                _dashboard_snapshot_put(snapshot_key, {"data": {
+                    "teamId": int(team), "season": int(season),
+                    "players": list(combined.values()),
+                    "count": len(combined), "source": "API-Football",
+                    "savedAt": datetime.now(timezone.utc).isoformat(),
+                }})
+                # Return the enriched verified rows to the squad view as well.
+                players = list(combined.values())
+        except Exception as exc:
+            log.warning("V663 squad snapshot publication failed team=%s error=%s", team, type(exc).__name__)
     # Missing/empty API squad: use the Fantasy Big-5 roster for identity + position + points only.
     if not players and league in FANTASYPLAYOFFS_LEAGUES and fantasy_team:
         try:
