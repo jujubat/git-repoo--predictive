@@ -10124,8 +10124,41 @@ async def players_team_squad(team:int=Query(0,ge=0),league:int=Query(0,ge=0),fan
         rows=(d.get("response") or [{}])[0].get("players") or []
     players=[]
     if rows:
-        if SPORTS_DB_ENABLED:
-            await asyncio.to_thread(lambda: [_db_upsert_player(p) for p in rows])
+        if SPORTS_DB_ENABLED and team and not _ksn_v663_staging_football_only():
+            # Save verified identities first, then save the team/season links
+            # used by _sql_team_profile(). Keep transactions separate.
+            def _persist_verified_squad():
+                verified = [
+                    p for p in rows
+                    if isinstance(p, dict) and p.get("id")
+                ]
+                for p in verified:
+                    _db_upsert_player(p)
+
+                if verified:
+                    now = datetime.now(timezone.utc).isoformat()
+                    season = _current_season()
+                    with _sports_db() as db:
+                        for p in verified:
+                            db.execute(
+                                """INSERT INTO player_teams
+                                (player_id, team_id, season, number,
+                                 position, synced_at)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(player_id, team_id, season)
+                                DO UPDATE SET
+                                number=COALESCE(
+                                    excluded.number, player_teams.number),
+                                position=COALESCE(
+                                    excluded.position, player_teams.position),
+                                synced_at=excluded.synced_at""",
+                                (int(p["id"]), int(team), int(season),
+                                 p.get("number"), p.get("position"), now)
+                            )
+                return len(verified)
+
+            await asyncio.to_thread(_persist_verified_squad)
+
         players=[{"name":p.get("name"),"photo":p.get("photo"),"age":p.get("age"),"number":p.get("number"),"position":p.get("position"),"publicRef":_public_ref("player",int(p["id"]),p.get("name") or "player"),"source":"API-Football"} for p in rows if p.get("id")]
     # Missing/empty API squad: use the Fantasy Big-5 roster for identity + position + points only.
     if not players and league in FANTASYPLAYOFFS_LEAGUES and fantasy_team:
