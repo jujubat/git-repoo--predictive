@@ -3848,6 +3848,98 @@ async def _fetch_standings_for_league(league_id: int, season: int) -> list:
         return []
 
 
+# V663 Step 715: opt-in, bounded league standings refresher.
+# Enable on exactly ONE authorised production worker after staging validation.
+_KSN715_ENABLED = os.getenv("KSN715_STANDINGS_REFRESH_ENABLED", "0") == "1"
+_KSN715_LEAGUES = (39, 140, 78, 135, 61)
+_KSN715_INTERVAL = 6 * 3600
+
+
+def _ksn715_valid_table(rows):
+    """Validate the entire provider table before it can replace durable data."""
+    if not isinstance(rows, list) or len(rows) < 2:
+        return False
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            return False
+        team = row.get("team") or {}
+        all_ = row.get("all") or {}
+        goals = all_.get("goals") or {}
+        tid = team.get("id")
+        played = all_.get("played")
+        win, draw, lose = (all_.get(k) for k in ("win", "draw", "lose"))
+        points = row.get("points")
+        values = (tid, played, win, draw, lose, points,
+                  goals.get("for"), goals.get("against"))
+        if any(type(v) is not int for v in values):
+            return False
+        if tid <= 0 or tid in seen or min(values[1:]) < 0:
+            return False
+        if win + draw + lose != played:
+            return False
+        seen.add(tid)
+    return True
+
+
+def _ksn715_accept_table(fresh, old):
+    if not _ksn715_valid_table(fresh):
+        return False
+    if not _ksn715_valid_table(old):
+        return True
+    previous = {r["team"]["id"]: r for r in old}
+    current = {r["team"]["id"]: r for r in fresh}
+    # Reject missing clubs, backward matches, and changes to completed match totals.
+    if not set(previous).issubset(current):
+        return False
+    for tid, before in previous.items():
+        after = current[tid]
+        if after["all"]["played"] < before["all"]["played"]:
+            return False
+        if (after["all"]["played"] == before["all"]["played"]
+                and (after["all"]["win"], after["all"]["draw"],
+                     after["all"]["lose"], after["all"]["goals"])
+                != (before["all"]["win"], before["all"]["draw"],
+                    before["all"]["lose"], before["all"]["goals"])):
+            return False
+    return True
+
+
+async def _ksn715_refresh_once(league_id, season):
+    if (_ksn_v663_staging_football_only() or not DATABASE_URL
+            or psycopg2 is None or _v448_api_football_provider_locked()):
+        return False
+    key = f"canonical_standings:{league_id}:{season}"
+    # This scheduled worker runs only on the designated instance; no public route.
+    incoming = await _fetch_standings_for_league(league_id, season)
+    prior = _dashboard_snapshot_get(key) or {}
+    old = (prior.get("data") or {}).get("standings") or []
+    if not _ksn715_accept_table(incoming, old):
+        log.info("v715 standings rejected league=%s season=%s", league_id, season)
+        return False
+    if old == incoming:
+        return False
+    _dashboard_snapshot_put(key, {"data": {"standings": incoming}})
+    return True
+
+
+async def _ksn715_refresh_loop():
+    # Never run immediately at startup or inside football-only staging.
+    while True:
+        await asyncio.sleep(_KSN715_INTERVAL)
+        if not _KSN715_ENABLED or _ksn_v663_staging_football_only():
+            continue
+        for lid in _KSN715_LEAGUES:
+            try:
+                if _v448_api_football_provider_locked():
+                    break
+                await _ksn715_refresh_once(lid, _current_season())
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("v715 refresh failure league=%s type=%s", lid, type(exc).__name__)
+
+
 async def _fetch_match_standings_for_league(league_id: int, season: int, home_team_id=None, away_team_id=None) -> list:
     """Return the standings group/table that actually contains this fixture's teams.
 
@@ -4804,7 +4896,17 @@ async def lifespan(app: FastAPI):
         else None
     )
 
+    standings_refresh_task = (
+        asyncio.create_task(_ksn715_refresh_loop(), name="ksn-v715-standings")
+        if staging_background_jobs_allowed and _KSN715_ENABLED
+        else None
+    )
+
     yield
+
+    if standings_refresh_task is not None:
+        standings_refresh_task.cancel()
+        await asyncio.gather(standings_refresh_task, return_exceptions=True)
 
     if retention_scheduler_task is not None:
         retention_scheduler_task.cancel()
@@ -6383,7 +6485,21 @@ async def fixtures(
         _v663_store_path = BASE_DIR / "ksn_v663_staging_verified.sqlite"
 
         if _fixtures_cache.get(_v663_snapshot_key) is None:
-            _v663_restored = _v663_restore_snapshot(_v663_store_path)
+            from ksn_v663_snapshot_connection import (
+                durable_enabled as _v663_durable_enabled,
+                open_snapshot_connection as _v663_open_connection,
+            )
+            if _v663_durable_enabled():
+                from ksn_v663_verified_snapshot_postgres import (
+                    restore_snapshot as _v663_pg_restore,
+                )
+                try:
+                    with _v663_open_connection() as _v663_conn:
+                        _v663_restored = _v663_pg_restore(_v663_conn)
+                except Exception:
+                    _v663_restored = None
+            else:
+                _v663_restored = _v663_restore_snapshot(_v663_store_path)
             if _v663_restored is not None:
                 _fixtures_cache[_v663_snapshot_key] = _v663_restored
 
@@ -9627,6 +9743,38 @@ def _player_history_summary(profile: dict) -> dict:
     return {"season":profile.get("season"),"teams":teams,"leagues":leagues,"appearances":apps,"starts":starts,"minutes":minutes,
             "goals":goals,"assists":assists,"yellow":yellow,"red":red,"cleanSheets":clean,"saves":saves,"statistics":rows}
 
+def _ksn_v663_history_complete(row):
+    """Accept only internally consistent numerical season totals."""
+    if not isinstance(row, dict):
+        return False
+
+    fields = (
+        "played", "wins", "draws", "losses",
+        "goalsFor", "goalsAgainst", "points"
+    )
+
+    for field in fields:
+        value = row.get(field)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return False
+
+    played = row["played"]
+    if played <= 0:
+        return False
+
+    for field in (
+        "wins", "draws", "losses",
+        "goalsFor", "goalsAgainst"
+    ):
+        if row[field] < 0:
+            return False
+
+    if row["wins"] + row["draws"] + row["losses"] != played:
+        return False
+
+    return True
+
+
 @app.get("/team/seasons-history")
 async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,ge=1,le=8), refresh: int=Query(0,ge=0,le=1)):
     """v618: default 7 = the current season + the last 6 completed seasons. v617: stored rows are read with one PostgreSQL connection; the heavy profile rebuild is a last,
@@ -9650,14 +9798,39 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
     for yr in years:
         row=None; src="none"
         try:
-            row=_ksn_v614_history_row(team,yr,snaps.get(f"team_history_v614:{team}:{yr}") or {})
-            if row: src="repair-snapshot"
-            elif league_hint:
-                row=_ksn_v615_history_row_from_standings(team,yr,league_hint,snaps.get(f"canonical_standings:{league_hint}:{yr}") or {})
-                if row: src="stored-league-table"
+            history_row=_ksn_v614_history_row(
+                team,yr,
+                snaps.get(f"team_history_v614:{team}:{yr}") or {}
+            )
+            history_valid=_ksn_v663_history_complete(history_row)
+            canonical_row=None
+            canonical_valid=False
+
+            if league_hint and (yr==current or not history_valid):
+                canonical_row=_ksn_v615_history_row_from_standings(
+                    team,yr,league_hint,
+                    snaps.get(f"canonical_standings:{league_hint}:{yr}") or {}
+                )
+                canonical_valid=_ksn_v663_history_complete(canonical_row)
+
+            if yr==current and canonical_valid and (
+                not history_valid or
+                canonical_row["played"]>history_row["played"]
+            ):
+                row=canonical_row
+                src="stored-league-table"
+            elif history_valid:
+                row=history_row
+                src="repair-snapshot"
+            elif canonical_valid:
+                row=canonical_row
+                src="stored-league-table"
         except Exception as exc:
             log.warning("v617 stored history row skipped team=%s season=%s: %s",team,yr,type(exc).__name__)
-        if row: out.append(row)
+        if row and _ksn_v663_history_complete(row):
+            out.append(row)
+        else:
+            src="none"
         sources[yr]=src
     # v622: seasons with no stored row are filled from that season's league table (cached /standings call, fetched
     # concurrently, saved permanently) so the page shows the current season + 6 past seasons.
@@ -9677,7 +9850,9 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
             except Exception as exc:
                 log.warning("v622 history standings fill skipped team=%s season=%s: %s",team,y,type(exc).__name__); return y,None
         for y,row in await asyncio.gather(*(_fill(y) for y in miss[:3])):
-            if row: out.append(row); sources[y]="provider-league-table"
+            if row and _ksn_v663_history_complete(row):
+                out.append(row)
+                sources[y]="provider-league-table"
     # Last resort: rebuild a season from the full profile, only for seasons still missing and only while
     # there is time left. A single rebuild is slow, so never start one after 3 seconds.
     for yr in years:
@@ -9689,7 +9864,10 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
                 prof=_ksn_v588_complete_profile(prof,team,yr)
                 if (_ksn_valid_team_stats(prof.get('teamStats')) or prof.get('standings')
                         or prof.get('past10') or prof.get('players')):
-                    out.append(_team_history_summary(prof)); sources[yr]="rebuilt"
+                    summary=_team_history_summary(prof)
+                    if _ksn_v663_history_complete(summary):
+                        out.append(summary)
+                        sources[yr]="rebuilt"
         except Exception as exc:
             log.warning("v617 history rebuild skipped team=%s season=%s: %s",team,yr,type(exc).__name__)
     if league_hint:
@@ -25438,15 +25616,22 @@ def _ksn_v617_snapshots_bulk(keys):
     keys=list(dict.fromkeys(keys)); out={}
     if keys and DATABASE_URL and psycopg2 is not None:
         try:
-            c=_v485_snapshot_pg_connection()
+            # V663: pure read path. Never initialise snapshot schema while
+            # serving team history; staging DATABASE_URL isolation stays intact.
+            c=psycopg2.connect(DATABASE_URL,connect_timeout=4)
             try:
                 with c.cursor() as cur:
-                    cur.execute("SELECT k,payload FROM ksn_shared_snapshots_v485 WHERE k = ANY(%s)",(keys,))
-                    for k,payload in cur.fetchall():
+                    cur.execute("SET TRANSACTION READ ONLY")
+                    cur.execute("SELECT k,payload,updated FROM ksn_shared_snapshots_v485 WHERE k = ANY(%s)",(keys,))
+                    for k,payload,updated in cur.fetchall():
                         try: obj=json.loads(payload)
                         except Exception: continue
-                        if isinstance(obj,dict): out[k]=obj
+                        if isinstance(obj,dict):
+                            obj=dict(obj)
+                            obj["updated_at"]=updated
+                            out[k]=obj
             finally:
+                c.rollback()
                 c.close()
         except Exception as exc:
             log.warning("v617 bulk snapshot read failed (%s)",type(exc).__name__)
@@ -29266,10 +29451,21 @@ async def ksn_v663_staging_football_refresh(request: Request):
         _v663_snapshot_saved = False
         if _v663_published is not None:
             try:
-                _v663_publish_snapshot(
-                    BASE_DIR / "ksn_v663_staging_verified.sqlite",
-                    _v663_published,
+                from ksn_v663_snapshot_connection import (
+                    durable_enabled as _v663_durable_enabled,
+                    open_snapshot_connection as _v663_open_connection,
                 )
+                if _v663_durable_enabled():
+                    from ksn_v663_verified_snapshot_postgres import (
+                        publish_snapshot as _v663_pg_publish,
+                    )
+                    with _v663_open_connection() as _v663_conn:
+                        _v663_pg_publish(_v663_conn, _v663_published)
+                else:
+                    _v663_publish_snapshot(
+                        BASE_DIR / "ksn_v663_staging_verified.sqlite",
+                        _v663_published,
+                    )
                 _v663_snapshot_saved = True
             except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
                 log.warning(
