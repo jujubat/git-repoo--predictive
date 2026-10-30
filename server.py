@@ -11337,8 +11337,24 @@ def _ksn_v588_complete_profile(profile, team_id, season):
                 if isinstance(standings,dict): standings = standings.get('standings') or []
             if isinstance(standings,list) and standings and isinstance(standings[0],list):
                 standings = standings[0]
-            if isinstance(standings,list) and standings and not p.get('standings'):
-                p['standings'] = standings
+            if isinstance(standings, list) and standings:
+                current_table = p.get('standings') or []
+                full_epl_table = (
+                    league_id == 39
+                    and int(season) == 2026
+                    and len(standings) == 20
+                    and all(isinstance(r, dict) for r in standings)
+                    and len({str((r.get('team') or {}).get('id')) for r in standings}) == 20
+                    and str(team_id) in {
+                        str((r.get('team') or {}).get('id')) for r in standings
+                    }
+                )
+                if not current_table or (
+                    full_epl_table
+                    and isinstance(current_table, list)
+                    and len(current_table) < len(standings)
+                ):
+                    p['standings'] = standings
             if not (p.get('league') or {}).get('id'): p['league'] = {'id':league_id,'season':season}
         except (ValueError,TypeError): pass
     # Archived recent matches are historical, NOT automatically season statistics.
