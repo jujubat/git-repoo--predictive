@@ -91,3 +91,42 @@ def write(key, payload):
             db.rollback()
             raise
     return True
+
+# V663 STEP 726: read legacy verified team-history snapshots WITHOUT schema writes.
+# This is separate from the fixture/prediction snapshot table and allowlist.
+def read_history_snapshots(keys):
+    import re
+    if not enabled():
+        raise PermissionError("Staging history read disabled")
+    if not isinstance(keys, (list, tuple)) or len(keys) > 32:
+        raise ValueError("History snapshot key batch invalid")
+    unique = list(dict.fromkeys(keys))
+    permitted = re.compile(r"(?:team_history_v614:[1-9][0-9]{0,9}:(?:19|20)[0-9]{2}|canonical_standings:[1-9][0-9]{0,9}:(?:19|20)[0-9]{2})\Z")
+    if not all(isinstance(k, str) and permitted.fullmatch(k) for k in unique):
+        raise ValueError("Unapproved history snapshot key")
+    if not unique:
+        return {}
+    # connection() verifies environment, Render service and exact DB/user identity.
+    with closing(connection()) as db:
+        db.set_session(readonly=True, autocommit=False)
+        try:
+            with db.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '5000ms'")
+                cur.execute(
+                    "SELECT k,payload,updated FROM ksn_shared_snapshots_v485 WHERE k = ANY(%s)",
+                    (unique,),
+                )
+                rows = cur.fetchall()
+        finally:
+            db.rollback()
+    out = {}
+    for key, payload, updated in rows:
+        try:
+            item = json.loads(payload) if isinstance(payload, str) else payload
+        except (TypeError, ValueError):
+            continue
+        if isinstance(item, dict):
+            item = dict(item)
+            item["updated_at"] = updated
+            out[key] = item
+    return out

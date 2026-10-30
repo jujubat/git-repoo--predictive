@@ -26063,6 +26063,16 @@ def _ksn_v617_snapshots_bulk(keys):
     """Read many snapshots over ONE PostgreSQL connection (each single read opens a new connection,
     which is what made the history request exceed the page's 7 second limit)."""
     keys=list(dict.fromkeys(keys)); out={}
+    # V663 STEP 726: staging-only, identity-verified, read-only PG snapshots.
+    # No fallback to the shared PostgreSQL connection or SQLite in this mode.
+    if _ksn_v663_staging_football_only():
+        try:
+            from ksn_v663_staging_pg_snapshots import read_history_snapshots
+            return read_history_snapshots(keys)
+        except Exception as exc:
+            log.warning("v726 isolated history read failed (%s)", type(exc).__name__)
+            return {}
+
     if keys and DATABASE_URL and psycopg2 is not None:
         try:
             # V663: pure read path. Never initialise snapshot schema while
