@@ -11813,6 +11813,25 @@ async def team_profile(team: str = Query(...), season: int = Query(0, ge=0), ref
         empty_profile = _ksn_v588_complete_profile(_ksn_v583_enrich_team_archive(empty_profile, tid),tid,season)
         if empty_profile.get("past10"):
             empty_profile["dataUnavailable"] = False
+        # V663 Step 835: recover verified data even when SQL profile
+        # assembly falls through to the empty-profile return.
+        # Do not trigger provider synchronization or invent data.
+        if (
+            tid in (42, 50, 40, 49, 33)
+            and int(season) == 2026
+            and not _ksn_v663_staging_football_only()
+        ):
+            recovered = _ksn_v590_team_view(empty_profile, tid, season)
+            if isinstance(recovered, dict):
+                if len(recovered.get("standings") or []) == 20:
+                    recovered["dataUnavailable"] = False
+                    recovered["dataComplete"] = bool(
+                        recovered.get("players")
+                        and (recovered.get("past10") or recovered.get("future"))
+                        and _ksn_valid_team_stats(recovered.get("teamStats"))
+                    )
+                    recovered["repairRequired"] = not recovered["dataComplete"]
+                    return recovered
         return empty_profile
     else:
         # Names are not stable provider IDs: resolve only from local identities.
