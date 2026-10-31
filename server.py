@@ -6502,6 +6502,7 @@ async def health():
 @app.get("/my-kasi/fixtures")
 async def my_kasi_upcoming_fixtures():
     """Read-only snapshot-backed fixtures; never fetch providers."""
+    from fastapi.responses import JSONResponse
     from my_kasi_fixtures import select_my_kasi_fixtures
 
     key = "fixtures:football:ALL:upcoming:last_good"
