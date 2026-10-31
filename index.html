@@ -18574,6 +18574,73 @@ function init(){installTeam();installPredictions();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
 </script>
+
+<!-- V663 STEP 902E: LEAGUE-FIRST VERIFIED TEAM PICKER -->
+<style id="ksn-v663-league-first-css">
+#platform .mk902-picker{padding:14px;border:1px solid #314659;border-radius:12px;background:#0b1723;margin:14px 0;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#platform .mk902-picker label{display:block;font-size:13px;font-weight:700;margin-bottom:7px;color:#bde7ff}
+#platform .mk902-picker select{width:100%;min-width:0;max-width:100%;background:#080b11;color:white;border:1px solid #3b5266;padding:11px;border-radius:8px}
+#platform .mk902-picker .mk902-message{grid-column:1/-1;color:#bed0e0;font-size:12px;margin:0}
+@media(max-width:650px){#platform .mk902-picker{grid-template-columns:1fr}}
+</style>
+<script id="ksn-v663-league-first-js">
+(function(){'use strict';
+const leagues=[['39','Premier League (England)'],['140','La Liga (Spain)'],['78','Bundesliga (Germany)'],['135','Serie A (Italy)'],['61','Ligue 1 (France)']];
+function node(tag,txt){const e=document.createElement(tag);if(txt!==undefined)e.textContent=txt;return e;}
+function boot(){
+ const input=document.getElementById('favTeam');const fav=document.getElementById('ksnV663MyKasi');
+ if(!input||!fav||document.getElementById('mk902League'))return;
+ const wrap=node('div');wrap.className='mk902-picker';
+ const lgroup=node('div'),tgroup=node('div');
+ const ll=node('label','1. Select league'),tl=node('label','2. Select favourite team');
+ const league=node('select'),team=node('select');league.id='mk902League';team.id='mk902Team';ll.htmlFor=league.id;tl.htmlFor=team.id;
+ league.append(new Option('Choose a football league',''));for(const [id,name] of leagues)league.append(new Option(name,id));
+ team.append(new Option('Select a league first',''));team.disabled=true;
+ lgroup.append(ll,league);tgroup.append(tl,team);
+ const status=node('p','Choose a league to load its verified football clubs.');status.className='mk902-message';status.id='mk902PickerStatus';status.setAttribute('role','status');
+ wrap.append(lgroup,tgroup,status);
+ // Insert ahead of the existing favourite input without altering the original handlers.
+ const anchor=input.closest('.fc-card')||fav;
+ if(anchor===fav)fav.insertBefore(wrap,fav.firstChild);
+ else { const parent=input.parentElement; if(parent&&parent.parentElement)parent.parentElement.insertBefore(wrap,parent);else fav.insertBefore(wrap,fav.firstChild); }
+ let version=0;
+ league.addEventListener('change',async()=>{
+  const ticket=++version;team.disabled=true;team.replaceChildren(new Option('Loading teams…',''));input.value='';
+  if(typeof window.ksnV663ClearVerifiedSelection==='function')window.ksnV663ClearVerifiedSelection();
+  if(!league.value){team.replaceChildren(new Option('Select a league first',''));status.textContent='Choose a league first.';return;}
+  status.textContent='Loading verified clubs from existing standings…';
+  try{
+   const res=await fetch('/standings/2026-27?league='+encodeURIComponent(league.value),{credentials:'same-origin'});
+   if(!res.ok)throw new Error('Standings HTTP '+res.status);
+   const payload=await res.json();if(ticket!==version)return;
+   const candidates=(Array.isArray(payload.leagues)?payload.leagues:[]).filter(x=>String(x.leagueId||x.league?.id||league.value)===league.value);
+   const table=candidates.flatMap(x=>Array.isArray(x.table)?x.table:[]);
+   const teams=table.map(x=>x?.team||{}).filter(x=>x.name&&String(x.name).trim());
+   team.replaceChildren(new Option('Choose a team',''));
+   const seen=new Set();
+   for(const t of teams){const name=String(t.name).trim();if(seen.has(name.toLowerCase()))continue;seen.add(name.toLowerCase());const opt=new Option(name,name);if(t.logo)opt.dataset.logo=String(t.logo);team.append(opt);}
+   team.disabled=seen.size===0;status.textContent=seen.size?seen.size+' league teams available. Choose a club, then click Add favourite.':'No verified league standings available. Use existing team search below.';
+  }catch(e){if(ticket!==version)return;team.replaceChildren(new Option('Teams unavailable',''));status.textContent='League teams unavailable: '+e.message+'. Existing manual search remains available.';}
+ });
+ team.addEventListener('change',async()=>{
+  const name=team.value;const ticket=version;
+  if(!name){input.value='';return;}
+  status.textContent='Resolving '+name+' against verified team identities…';
+  try{
+   const res=await fetch('/my-kasi/teams/search?q='+encodeURIComponent(name),{credentials:'omit'});
+   if(!res.ok)throw new Error('Team search HTTP '+res.status);
+   const payload=await res.json();if(ticket!==version||team.value!==name)return;
+   const exact=(Array.isArray(payload.teams)?payload.teams:[]).find(x=>String(x.name||'').trim().toLowerCase()===name.toLowerCase()&&typeof x.publicRef==='string'&&x.publicRef);
+   if(!exact){status.textContent='This club has no verified identity in the current cache. Use verified search below; do not add an unverified team.';input.value='';return;}
+   input.value=exact.name;
+   if(typeof window.ksnV663SelectVerifiedTeam==='function')window.ksnV663SelectVerifiedTeam(exact);
+   status.textContent='Verified '+exact.name+'. Click the existing Add favourite button.';
+  }catch(e){status.textContent='Could not verify the selected club: '+e.message;input.value='';}
+ });
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+})();
+</script>
 </body>
 </html>
 
