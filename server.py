@@ -11701,6 +11701,17 @@ async def team_profile(team: str = Query(...), season: int = Query(0, ge=0), ref
     raw=str(team).strip()
     cache_key=f"team-profile-v480:{raw.lower()}:{season}"
     cached = None if refresh else _team_profile_page_cache.get(cache_key)
+    # V663 Step 808: bypass incomplete cached 2026 EPL standings.
+    # Preserve verified complete caches and other leagues/seasons.
+    if cached is not None and raw.isdigit() and int(season) == 2026:
+        _league = cached.get("league") if isinstance(cached, dict) else {}
+        _table = cached.get("standings") if isinstance(cached, dict) else []
+        if (
+            isinstance(_league, dict)
+            and str(_league.get("id")) == "39"
+            and (not isinstance(_table, list) or len(_table) < 20)
+        ):
+            cached = None
     if cached is not None and raw.isdigit():
         # Check the shared PostgreSQL revision on every cache hit; this is a
         # read-only DB lookup, never a provider call or destructive invalidation.
