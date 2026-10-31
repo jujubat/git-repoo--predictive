@@ -11742,6 +11742,48 @@ def _ksn_v590_team_view(profile, team_id, season):
                 "V663 Step 791 standings recovery skipped team=%s: %s",
                 team_id, type(exc).__name__
             )
+
+    # V663 Step 859J: recover a complete verified Big Five league table.
+    # Read-only: never request a provider or rewrite existing snapshots.
+    try:
+        _lg = base.get("league") or {}
+        _lid = int(_lg.get("id") or 0)
+        _expected = {39: 20, 140: 20, 135: 20, 78: 18, 61: 18}
+        if int(season) == 2026 and _lid in _expected:
+            _snapshot = _dashboard_snapshot_get(
+                f"canonical_standings:{_lid}:2026"
+            ) or {}
+            _stored = _snapshot.get("data") or {}
+            _rows = _stored.get("standings") or []
+
+            if (
+                isinstance(_rows, list)
+                and len(_rows) == _expected[_lid]
+                and all(isinstance(_r, dict) for _r in _rows)
+            ):
+                _ids = [
+                    int((_r.get("team") or {}).get("id") or 0)
+                    for _r in _rows
+                ]
+                _ranks = [
+                    int(_r.get("rank") or 0)
+                    for _r in _rows
+                ]
+
+                if (
+                    len(set(_ids)) == _expected[_lid]
+                    and int(team_id) in _ids
+                    and set(_ranks) == set(range(1, _expected[_lid] + 1))
+                    and len(base.get("standings") or []) < _expected[_lid]
+                ):
+                    base["standings"] = _rows
+
+    except Exception as _exc:
+        log.warning(
+            "V663 standings recovery skipped team=%s: %s",
+            team_id, type(_exc).__name__
+        )
+
     base["cached"] = True
     base["refreshing"] = False
     return base
