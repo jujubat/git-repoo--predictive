@@ -18338,6 +18338,121 @@ else wire();
   else start();
 })();
 </script>
+
+<!-- V663 STEP 900C: MY KASI DASHBOARD PRESENTATION -->
+<style id="ksn-v663-mykasi-dashboard-css">
+#platform .ksn-mk-dashboard{display:grid;gap:18px;margin-top:18px}
+#platform .ksn-mk-hero{padding:22px 24px;border:1px solid rgba(100,172,238,.26);border-radius:16px;background:linear-gradient(110deg,#10263e,#101923);display:flex;justify-content:space-between;gap:18px;align-items:center;flex-wrap:wrap}
+#platform .ksn-mk-hero h3{margin:0 0 5px;font-size:24px;color:#f3f8ff}
+#platform .ksn-mk-hero p{margin:0;color:#adc4d9}
+#platform .ksn-mk-pills{display:flex;gap:10px;flex-wrap:wrap}
+#platform .ksn-mk-pill{min-width:100px;border:1px solid #31516c;border-radius:10px;padding:9px 14px;background:#132d44;color:#cbdff4;text-align:center}
+#platform .ksn-mk-pill strong{display:block;color:#fff;font-size:21px}
+#platform .ksn-mk-columns{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:18px}
+#platform .ksn-mk-panel{min-width:0;background:#111b27;border:1px solid #294156;border-radius:14px;padding:18px}
+#platform .ksn-mk-panel h3{margin-top:0;font-size:18px;color:#f4f8ff}
+#platform .ksn-mk-panel .sub{line-height:1.5;color:#acc0d1}
+#platform .ksn-mk-panel input,#platform .ksn-mk-panel select{max-width:100%;min-width:0;background:#0b1521;border:1px solid #3a5971;border-radius:8px;color:#f1f6ff;padding:11px}
+#platform .ksn-mk-panel .sports-filter-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:12px 0}
+#platform .ksn-mk-panel button{border-radius:8px;min-height:39px}
+#platform .ksn-mk-table-scroll{overflow-x:auto;margin-top:14px;border:1px solid #2c465a;border-radius:10px}
+#platform .ksn-mk-table{width:100%;border-collapse:collapse;min-width:360px;font-size:13px}
+#platform .ksn-mk-table th{background:#172a3b;color:#a8c4de;text-align:left;font-size:12px;letter-spacing:.03em;padding:12px}
+#platform .ksn-mk-table td{border-top:1px solid #293e50;padding:11px 12px;color:#e5effa;vertical-align:middle}
+#platform .ksn-mk-table td:last-child{text-align:right}
+#platform .ksn-mk-table th:last-child{text-align:right}
+#platform .ksn-mk-table button{padding:5px 9px;min-height:29px}
+#platform .ksn-mk-empty{padding:13px;color:#a8bbca;font-size:13px}
+#platform .ksn-mk-original-list{display:none!important}
+#platform .ksn-mk-lower{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+#platform .ksn-mk-section-title{margin:10px 0 0;font-size:17px;color:#e9f3ff}
+#platform .ksn-mk-hidden-technical{display:none!important}
+@media(max-width:900px){#platform .ksn-mk-columns,#platform .ksn-mk-lower{grid-template-columns:1fr}#platform .ksn-mk-hero{padding:17px}#platform .ksn-mk-panel{padding:14px}}
+</style>
+<script id="ksn-v663-mykasi-dashboard-js">
+(function(){'use strict';
+function init(){
+  const platform=document.getElementById('platform');
+  const favourites=document.getElementById('ksnV663MyKasi');
+  const ballot=document.getElementById('ksnV663SupporterBallot');
+  if(!platform||!favourites||!ballot||document.getElementById('ksnMkDashboard'))return;
+  const legacyGrid=favourites.parentElement;
+  const dashboard=document.createElement('div');dashboard.id='ksnMkDashboard';dashboard.className='ksn-mk-dashboard';
+  const hero=document.createElement('header');hero.className='ksn-mk-hero';
+  const intro=document.createElement('div');const name=document.createElement('h3');name.textContent='Your supporter dashboard';
+  const lead=document.createElement('p');lead.textContent='Follow your clubs, review match results and make personal predictions.';
+  intro.append(name,lead);
+  const pills=document.createElement('div');pills.className='ksn-mk-pills';
+  function pill(label){const el=document.createElement('div');el.className='ksn-mk-pill';const n=document.createElement('strong');n.textContent='0';const caption=document.createElement('span');caption.textContent=label;el.append(n,caption);pills.append(el);return n}
+  const favCount=pill('Favourite teams');const scoreCount=pill('Cached results');
+  hero.append(intro,pills);dashboard.append(hero);
+  const columns=document.createElement('div');columns.className='ksn-mk-columns';dashboard.append(columns);
+  const lowerTitle=document.createElement('h3');lowerTitle.className='ksn-mk-section-title';lowerTitle.textContent='Account & preferences';dashboard.append(lowerTitle);
+  const lower=document.createElement('div');lower.className='ksn-mk-lower';dashboard.append(lower);
+  // Move existing live components: preserve their IDs, original listeners, and backing storage.
+  favourites.classList.add('ksn-mk-panel');ballot.classList.add('ksn-mk-panel');
+  columns.append(favourites,ballot);
+  for(const card of Array.from(platform.querySelectorAll('.fc-card'))){
+    if(card===favourites||card===ballot)continue;
+    const heading=card.querySelector('h3');const label=(heading?.textContent||'').trim().toLowerCase();
+    if(label.includes('account &')||label.includes('push notifications')||label==='advertising'){
+      card.classList.add('ksn-mk-panel');lower.append(card);
+    }else if(label.includes('routed urls')||label.includes('b2b data')||label.includes('server-side pro entitlement')){
+      card.classList.add('ksn-mk-hidden-technical');
+    }
+  }
+  // Do not move or alter the V662/V663 scripts; they continue operating as before.
+  if(legacyGrid&&legacyGrid.parentNode)legacyGrid.parentNode.insertBefore(dashboard,legacyGrid);
+  else platform.append(dashboard);
+  const list=document.getElementById('favouritesList');const scores=document.getElementById('ksnMyKasiScores');
+  function createTable(headers){
+    const shell=document.createElement('div');shell.className='ksn-mk-table-scroll';
+    const table=document.createElement('table');table.className='ksn-mk-table';
+    const thead=document.createElement('thead');const tr=document.createElement('tr');
+    for(const text of headers){const th=document.createElement('th');th.textContent=text;tr.append(th)}
+    thead.append(tr);table.append(thead);const tbody=document.createElement('tbody');table.append(tbody);shell.append(table);return {shell,tbody};
+  }
+  const ft=createTable(['Favourite team','Status','Action']);
+  const st=createTable(['Recent match','Highlights']);
+  if(list){list.classList.add('ksn-mk-original-list');list.after(ft.shell)}
+  if(scores){scores.classList.add('ksn-mk-original-list');scores.after(st.shell)}
+  function cell(row,text){const td=document.createElement('td');td.textContent=text;row.append(td);return td}
+  function empty(tbody,text,span){const tr=document.createElement('tr');const td=cell(tr,text);td.colSpan=span;td.style.textAlign='left';tbody.append(tr)}
+  function refreshFavourites(){
+    if(!list)return;
+    const entries=Array.from(list.querySelectorAll('li'));
+    ft.tbody.replaceChildren();favCount.textContent=String(entries.length);
+    if(!entries.length){empty(ft.tbody,'No teams followed yet. Search and add your first club above.',3);return}
+    for(const li of entries){
+      const span=li.querySelector('span');const team=(span?.textContent||li.textContent||'').replace(/\bRemove\s*$/i,'').trim();
+      if(!team)continue;
+      const tr=document.createElement('tr');cell(tr,team);cell(tr,'Following');
+      const action=cell(tr,'');const button=document.createElement('button');button.type='button';button.textContent='Remove';
+      button.setAttribute('aria-label','Remove '+team);button.addEventListener('click',()=>{if(typeof window.removeFavourite==='function')window.removeFavourite(team)});
+      action.append(button);ft.tbody.append(tr);
+    }
+  }
+  function refreshScores(){
+    if(!scores)return;
+    const entries=Array.from(scores.querySelectorAll('li'));scoreCount.textContent=String(entries.length);st.tbody.replaceChildren();
+    if(!entries.length){empty(st.tbody,'No locally cached scores for followed teams yet.',2);return}
+    for(const li of entries){
+      const tr=document.createElement('tr');const name=li.textContent.replace(/\s*·\s*Watch highlights\s*$/i,'').trim();cell(tr,name);
+      const action=cell(tr,'');const original=li.querySelector('a[href^="https://"]');
+      if(original){const a=original.cloneNode(true);a.textContent='Watch highlights';action.append(a)}else action.textContent='—';
+      st.tbody.append(tr);
+    }
+  }
+  if(list){new MutationObserver(refreshFavourites).observe(list,{childList:true,subtree:true,characterData:true});refreshFavourites()}
+  if(scores){new MutationObserver(refreshScores).observe(scores,{childList:true,subtree:true,characterData:true});refreshScores()}
+  const title=favourites.querySelector('h3');if(title)title.textContent='Favourite football teams';
+  const ballotTitle=ballot.querySelector('h3');if(ballotTitle)ballotTitle.textContent='Personal match prediction';
+  const field=document.getElementById('favTeam');if(field)field.placeholder='Search a football club by name';
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
+})();
+</script>
+
 </body>
 </html>
 
