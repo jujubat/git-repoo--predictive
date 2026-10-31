@@ -10732,6 +10732,138 @@ if(document.readyState==='loading'){
       const odds=d.nextOdds||{}; const oddsHtml=(Number(odds.homeWin)>1||Number(odds.draw)>1||Number(odds.awayWin)>1)?`<div class="kc-badges"><span class="kc-badge">1 ${Number(odds.homeWin)>1?Number(odds.homeWin).toFixed(2):'—'}</span><span class="kc-badge">X ${Number(odds.draw)>1?Number(odds.draw).toFixed(2):'—'}</span><span class="kc-badge">2 ${Number(odds.awayWin)>1?Number(odds.awayWin).toFixed(2):'—'}</span></div>`:'<div class="kc-row-meta">No current 1X2 odds supplied.</div>';
       r.innerHTML=`<main class="kc-entity-page"><div class="kc-back"></div><section class="kc-entity-hero"><div class="kc-entity-head">${img(t.logo||((t.id&&Number(t.id)>0)?('https://media.api-sports.io/football/teams/'+Number(t.id)+'.png'):''))}<div class="kc-entity-title"><h1>${escX(teamName)}</h1><p>${league.flag?`<img src="${escX(league.flag)}" style="width:22px;height:15px;object-fit:cover;vertical-align:middle;margin-right:6px" loading="lazy" decoding="async">`:''}${escX(t.country||league.country||'')}</p><div class="kc-actions"><button onclick="track&&track('follow',{entityId:'team:'+${JSON.stringify(teamName)}})">⭐ Follow team</button><button onclick="navigator.clipboard?.writeText(location.href)">Copy team link</button></div></div></div></section><div class="kc-grid"><div class="kc-stat"><b>${escX(row.rank??'—')}</b><span>League position</span></div><div class="kc-stat"><b>${escX(row.points??'—')}</b><span>Points</span></div><div class="kc-stat"><b>${escX(row.all?.played??'—')}</b><span>Played</span></div><div class="kc-stat"><b>${escX(row.goalsDiff??'—')}</b><span>Goal difference</span></div><div class="kc-stat"><b>${escX(gf)}</b><span>Goals scored</span></div><div class="kc-stat"><b>${escX(ga)}</b><span>Goals conceded</span></div><div class="kc-stat"><b>${escX(stats.clean_sheet?.total??'—')}</b><span>Clean sheets</span></div><div class="kc-stat"><b>${escX(stats.failed_to_score?.total??'—')}</b><span>Failed to score</span></div></div><section class="kc-card"><h2>Team form</h2><div class="kc-form">${formHtml}</div></section>${next?`<section class="kc-card"><h2>Next match</h2><div class="kc-row"><div><div class="kc-row-title">${teamCell(next.homeLogo||'',next.home||'Home','sm',next.homeId||0)} <span class="sub">vs</span> ${teamCell(next.awayLogo||'',next.away||'Away','sm',next.awayId||0)}</div><div class="kc-row-meta">${fmtDate(next.date)} · ${escX(next.league||'')}</div>${oddsHtml}</div><div><b>NEXT</b></div></div></section>`:''}<div class="kc-grid2"><section class="kc-card"><h2>Recent results</h2><div class="kc-list">${past.slice(0,10).map(matchRow).join('')||'<div class="kc-empty">No recent results.</div>'}</div></section><section class="kc-card"><h2>Upcoming fixtures</h2><div class="kc-list">${future.slice(0,10).map(matchRow).join('')||'<div class="kc-empty">No upcoming fixtures.</div>'}</div></section></div><section class="kc-card"><h2>Squad · Players</h2><p class="sub">Click any player to open their full player page.</p><div class="kc-squad">${squad}</div></section><section class="kc-card"><h2>League table</h2>${tableHtml}</section></main>`;
 
+
+      // V663 Step 864D-2: shared football Team Overview.
+      // Read the already-loaded, verified /team/profile response only.
+      (() => {
+        const main = r.querySelector('main.kc-entity-page');
+        if (!main) return;
+
+        const teamId = Number(t.id || internalTeam);
+        const standingsRow = table.find(x =>
+          Number(x?.team?.id || 0) === teamId
+        ) || row || {};
+
+        const totals = standingsRow.all || {};
+        const fixtureStats = stats.fixtures || {};
+        const goalsStats = stats.goals || {};
+
+        const display = (...items) => {
+          for (const item of items) {
+            if (
+              item !== undefined &&
+              item !== null &&
+              item !== '' &&
+              typeof item !== 'object'
+            ) {
+              return String(item);
+            }
+          }
+          return 'Unavailable';
+        };
+
+        const fields = [
+          ['Competition', display(league.name)],
+          ['League position', display(standingsRow.rank)],
+          ['Points', display(standingsRow.points)],
+          ['Matches played', display(
+            totals.played,
+            fixtureStats.played?.total
+          )],
+          ['Wins', display(
+            totals.win,
+            fixtureStats.wins?.total
+          )],
+          ['Draws', display(
+            totals.draw,
+            fixtureStats.draws?.total
+          )],
+          ['Losses', display(
+            totals.lose,
+            fixtureStats.loses?.total
+          )],
+          ['Goals scored', display(
+            totals.goals?.for,
+            goalsStats.for?.total?.total
+          )],
+          ['Goals conceded', display(
+            totals.goals?.against,
+            goalsStats.against?.total?.total
+          )],
+          ['Goal difference', display(
+            standingsRow.goalsDiff
+          )],
+          ['Clean sheets', display(
+            stats.clean_sheet?.total
+          )],
+          ['Stadium', display(venue.name, t.venue)],
+          ['City', display(venue.city)],
+          ['Country', display(t.country, league.country)]
+        ];
+
+        const panel = document.createElement('section');
+        panel.className = 'kc-card';
+        panel.id = 'ksn-v663-team-overview';
+        panel.setAttribute('aria-label', 'Team Overview');
+
+        const heading = document.createElement('h2');
+        heading.textContent = 'Team Overview';
+        panel.appendChild(heading);
+
+        const grid = document.createElement('div');
+        grid.className = 'ksn-v663-overview-grid';
+        grid.style.cssText =
+          'display:grid;' +
+          'grid-template-columns:repeat(auto-fit,minmax(145px,1fr));' +
+          'gap:10px;margin-top:12px';
+
+        for (const [label, value] of fields) {
+          const cell = document.createElement('div');
+          cell.className = 'ksn-v663-overview-field';
+          cell.style.cssText =
+            'border:1px solid #292929;' +
+            'border-radius:10px;' +
+            'padding:12px;min-width:0';
+
+          const labelNode = document.createElement('div');
+          labelNode.style.cssText =
+            'font-size:12px;opacity:.75;margin-bottom:6px';
+          labelNode.textContent = label;
+
+          const valueNode = document.createElement('strong');
+          valueNode.style.cssText =
+            'font-size:16px;overflow-wrap:anywhere';
+          valueNode.textContent = value;
+
+          cell.append(labelNode, valueNode);
+          grid.appendChild(cell);
+        }
+
+        panel.appendChild(grid);
+
+        const info = document.createElement('p');
+        info.style.cssText =
+          'font-size:12px;opacity:.8;margin:12px 0 0';
+
+        const recentCount = Array.isArray(past) ? past.length : 0;
+        const upcomingCount = Array.isArray(future) ? future.length : 0;
+
+        info.textContent =
+          'Available match data: ' +
+          recentCount + ' recent results and ' +
+          upcomingCount + ' upcoming fixtures.';
+
+        panel.appendChild(info);
+
+        const hero = main.querySelector('.kc-entity-hero');
+
+        if (hero && hero.parentNode === main) {
+          hero.insertAdjacentElement('afterend', panel);
+        } else {
+          main.prepend(panel);
+        }
+      })();
+
       // V663: Optional FantasyPlayoffs points for verified squad IDs.
       // Never block or replace the official team profile.
       (async () => {
