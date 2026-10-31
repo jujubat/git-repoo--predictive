@@ -6498,6 +6498,48 @@ async def health():
 # FIXTURES
 # ---------------------------------------------------------------------------
 
+# V663 STEP 898A: PROVIDER-FREE MY KASI FIXTURES
+@app.get("/my-kasi/fixtures")
+async def my_kasi_upcoming_fixtures():
+    """Read-only snapshot-backed fixtures; never fetch providers."""
+    from my_kasi_fixtures import select_my_kasi_fixtures
+
+    key = "fixtures:football:ALL:upcoming:last_good"
+
+    try:
+        snapshot = await asyncio.to_thread(
+            _dashboard_snapshot_get, key
+        )
+
+        payload = (
+            snapshot.get("data")
+            if isinstance(snapshot, dict)
+            else None
+        )
+
+        matches = select_my_kasi_fixtures(payload)
+
+    except Exception as exc:
+        log.warning(
+            "My Kasi snapshot read failed: %s",
+            type(exc).__name__
+        )
+        matches = []
+
+    return JSONResponse(
+        {
+            "source": "existing-football-snapshot",
+            "count": len(matches),
+            "matches": matches,
+            "votingEnabled": False,
+        },
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "CDN-Cache-Control": "no-store",
+            "X-My-Kasi-Contract": "v663-898a",
+        },
+    )
+
 @app.get("/fixtures")
 async def fixtures(
     request: Request = None,

@@ -1648,7 +1648,7 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
     const timer=setTimeout(()=>controller.abort(),9000);
     try{
       const response=await fetch(
-        '/fixtures?league=ALL&type=upcoming',
+        '/my-kasi/fixtures',
         {signal:controller.signal,headers:{Accept:'application/json'}}
       );
       if(!response.ok)throw new Error('Fixture feed unavailable');
