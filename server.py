@@ -20635,7 +20635,7 @@ async def v413_universal_shared_cache(request:Request,call_next):
     if _ksn_v663_staging_football_only():
         return await call_next(request)
     path=request.url.path
-    if request.method!="GET" or path=="/shared/bootstrap" or not path.startswith(_V413_PUBLIC_PREFIXES):
+    if request.method!="GET" or path=="/shared/bootstrap" or path.rstrip("/") == "/team/profile" or not path.startswith(_V413_PUBLIC_PREFIXES):
         return await call_next(request)
     if request.headers.get("X-KSN-Internal")==_KSN_INTERNAL_TOKEN or request.query_params.get("refresh") in ("1","true","yes"):
         bypass=True
@@ -25013,6 +25013,10 @@ async def v227_cache_headers(request: Request, call_next):
         # v290: public videos feed — 30-minute shared edge cache.
         response.headers["Cache-Control"]="public, max-age=300, s-maxage=1800, stale-while-revalidate=300"
         response.headers["CDN-Cache-Control"]="public, s-maxage=1800, stale-while-revalidate=300"
+    elif p.rstrip("/") == "/team/profile":
+        # V663 Step 817: prevent persistent caching of dynamic profiles.
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["CDN-Cache-Control"] = "no-store"
     elif p.startswith("/standings") or p.startswith("/team/") or p.startswith("/player/") or p.startswith("/sports-db"):
         response.headers["Cache-Control"]="public, max-age=300, s-maxage=21600, stale-while-revalidate=600"
         response.headers["CDN-Cache-Control"]="public, s-maxage=21600, stale-while-revalidate=600"
