@@ -18489,6 +18489,59 @@ function dateString(value){const d=new Date(value);return Number.isFinite(d.getT
 function matchName(row,side){const x=row?.teams?.[side]||row?.[side+'Team']||row?.[side];return typeof x==='string'?x:(x?.name||row?.[side+'Name']||'—')}
 function score(x,side){return x?.goals?.[side]??x?.score?.fulltime?.[side]??x?.[side+'Score']??'—'}
 function resultsRows(container,rows){const table=document.createElement('table');table.className='mk901-data';const head=document.createElement('thead');const hr=document.createElement('tr');['Match','Result','Date'].forEach(x=>text(hr,'th',x));head.append(hr);table.append(head);const tbody=document.createElement('tbody');for(const r of asList(rows).slice(0,10)){const tr=document.createElement('tr');text(tr,'td',matchName(r,'home')+' vs '+matchName(r,'away'));text(tr,'td',score(r,'home')+' - '+score(r,'away'));text(tr,'td',dateString(r?.fixture?.date||r?.date||r?.datetime));tbody.append(tr)}if(!tbody.children.length){const row=document.createElement('tr');const td=text(row,'td','No verified recent results available');td.colSpan=3;tbody.append(row)}table.append(tbody);container.append(table)}
+/* V663 STEP 901H: SELECTED TEAM LAST 3 / NEXT 3 */
+function renderSelectedTeamMatches(root,past,future,team){
+ const fixtureDate=x=>Date.parse(x?.fixture?.date||x?.date||x?.datetime||x?.kickoff||'');
+ const teamName=String(team?.name||'').trim().toLowerCase();
+ const teamNum=String(team?.id||'');
+ const selectedSide=x=>{const h=x?.teams?.home||x?.homeTeam||x?.home;const a=x?.teams?.away||x?.awayTeam||x?.away;const eq=t=>String(t?.id||'')===teamNum&&teamNum||String(t?.name||t||'').toLowerCase()===teamName&&teamName;return eq(h)?'home':eq(a)?'away':null};
+ const matchScore=(x,s)=>{const y=x?.goals?.[s]??x?.score?.fulltime?.[s]??x?.[s+'Score'];return y===null||y===undefined||y===''?'—':String(y)};
+ const matchId=x=>{const n=String(x?.providerFixtureId||x?.fixtureId||x?.fixture?.id||'');return /^[1-9][0-9]*$/.test(n)?n:null};
+ const statsLine=x=>{
+   const s=x?.statistics||x?.stats||x?.matchStats||{};
+   const items=[];
+   const pct=s?.possession??s?.ballPossession??s?.['Ball Possession'];
+   const shots=s?.shotsOnGoal??s?.shotsOnTarget??s?.['Shots on Goal'];
+   const corners=s?.corners??s?.cornerKicks??s?.['Corner Kicks'];
+   if((typeof pct==='string'||typeof pct==='number')&&String(pct).trim())items.push('Possession: '+String(pct));
+   if((typeof shots==='string'||typeof shots==='number')&&String(shots).trim())items.push('Shots on target: '+String(shots));
+   if((typeof corners==='string'||typeof corners==='number')&&String(corners).trim())items.push('Corners: '+String(corners));
+   return items.join(' · ');
+ };
+ const makeTable=(label,rows,isPast)=>{
+   const section=text(root,'section','','mk901-fixture-section');text(section,'h4',label);
+   const table=document.createElement('table');table.className='mk901-data';
+   const thead=document.createElement('thead'),hr=document.createElement('tr');
+   ['Opponent / Match','Competition','Result / Kickoff','Statistics'].forEach(v=>text(hr,'th',v));thead.append(hr);table.append(thead);
+   const tbody=document.createElement('tbody');
+   rows.forEach(x=>{
+     const tr=document.createElement('tr');const side=selectedSide(x);
+     const opponent=side==='home'?matchName(x,'away'):side==='away'?matchName(x,'home'):matchName(x,'home')+' vs '+matchName(x,'away');
+     const match=text(tr,'td','');const home=x?.teams?.home||x?.homeTeam||{};const away=x?.teams?.away||x?.awayTeam||{};
+     const opp=side==='home'?away:side==='away'?home:null;
+     badge(match,opp?.logo||opp?.badge||null,String(opponent)+' badge');text(match,'span',opponent);
+     text(tr,'td',x?.league?.name||x?.competition?.name||x?.leagueName||'—');
+     const when=fixtureDate(x);const whenText=Number.isFinite(when)?dateString(new Date(when).toISOString()):'Date unavailable';
+     const homeScore=matchScore(x,'home'),awayScore=matchScore(x,'away');
+     let status=whenText;
+     if(isPast){const scoreText=homeScore+' - '+awayScore;let outcome='';
+       const h=Number(homeScore),a=Number(awayScore);
+       if(side&&homeScore!=='—'&&awayScore!=='—'&&Number.isFinite(h)&&Number.isFinite(a))outcome=h===a?'D':((side==='home'?h>a:a>h)?'W':'L');
+       status=(outcome?outcome+'  ·  ':'')+scoreText+'  ·  '+whenText;
+     }
+     text(tr,'td',status);
+     const details=text(tr,'td','');const stat=statsLine(x);if(stat)text(details,'span',stat+'  ');
+     const id=matchId(x);if(id){const a=document.createElement('a');a.href='/matches/'+encodeURIComponent(id)+'/stats';a.textContent=stat?'Full stats':'View match stats';details.append(a)}else if(!stat)text(details,'span',isPast?'Detailed stats unavailable':'Preview unavailable');
+     tbody.append(tr);
+   });
+   if(!rows.length){const tr=document.createElement('tr');const td=text(tr,'td',isPast?'No verified past games available.':'No verified upcoming games available.');td.colSpan=4;tbody.append(tr)}
+   table.append(tbody);section.append(table);
+ };
+ const sortedPast=asList(past).filter(x=>x&&typeof x==='object').sort((a,b)=>(fixtureDate(b)||0)-(fixtureDate(a)||0)).slice(0,3);
+ const sortedFuture=asList(future).filter(x=>x&&typeof x==='object'&&(!Number.isFinite(fixtureDate(x))||fixtureDate(x)>Date.now())).sort((a,b)=>(fixtureDate(a)||Infinity)-(fixtureDate(b)||Infinity)).slice(0,3);
+ makeTable('Last 3 games',sortedPast,true);makeTable('Next 3 games',sortedFuture,false);
+}
+
 let sequence=0;
 async function showTeam(name){const box=get('mk901TeamDetails');if(!box)return;const ticket=++sequence;box.replaceChildren();text(box,'p','Loading verified team data…');try{
  const res=await fetch('/team/profile?team='+encodeURIComponent(teamId(name)),{credentials:'same-origin'});
@@ -18497,7 +18550,7 @@ async function showTeam(name){const box=get('mk901TeamDetails');if(!box)return;c
  box.replaceChildren();const hero=text(box,'div','','mk901-team');badge(hero,t.logo||t.badge,t.name||name);const title=text(hero,'div','');text(title,'h4',t.name||name);text(title,'small',t.country||'Football club');
  const metrics=text(box,'div','','mk901-metrics');const played=Number(row?.all?.played??stats?.fixtures?.played?.total);const won=Number(row?.all?.win??stats?.fixtures?.wins?.total);const pct=Number.isFinite(played)&&played>0&&Number.isFinite(won)?(won/played*100).toFixed(1)+'%':'—';
  metric(metrics,'League position',row.rank??'—');metric(metrics,'Win rate',pct);metric(metrics,'Matches played',Number.isFinite(played)?played:'—');metric(metrics,'Points',row.points??'—');metric(metrics,'Goal difference',row.goalsDiff??'—');metric(metrics,'Current form',Array.isArray(d?.form)?d.form.join(' '):(row.form||'—'));
- text(box,'h4','Last played matches');resultsRows(box,d?.past10||[]);
+ renderSelectedTeamMatches(box,d?.past10||[],d?.future||[],t);
  const actions=text(box,'div','','mk901-actions');const profile=document.createElement('a');profile.textContent='Full team profile, squad and injuries';const ref=String(teamId(name));profile.href='/teams/'+encodeURIComponent(ref);actions.append(profile);
  text(box,'p','H2H requires a selected opponent or match. Open a match profile to view verified head-to-head data.','mk901-note');
  }catch(e){if(ticket!==sequence)return;box.replaceChildren();text(box,'p','Team details unavailable from the existing profile API. No statistics have been invented.','mk901-note');}}
