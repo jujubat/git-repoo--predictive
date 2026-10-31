@@ -18647,6 +18647,73 @@ function boot(){
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
 </script>
+
+<!-- V663 STEP 904A: COMPACT SHARED TEAM VIEW -->
+<style id="ksn-904a-style">
+#platform #ksnV663MyKasi > .mk901-actions,#platform #mk901TeamDetails{display:none!important}
+#platform #favouritesList + .ksn-mk-table-scroll{display:none!important}
+#platform .mk904-shell{margin:16px 0;border:1px solid #30475a;border-radius:12px;overflow:hidden;background:#09131e}
+#platform .mk904-scroll{overflow:auto;max-height:450px}
+#platform .mk904-table{width:100%;border-collapse:collapse;min-width:470px;font-size:13px}
+#platform .mk904-table th{text-align:left;color:#acd4ed;background:#14293b;padding:10px 12px}
+#platform .mk904-table td{border-top:1px solid #2b4354;padding:9px 12px;vertical-align:middle}
+#platform .mk904-team{display:flex;align-items:center;gap:8px;min-width:0}
+#platform .mk904-crest{width:30px!important;height:30px!important;max-width:30px!important;max-height:30px!important;object-fit:contain!important;flex:none}
+#platform .mk904-detail-crest{width:46px!important;height:46px!important;max-width:46px!important;max-height:46px!important;object-fit:contain!important}
+#platform .mk904-match-crest{width:26px!important;height:26px!important;max-width:26px!important;max-height:26px!important;object-fit:contain!important}
+#platform .mk904-table button{padding:6px 10px;min-height:30px;margin:2px}
+#platform .mk904-detail{margin-top:15px;border:1px solid #30475a;border-radius:12px;padding:14px;background:#0e2030}
+#platform .mk904-detail h4{margin:4px 0 12px}
+#platform .mk904-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}
+#platform .mk904-stat{border:1px solid #30506c;border-radius:8px;padding:10px;background:#172e43}
+#platform .mk904-stat b{display:block;font-size:18px}.mk904-stat small{color:#b9cddd}
+#platform .mk904-matches{width:100%;border-collapse:collapse;font-size:12px;min-width:440px}
+#platform .mk904-matches th,#platform .mk904-matches td{border-bottom:1px solid #33495b;text-align:left;padding:8px;vertical-align:middle}
+#platform .mk904-match-wrap{overflow-x:auto}
+#platform .mk904-subtle{color:#b5c9d8;font-size:12px}
+#platform .mk904-link{color:#78cfff;text-decoration:underline}
+@media(max-width:700px){#platform .mk904-meta{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+<script id="ksn-904a-controller">
+(function(){'use strict';
+const FAV='ksn:v663:my-kasi:football-favourites', VERIFIED='ksn:v663:my-kasi:verified-team-identities';
+const $=id=>document.getElementById(id);
+const saved=key=>{try{const x=JSON.parse(localStorage.getItem(key)||'null');return Array.isArray(x)?x:[]}catch(_){return []}};
+const el=(tag,text,cls)=>{const x=document.createElement(tag);if(text!==undefined)x.textContent=String(text);if(cls)x.className=cls;return x};
+const num=x=>/^[1-9][0-9]*$/.test(String(x??''))?String(x):null;
+const when=x=>{const d=new Date(x);return Number.isFinite(d.getTime())?d.toLocaleString('en-ZA',{timeZone:'Africa/Johannesburg',dateStyle:'medium',timeStyle:'short'}):'Date unavailable'};
+function logo(parent,url,alt,cls){if(typeof url!=='string'||!/^https:\/\//i.test(url))return;const img=el('img',undefined,cls);img.src=url;img.alt=alt;img.loading='lazy';img.referrerPolicy='no-referrer';img.onerror=()=>img.remove();parent.append(img)}
+function addCell(row,value){const c=el('td',value);row.append(c);return c}
+function identity(name){return saved(VERIFIED).find(t=>String(t?.name||'').toLowerCase()===String(name).toLowerCase())||null}
+function fixtureDate(x){return Date.parse(x?.date||x?.fixture?.date||x?.datetime||'')}
+function teamText(x,side){const a=x?.[side]||x?.teams?.[side]||x?.[side+'Team'];return typeof a==='string'?a:String(a?.name||'')}
+function score(x,side){return x?.[side+'Score']??x?.goals?.[side]??x?.score?.fulltime?.[side]??null}
+function fixtureKey(x){const d=fixtureDate(x);const a=teamText(x,'home').trim().toLowerCase(),b=teamText(x,'away').trim().toLowerCase();return [Number.isFinite(d)?new Date(d).toISOString().slice(0,10):String(x?.date||''),a,b,score(x,'home')??'',score(x,'away')??''].join('|')}
+function uniqueSorted(rows,ascending,allowed){const seen=new Set();return (Array.isArray(rows)?rows:[]).filter(x=>x&&typeof x==='object'&&Number.isFinite(fixtureDate(x))&&allowed(x)).sort((a,b)=>ascending?fixtureDate(a)-fixtureDate(b):fixtureDate(b)-fixtureDate(a)).filter(x=>{const k=fixtureKey(x);if(seen.has(k))return false;seen.add(k);return true}).slice(0,3)}
+async function resolveId(name){const ref=identity(name)?.publicRef;const id=num(ref);if(id)return id;if(typeof ref!=='string'||!ref.includes('--'))throw new Error('Select a verified team using league selection or verified search');const r=await fetch('/public-resolve/team/'+encodeURIComponent(ref),{credentials:'same-origin'});if(!r.ok)throw new Error('Team ID lookup failed');const p=await r.json();if(!num(p?.id))throw new Error('Team ID is unavailable');return num(p.id)}
+function boot(){const card=$('ksnV663MyKasi'), list=$('favouritesList');if(!card||!list||$('mk904Shell'))return;
+ const shell=el('section',undefined,'mk904-shell');shell.id='mk904Shell';const heading=el('h4','My followed teams');heading.style.padding='12px 12px 0';shell.append(heading);
+ const scroller=el('div',undefined,'mk904-scroll');const tbl=el('table',undefined,'mk904-table');const head=el('thead');const hr=el('tr');['Club','League position','Form','Actions'].forEach(h=>hr.append(el('th',h)));head.append(hr);const body=el('tbody');tbl.append(head,body);scroller.append(tbl);shell.append(scroller);
+ const detail=el('section',undefined,'mk904-detail');detail.id='mk904Detail';detail.setAttribute('aria-live','polite');detail.append(el('p','Select View for a followed club to display its verified Teams & Players data.','mk904-subtle'));
+ const original=list.nextElementSibling;if(original?.classList.contains('ksn-mk-table-scroll'))original.after(shell);else list.after(shell);shell.after(detail);
+ const snapshots=new Map();let selected='',seq=0;
+ function refresh(){const names=saved(FAV).filter(x=>typeof x==='string'&&x.trim());body.replaceChildren();if(!names.length){const tr=el('tr');const cell=addCell(tr,'No followed teams yet. Select league and club above, then Add favourite.');cell.colSpan=4;body.append(tr);return}
+ for(const name of names){const tr=el('tr');const c=addCell(tr,'');const label=el('div',undefined,'mk904-team');const cache=snapshots.get(name);logo(label,cache?.team?.logo||identity(name)?.badge||'',name+' badge','mk904-crest');label.append(el('span',name));c.append(label);
+ addCell(tr,cache?.rank??'—');addCell(tr,cache?.form||'—');const actions=addCell(tr,'');const view=el('button','View');view.type='button';view.addEventListener('click',()=>load(name));const remove=el('button','Remove');remove.type='button';remove.addEventListener('click',()=>{if(typeof window.removeFavourite==='function')window.removeFavourite(name);if(selected===name){selected='';++seq;detail.replaceChildren(el('p','Team removed.','mk904-subtle'))}refresh()});actions.append(view,remove);body.append(tr)} }
+ function matchTable(container,title,rows,past,id){container.append(el('h4',title));const wrap=el('div',undefined,'mk904-match-wrap');const table=el('table',undefined,'mk904-matches');const h=el('tr');['Opponent','Competition','Score / Kickoff','Match details'].forEach(v=>h.append(el('th',v)));const th=el('thead');th.append(h);const tbody=el('tbody');table.append(th,tbody);for(const x of rows){const tr=el('tr');const home=String(x?.homeId??''),away=String(x?.awayId??'');const side=home===id?'home':away===id?'away':null;const other=side==='home'?'away':side==='away'?'home':null;const opp=addCell(tr,'');const label=el('div',undefined,'mk904-team');logo(label,other==='home'?x?.homeLogo:other==='away'?x?.awayLogo:'', 'Opponent badge','mk904-match-crest');label.append(el('span',other?teamText(x,other):teamText(x,'home')+' vs '+teamText(x,'away')));opp.append(label);
+ addCell(tr,typeof x?.league==='string'?x.league:String(x?.league?.name||'—'));
+ const hs=score(x,'home'),as=score(x,'away'),status=String(x?.status||'').toUpperCase();const outcome=past&&hs!=null&&as!=null?(String(hs)+'–'+String(as)+(status==='PEN'?' (penalties)':'')):'Scheduled';addCell(tr,past?outcome+' · '+when(x.date):when(x.date));const action=addCell(tr,'');const fid=num(x?.providerFixtureId)||num(x?.fixtureId)||num(x?.id);if(fid){const a=el('a',past?'View match stats':'Match preview','mk904-link');a.href='/matches/'+encodeURIComponent(fid)+'/stats';action.append(a)}else action.textContent='Details unavailable';tbody.append(tr)}
+ if(!rows.length){const row=el('tr'),c=addCell(row,'No verified fixtures available.');c.colSpan=4;tbody.append(row)}wrap.append(table);container.append(wrap)}
+ async function load(name){selected=name;const ticket=++seq;detail.replaceChildren(el('p','Loading '+name+' from Teams & Players…','mk904-subtle'));try{const id=await resolveId(name);const response=await fetch('/team/profile?team='+encodeURIComponent(id),{credentials:'same-origin'});if(!response.ok)throw new Error('Profile HTTP '+response.status);const d=await response.json();if(ticket!==seq)return;const t=d?.team||{};if(String(t.id||'')!==id)throw new Error('Team identity mismatch');const standings=Array.isArray(d.standings)?d.standings:[];const row=standings.find(x=>String(x?.team?.id??x?.teamId??'')===id)||{};const total=row?.all||{},played=Number(total.played),wins=Number(total.win);const pct=Number.isFinite(played)&&played>0&&Number.isFinite(wins)?(wins/played*100).toFixed(1)+'%':'—';const form=typeof row.form==='string'?row.form:'—';snapshots.set(name,{team:t,rank:row.rank??'—',form});refresh();detail.replaceChildren();const hero=el('div',undefined,'mk904-team');logo(hero,t.logo||'',name+' badge','mk904-detail-crest');const title=el('div');title.append(el('h4',t.name||name),el('small',t.country||''));hero.append(title);detail.append(hero);
+ const stats=el('div',undefined,'mk904-meta');[['League position',row.rank??'—'],['League win rate',pct],['League played',Number.isFinite(played)?played:'—'],['League points',row.points??'—']].forEach(([k,v])=>{const s=el('div',undefined,'mk904-stat');s.append(el('b',v),el('small',k));stats.append(s)});detail.append(stats);detail.append(el('p','League statistics are sourced from the returned standings and may differ from all-competition match history.','mk904-subtle'));
+ const now=Date.now();const past=uniqueSorted(d.past10,false,x=>fixtureDate(x)<=now&&['FT','AET','PEN'].includes(String(x.status||'').toUpperCase()));const future=uniqueSorted(d.future,true,x=>fixtureDate(x)>now&&['NS','TBD',''].includes(String(x.status||'').toUpperCase()));matchTable(detail,'Last 3 completed matches',past,true,id);matchTable(detail,'Next 3 scheduled matches',future,false,id);
+ const full=el('a','Open complete Teams & Players profile','mk904-link');full.href='/teams/'+encodeURIComponent(String(identity(name)?.publicRef||id));detail.append(el('p'));detail.lastChild.append(full);
+ }catch(err){if(ticket!==seq)return;detail.replaceChildren(el('p','Verified team profile unavailable: '+err.message,'mk904-subtle'))}}
+ refresh();new MutationObserver(refresh).observe(list,{childList:true,subtree:true,characterData:true});
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+})();
+</script>
 </body>
 </html>
 
