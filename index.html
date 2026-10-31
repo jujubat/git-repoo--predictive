@@ -1458,6 +1458,220 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
 <!-- V663 Step 490: Four-league supporter picks. Personal browser votes; no invented community totals. -->
 
 
+
+<style id="ksn-mykasi-banner-style">
+#ksnMyKasiHomeVotes{
+  margin:18px 0 24px;padding:22px;
+  border:1px solid rgba(61,174,244,.32);
+  border-radius:20px;
+  background:linear-gradient(135deg,#111d24,#17262d);
+  color:#f5f9fc;box-shadow:0 12px 32px rgba(0,0,0,.15)
+}
+#ksnMyKasiHomeVotes *{box-sizing:border-box}
+#ksnMyKasiHomeVotes .mk-heading{
+  display:flex;justify-content:space-between;
+  align-items:center;gap:12px;margin-bottom:15px
+}
+#ksnMyKasiHomeVotes h2{font-size:22px;margin:3px 0;color:#fff}
+#ksnMyKasiHomeVotes .mk-eyebrow{
+  font-size:11px;letter-spacing:1.3px;
+  text-transform:uppercase;color:#66c9ff;font-weight:700
+}
+#ksnMyKasiHomeVotes .mk-status{
+  font-size:12px;color:#a5bdc9
+}
+#ksnMyKasiHomeVotes .mk-grid{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px
+}
+#ksnMyKasiHomeVotes .mk-match{
+  border:1px solid #354852;border-radius:15px;
+  padding:16px;background:#0e181e;min-width:0
+}
+#ksnMyKasiHomeVotes .mk-league{
+  color:#a6c4d2;text-align:center;font-size:12px;
+  margin-bottom:13px
+}
+#ksnMyKasiHomeVotes .mk-clubs{
+  display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+  gap:8px;align-items:center;text-align:center
+}
+#ksnMyKasiHomeVotes .mk-club{
+  display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:7px;min-width:0;
+  font-size:13px;font-weight:600;overflow-wrap:anywhere
+}
+#ksnMyKasiHomeVotes .mk-club img{
+  width:44px;height:44px;object-fit:contain
+}
+#ksnMyKasiHomeVotes .mk-vs{font-weight:800;color:#80d6ff}
+#ksnMyKasiHomeVotes .mk-kickoff{
+  color:#b4cad4;text-align:center;font-size:12px;
+  margin:12px 0
+}
+#ksnMyKasiHomeVotes .mk-options{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:7px
+}
+#ksnMyKasiHomeVotes .mk-options button{
+  border:1px solid #198de1;border-radius:999px;
+  background:transparent;color:#b8cdd9;
+  padding:11px 5px;font-size:12px;min-width:0;
+  opacity:.72;cursor:not-allowed
+}
+#ksnMyKasiHomeVotes .mk-footnote{
+  margin-top:13px;color:#9cb9c9;font-size:12px
+}
+@media(max-width:720px){
+  #ksnMyKasiHomeVotes{padding:15px;border-radius:15px}
+  #ksnMyKasiHomeVotes .mk-grid{grid-template-columns:1fr}
+  #ksnMyKasiHomeVotes h2{font-size:19px}
+  #ksnMyKasiHomeVotes .mk-match{padding:13px}
+}
+</style>
+
+<section id="ksnMyKasiHomeVotes"
+ data-ksn-structure="home-only"
+ aria-label="My Kasi supporter picks">
+  <div class="mk-heading">
+    <div>
+      <div class="mk-eyebrow">My Kasi ? Supporter Picks</div>
+      <h2>Who will win?</h2>
+    </div>
+    <span class="mk-status">2 matches ? 4 teams</span>
+  </div>
+  <div class="mk-grid" id="ksnMyKasiVoteMatches"
+       aria-live="polite">
+    <p class="mk-status">Loading verified upcoming fixtures?</p>
+  </div>
+  <p class="mk-footnote" id="ksnMyKasiVoteNote">
+    Voting will open once secure anonymous vote recording is enabled.
+  </p>
+</section>
+
+<script id="ksn-mykasi-home-vote-controller-v896">
+(function(){
+  'use strict';
+  const root=document.getElementById('ksnMyKasiHomeVotes');
+  const box=document.getElementById('ksnMyKasiVoteMatches');
+  const note=document.getElementById('ksnMyKasiVoteNote');
+  if(!root||!box||!note)return;
+
+  function text(tag,value,cls){
+    const el=document.createElement(tag);
+    el.textContent=String(value??'');
+    if(cls)el.className=cls;
+    return el;
+  }
+  function teamObj(raw){
+    if(typeof raw==='string')return {name:raw};
+    return raw&&typeof raw==='object'?raw:{};
+  }
+  function parse(row){
+    if(!row||typeof row!=='object')return null;
+    const fixture=row.fixture||{};
+    const teams=row.teams||{};
+    const home=teamObj(teams.home||row.homeTeam||row.home);
+    const away=teamObj(teams.away||row.awayTeam||row.away);
+    const date=fixture.date||row.date||row.datetime||
+      row.kickoff||row.startTime;
+    const kickoff=Date.parse(String(date||''));
+    const status=String(
+      fixture.status?.short||row.statusShort||
+      row.status?.short||row.status||'NS'
+    ).toUpperCase();
+    const id=fixture.id||row.fixtureId||row.id;
+    if(!id||!home.name||!away.name||
+       !Number.isFinite(kickoff)||kickoff<=Date.now())return null;
+    if(!['NS','TBD','SCHEDULED','NOT STARTED'].includes(status))return null;
+    const league=row.league?.name||row.competition||
+      row.leagueName||'Football';
+    return {id:String(id),home,away,date,league,kickoff};
+  }
+  function rows(payload){
+    if(Array.isArray(payload))return payload;
+    for(const key of ['fixtures','matches','games','items','data']){
+      const value=payload?.[key];
+      if(Array.isArray(value))return value;
+      if(value&&typeof value==='object'){
+        const nested=rows(value);
+        if(nested.length)return nested;
+      }
+    }
+    return [];
+  }
+  function club(data){
+    const el=text('div','','mk-club');
+    const logo=data.logo||data.badge||data.crest||'';
+    if(typeof logo==='string'&&/^https:\/\//i.test(logo)){
+      const image=document.createElement('img');
+      image.src=logo;image.alt='';
+      image.loading='lazy';el.append(image);
+    }
+    el.append(text('span',data.name));
+    return el;
+  }
+  function card(match){
+    const wrapper=text('article','','mk-match');
+    wrapper.append(text('div',match.league,'mk-league'));
+    const clubs=text('div','','mk-clubs');
+    clubs.append(club(match.home),text('span','VS','mk-vs'),
+                 club(match.away));
+    wrapper.append(clubs);
+    const date=new Date(match.kickoff);
+    wrapper.append(text(
+      'div',
+      new Intl.DateTimeFormat('en-ZA',{
+        day:'numeric',month:'short',hour:'2-digit',
+        minute:'2-digit',timeZone:'Africa/Johannesburg'
+      }).format(date)+' SAST',
+      'mk-kickoff'
+    ));
+    const options=text('div','','mk-options');
+    for(const label of [match.home.name,'Draw',match.away.name]){
+      const button=text('button',label);
+      button.type='button';
+      button.disabled=true;
+      button.title='Anonymous voting is not active yet';
+      options.append(button);
+    }
+    wrapper.append(options);
+    return wrapper;
+  }
+  async function refresh(){
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),9000);
+    try{
+      const response=await fetch(
+        '/fixtures?league=ALL&type=upcoming',
+        {signal:controller.signal,headers:{Accept:'application/json'}}
+      );
+      if(!response.ok)throw new Error('Fixture feed unavailable');
+      const payload=await response.json();
+      const unique=new Map();
+      for(const row of rows(payload)){
+        const fixture=parse(row);
+        if(fixture&&!unique.has(fixture.id))unique.set(fixture.id,fixture);
+      }
+      const selected=[...unique.values()]
+        .sort((a,b)=>a.kickoff-b.kickoff).slice(0,2);
+      box.replaceChildren();
+      if(selected.length!==2){
+        root.hidden=true;
+        return;
+      }
+      root.hidden=false;
+      for(const match of selected)box.append(card(match));
+    }catch(_){
+      root.hidden=true;
+    }finally{
+      clearTimeout(timer);
+    }
+  }
+  refresh();
+})();
+</script>
+
 <!-- V663 production candidate: staging-only community voting controller withheld. -->
 <div class="card section" data-ksn-structure="home-only" id="totdCard" style="display:none;border-color:var(--accent);background:linear-gradient(135deg,rgba(34,211,238,.08),var(--card-bg));margin-bottom:12px">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
