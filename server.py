@@ -25837,9 +25837,21 @@ async function ksnMatchIntelEnrich(match, original) {{
     finally {{ clearTimeout(timeout); }}
   }};
   const params = id => '/team/profile?team='+encodeURIComponent(id);
-  const [homeProfile,awayProfile,h2hResponse]=await Promise.all([
-    read(params(homeId)),read(params(awayId)),
-    read('/team/h2h?home='+encodeURIComponent(homeId)+'&away='+encodeURIComponent(awayId)+'&last=10',6000)
+  const archiveQuery = name =>
+    '/results/search?sport=football&team='+encodeURIComponent(name)+
+    '&archive_only=true&include_recent=false&limit=60';
+  const h2hQuery =
+    '/results/live-h2h?home_id='+encodeURIComponent(homeId)+
+    '&away_id='+encodeURIComponent(awayId)+
+    '&before='+encodeURIComponent(match.fixture?.date||'')+
+    '&limit=20';
+  const [homeProfile,awayProfile,h2hResponse,
+         homeArchive,awayArchive]=await Promise.all([
+    read(params(homeId)),
+    read(params(awayId)),
+    match.fixture?.date ? read(h2hQuery,6500) : Promise.resolve(null),
+    read(archiveQuery(teams.home.name),6500),
+    read(archiveQuery(teams.away.name),6500)
   ]);
   if (window.__ksnIntelRequestSeq !== sequence ||
       String(match?.fixture?.id || ID)!==matchKey || !panel.isConnected) return;
@@ -25872,8 +25884,41 @@ async function ksnMatchIntelEnrich(match, original) {{
       .filter(x=>completed.has(x.status)):[];
     const future=Array.isArray(p.future)?p.future.map(parseFixture).filter(Boolean)
       .filter(x=>!completed.has(x.status)):[];
+    const archived = side==='home'?homeArchive:awayArchive;
+    const verifiedArchive = Array.isArray(archived?.matches)
+      ? archived.matches.map(parseFixture).filter(x=>
+          x && completed.has(x.status) &&
+          x.goalsHome != null && x.goalsAway != null &&
+          (
+            String(x.homeId)===String(teams[side].id) ||
+            String(x.awayId)===String(teams[side].id) ||
+            (
+              !x.homeId && !x.awayId &&
+              [x.home,x.away].some(name=>
+                name.toLocaleLowerCase() ===
+                String(teams[side].name).toLocaleLowerCase()
+              )
+            )
+          )
+        ) : [];
+    const allPast = [...past,...verifiedArchive]
+      .filter(x=>x.goalsHome!=null && x.goalsAway!=null);
+    const uniquePast = new Map();
+    for (const x of allPast) {{
+      const key=[
+        String(x.date||'').slice(0,10),
+        String(x.home||'').toLocaleLowerCase(),
+        String(x.away||'').toLocaleLowerCase(),
+        String(x.goalsHome),
+        String(x.goalsAway)
+      ].join('|');
+      if (!uniquePast.has(key)) uniquePast.set(key,x);
+    }}
+    const verifiedPast = [...uniquePast.values()]
+      .sort((a,b)=>String(b.date||'').localeCompare(String(a.date||'')))
+      .slice(0,10);
     const teamId=String(teams[side].id);
-    const mappedPast=past.slice(0,10).map(x=>{{
+    const mappedPast=verifiedPast.map(x=>{{
       const isHome=String(x.homeId)===teamId;
       const scored=isHome?x.goalsHome:x.goalsAway;
       const conceded=isHome?x.goalsAway:x.goalsHome;
@@ -25891,28 +25936,34 @@ async function ksnMatchIntelEnrich(match, original) {{
   }}
   // H2H: only count fully identified, completed fixtures with real scores.
   // Never turn a failed/empty response into a claim of zero meetings.
-  const h2rows=Array.isArray(h2hResponse)?h2hResponse:
-    Array.isArray(h2hResponse?.matches)?h2hResponse.matches:
-    Array.isArray(h2hResponse?.response)?h2hResponse.response:
-    Array.isArray(h2hResponse?.fixtures)?h2hResponse.fixtures:[];
-  const meetings=h2rows.map(parseFixture).filter(x=>
-    x&&completed.has(x.status)&&x.goalsHome!=null&&x.goalsAway!=null&&
-    [String(x.homeId),String(x.awayId)].includes(String(homeId))&&
-    [String(x.homeId),String(x.awayId)].includes(String(awayId))
-  ).slice(0,10);
-  if (meetings.length) {{
-    let hw=0,aw=0,draws=0,btts=0,over25=0;
-    for (const x of meetings) {{
-      const homeScore=String(x.homeId)===String(homeId)?Number(x.goalsHome):Number(x.goalsAway);
-      const awayScore=String(x.homeId)===String(homeId)?Number(x.goalsAway):Number(x.goalsHome);
-      if (homeScore>awayScore)hw++; else if(homeScore<awayScore)aw++; else draws++;
-      if (homeScore>0&&awayScore>0)btts++;
-      if (homeScore+awayScore>2.5)over25++;
+  // This endpoint is archive-only and validates fixture team IDs.
+  const archiveMeetings = Array.isArray(h2hResponse?.meetings)
+    ? h2hResponse.meetings.filter(x=>
+        x.homeScore != null && x.awayScore != null &&
+        Number.isInteger(Number(x.homeScore)) &&
+        Number.isInteger(Number(x.awayScore)) &&
+        Number(x.homeScore)>=0 && Number(x.awayScore)>=0
+      ) : [];
+  if (h2hResponse?.available === true && archiveMeetings.length) {{
+    const count = archiveMeetings.length;
+    let btts=0, over25=0;
+    for (const row of archiveMeetings) {{
+      const h=Number(row.homeScore),a=Number(row.awayScore);
+      if(h>0 && a>0)btts++;
+      if(h+a>2.5)over25++;
     }}
-    converted.h2h={{played:meetings.length,homeWins:hw,awayWins:aw,draws,
-      bttsPct:Math.round(btts*100/meetings.length),
-      over25Pct:Math.round(over25*100/meetings.length),
-      meetings:meetings.map(x=>({{date:x.date,home:x.home,away:x.away,score:x.score}}))}};
+    converted.h2h={{
+      played:count,
+      homeWins:h2hResponse.homeWins,
+      awayWins:h2hResponse.awayWins,
+      draws:h2hResponse.draws,
+      bttsPct:Math.round(100*btts/count),
+      over25Pct:Math.round(100*over25/count),
+      meetings:archiveMeetings.slice(0,10).map(x=>({{
+        date:x.date,home:x.homeTeam,away:x.awayTeam,
+        score:String(x.homeScore)+' - '+String(x.awayScore)
+      }}))
+    }};
   }}
   // Preserve standings and all original match tabs.
   panel.innerHTML=intelligence(converted);
