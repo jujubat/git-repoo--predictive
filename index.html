@@ -7379,7 +7379,7 @@ function mapFixture(f, stats) {
     homeLogo: f.teams.home.logo || '',
     awayLogo: f.teams.away.logo || '',
     leagueLogo: f.league.logo || '',
-    leagueFlag: f.league.flag || '', 
+    leagueFlag: f.league.flag || '',
     hs:       f.goals.home ?? 0,
     as:       f.goals.away ?? 0,
     min:      f.fixture.status.elapsed || 0,
@@ -7845,7 +7845,7 @@ window.openFixtureInsightsById = async function(id) {
       <div style="margin-bottom:14px">
         <div style="font-size:10px;color:var(--accent);font-weight:800;text-transform:uppercase;margin-bottom:7px">Bookmaker 1X2</div>
         <div style="display:flex;gap:7px">${oddsLine}</div>
-        
+
       </div>
 
       <div>
@@ -10790,8 +10790,8 @@ if(document.readyState==='loading'){
       <div><div class="title"> ${E(v)}</div><div class="meta">No local data is available — open a Google search for this entity instead.</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <a href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener" class="primary" style="font-size:12px;padding:7px 13px;border-radius:8px;background:var(--accent);color:#000;font-weight:800;text-decoration:none"> Google: ${E(v)}</a>
-        
-        
+
+
       </div>
       <div class="meta" style="font-size:10px">Live data will appear here when the data service is available.</div>
     </div>`;
@@ -11298,7 +11298,7 @@ window.kasiscoreBackToLive=function(){ return window.kasiLiveBack(); };
     el.innerHTML=matches.map(m=>{const logo=(src)=>src?`<img src="${E(src)}" style="width:24px;height:24px;object-fit:contain;vertical-align:middle;margin-right:7px" onerror="this.style.display='none'" loading="lazy" decoding="async" fetchpriority="low">`:'';return `<div class="live-row" onclick="openLiveMatchPage(${Number(m.id||0)},'football',${JSON.stringify(m.league||'')})"><div class="lr-league">${E(m.league||'Football')}</div><div class="lr-teams"><div class="t kc-link" data-kc-team-id="${Number(m.homeId||0)}" data-kc-team-name="${E(m.home||'Home')}" onclick="event.stopPropagation();openKasiTeamPage(${Number(m.homeId||0)},${JSON.stringify(m.home||'Home')})">${logo(m.homeLogo)}${E(m.home||'Home')}</div><div class="t kc-link" data-kc-team-id="${Number(m.awayId||0)}" data-kc-team-name="${E(m.away||'Away')}" onclick="event.stopPropagation();openKasiTeamPage(${Number(m.awayId||0)},${JSON.stringify(m.away||'Away')})">${logo(m.awayLogo)}${E(m.away||'Away')}</div></div><div class="lr-score"><div class="s">${E(m.hs??0)}</div><div class="m">${E(m.min||'LIVE')}${m.min?"'":''}</div><div class="s">${E(m.as??0)}</div></div><button class="lr-stats-btn" data-fixture-id="${Number(m.id||0)}" onclick="event.stopPropagation();openLiveMatchPage(${Number(m.id||0)},'football',${JSON.stringify(m.league||'')})">Stats</button></div>`}).join('');
   };
   window.loadYesterdayTipResults=async function(){const el=document.getElementById('totdYesterday');if(!el)return;try{const d=await get('/learning/recent-results');const all=[...(d.correctGames||[]),...(d.wrongGames||[])];const now=new Date(), y=new Date(now);y.setDate(y.getDate()-1);const key=y.toISOString().slice(0,10);const rows=all.filter(x=>String(x.kickoff||'').slice(0,10)===key).slice(0,8);el.innerHTML=`<div style="font-size:11px;font-weight:800;margin-bottom:7px">Yesterday · predicted vs outcome</div>`+(rows.length?rows.map(x=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:11px"><span>${E(x.home)} vs ${E(x.away)}</span><span>Pred: <b>${E(x.predictedWinner||'—')}</b> · Final: <b>${E(x.homeGoals??'—')}-${E(x.awayGoals??'—')}</b> · <b style="color:${x.winnerCorrect?'var(--green)':'var(--red)'}">${x.winnerCorrect?'Correct':'Missed'}</b></span></div>`).join(''):'<div class="sub">No resolved Kasi Sports News predictions were stored for yesterday.</div>');}catch(e){el.innerHTML='<div class="sub">Yesterday’s prediction outcomes are temporarily unavailable.</div>';}};
-  
+
 function kcNewsImageUrl(n){const candidates=[n?.image,n?.ogImage,n?.publisherImage].filter(Boolean);for(const raw of candidates){const u=String(raw).trim();if(/google|gstatic|googleusercontent|google_news|googlelogo|favicon|branding|logo[._-]|\/logo(?:s)?\/|placeholder|default[-_]?image|sprite|lh3\.google|encrypted-tbn/i.test(u))continue;if(/^https?:\/\//i.test(u))return '/sports/news/image?url='+encodeURIComponent(u)}return ''}
 function kcNewsPlaceholder(sport){const s=String(sport||'SPORT').toUpperCase();return 'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500"><rect width="900" height="500" fill="#111827"/><rect x="0" y="0" width="14" height="500" fill="#12b8d6"/><text x="55" y="215" font-family="Arial" font-size="26" fill="#94a3b8">KASI SPORTS NEWS</text><text x="55" y="285" font-family="Arial" font-weight="700" font-size="58" fill="#fff">${s} NEWS</text></svg>`)}
 window.loadHomeSportsNews=async function(){
@@ -12962,7 +12962,7 @@ html.ks-home-boot [data-noncritical-home]{content-visibility:auto;contain-intrin
    if(multisportLoaded)return;
    multisportLoaded=true;
    if(typeof window.kasiLoadMultisportData==='function')window.kasiLoadMultisportData();
-   
+
  }
  function relevantTarget(el){
    const s=((el&&el.id)||'')+' '+((el&&el.textContent)||'');
@@ -14944,7 +14944,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
      sec.setAttribute('aria-hidden',on?'false':'true');
    });
    document.querySelectorAll('.kasiscore-primary-nav [data-primary]').forEach(b=>b.classList.toggle('active',b.dataset.primary===tab));
-   
+
    document.body.dataset.kasiTab=tab;
    try{history.replaceState({kasiView:tab},'',tab==='overview'?location.pathname:location.pathname+'#'+tab)}catch(_){}
    // Trigger the existing owner only after the destination is visible. Navigation never waits on network.
@@ -16412,7 +16412,7 @@ function updateSidebarFromRoute(){
   if(t==='live')key=view==='finished'?'finished':'live';
   else if(t==='fixtures')key='fixtures';else if(t==='predictions')key='predictions';
   else if(t==='sportsnews')key='news';else if(t==='sportshub')key='teams';else if(t==='platform')key='mykasi';
-  if(t==='live'&&!LEAGUE_FILTER.name){} 
+  if(t==='live'&&!LEAGUE_FILTER.name){}
   setSidebarActive(key);
 }
 function buildSportNav(){
@@ -18387,7 +18387,7 @@ function init(){
   const favCount=pill('Favourite teams');const scoreCount=pill('Cached results');
   hero.append(intro,pills);dashboard.append(hero);
   const columns=document.createElement('div');columns.className='ksn-mk-columns';dashboard.append(columns);
-  const lowerTitle=document.createElement('h3');lowerTitle.className='ksn-mk-section-title';lowerTitle.textContent='Account & preferences';dashboard.append(lowerTitle);
+
   const lower=document.createElement('div');lower.className='ksn-mk-lower';dashboard.append(lower);
   // Move existing live components: preserve their IDs, original listeners, and backing storage.
   favourites.classList.add('ksn-mk-panel');ballot.classList.add('ksn-mk-panel');
