@@ -11641,6 +11641,37 @@ def _ksn_v590_team_view(profile, team_id, season):
     base = _ksn_v496_enrich_profile(base, team_id, season)
     base = _ksn_v591_pg_team_view(base, team_id, season)
     base = _ksn_v588_complete_profile(base, team_id, season)
+    # V663 Step 852B: preserve verified nationality after profile enrichment.
+    # Do not make provider calls or introduce non-official squad members.
+    try:
+        _key = f"team_verified_squad_v609:{team_id}:{season}"
+        _snap = _dashboard_snapshot_get(_key) or {}
+        _data = _snap.get("data") or {}
+        if (
+            int(_data.get("teamId") or 0) == int(team_id)
+            and int(_data.get("season") or 0) == int(season)
+        ):
+            _verified = {
+                int(p["id"]): p.get("nationality")
+                for p in (_data.get("players") or [])
+                if isinstance(p, dict)
+                and str(p.get("id") or "").isdigit()
+                and isinstance(p.get("nationality"), str)
+                and p.get("nationality").strip()
+            }
+            for _player in base.get("players") or []:
+                if not isinstance(_player, dict):
+                    continue
+                _pid = _player.get("id")
+                if str(_pid or "").isdigit() and not _player.get("nationality"):
+                    _nationality = _verified.get(int(_pid))
+                    if _nationality:
+                        _player["nationality"] = _nationality
+    except Exception as _exc:
+        log.warning(
+            "V663 nationality recovery team=%s error=%s",
+            team_id, type(_exc).__name__
+        )
     # v645: keep the public squad restricted to verifiable API-Football IDs.
     # Do not manufacture shirt numbers from fantasy ranking positions.
     base["players"] = [p for p in (base.get("players") or [])
