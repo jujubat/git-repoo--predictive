@@ -25859,7 +25859,7 @@ async function ksnMatchIntelEnrich(match, original) {{
       away:typeof away==='string'?away:'',
       homeId:r.homeId||r.teams?.home?.id,
       awayId:r.awayId||r.teams?.away?.id,
-      score:(hg!=null&&ag!=null)?String(hg)+' ??? '+String(ag):'???',
+      score:(hg!=null&&ag!=null)?String(hg)+' - '+String(ag):'Unavailable',
       status, goalsHome:hg, goalsAway:ag
     }};
   }};
@@ -25878,7 +25878,7 @@ async function ksnMatchIntelEnrich(match, original) {{
       const scored=isHome?x.goalsHome:x.goalsAway;
       const conceded=isHome?x.goalsAway:x.goalsHome;
       return {{date:x.date,home:x.home,away:x.away,score:x.score,
-        result:scored==null||conceded==null?'???':scored>conceded?'W':scored<conceded?'L':'D'}};
+        result:scored==null||conceded==null?'?':scored>conceded?'W':scored<conceded?'L':'D'}};
     }});
     converted.form[side]={{...(converted.form[side]||{{}}),last10:mappedPast}};
     converted.next5[side]=future.slice(0,5).map(x=>({{date:x.date,home:x.home,away:x.away}}));
@@ -25918,9 +25918,10 @@ async function ksnMatchIntelEnrich(match, original) {{
   panel.innerHTML=intelligence(converted);
 }}
 
+const intelDate=v=>{{const s=String(v??'').trim();const m=s.match(/^(\d{{4}}-\d{{2}}-\d{{2}})(?:[T ]|$)/);return m?m[1]:'Date unavailable';}};
 function intelligence(i){{i=i||{{}};const f=i.form||{{}},fh=f.home||{{}},fa=f.away||{{}},st=i.standings||{{}},h2=i.h2h||{{}},n=i.next5||{{}},ts=i.teamStatistics||{{}},inj=i.injuries||{{}};
- const formRows=x=>(x||[]).map(r=>`<div class="event"><div class="minute">${{E(r.result||'—')}}</div><div><b>${{E(r.home||'')}} ${{E(r.score||'')}} ${{E(r.away||'')}}</b><div class="tiny muted">${{localDate(r.date)}}${{(r.scorers||[]).length?' · Scorers: '+E((r.scorers||[]).join(', ')):''}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>';
- const nextRows=x=>(x||[]).map(r=>`<div class="event"><div class="minute">NEXT</div><div><b>${{E(r.home||'')}} vs ${{E(r.away||'')}}</b><div class="tiny muted">${{localDate(r.date)}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>';
+ const formRows=x=>(x||[]).map(r=>`<div class="event"><div class="minute">${{E(r.result||'—')}}</div><div><b>${{E(r.home||'')}} ${{E(r.score||'')}} ${{E(r.away||'')}}</b><div class="tiny muted">${{intelDate(r.date)}}${{(r.scorers||[]).length?' · Scorers: '+E((r.scorers||[]).join(', ')):''}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>';
+ const nextRows=x=>(x||[]).map(r=>`<div class="event"><div class="minute">NEXT</div><div><b>${{E(r.home||'')}} vs ${{E(r.away||'')}}</b><div class="tiny muted">${{intelDate(r.date)}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>';
  const S=x=>x||{{}}, total=(x,p)=>Number(S(x?.fixtures?.[p])?.total??0), goals=(x,p)=>Number(S(x?.goals?.[p])?.total?.total??0), pct=(a,b)=>b?Math.round(a*1000/b)/10:0;
  const k=x=>{{const p=total(x,'played'),w=total(x,'wins'),d=total(x,'draws'),l=total(x,'loses'),gf=goals(x,'for'),ga=goals(x,'against');return {{p,w,d,l,gf,ga,wr:pct(w,p),gfpg:p?Math.round(gf*100/p)/100:0,gapg:p?Math.round(ga*100/p)/100:0}}}};
  const hk=k(ts.home),ak=k(ts.away),hp=st.home?.points??'—',ap=st.away?.points??'—';
@@ -25930,7 +25931,7 @@ function intelligence(i){{i=i||{{}};const f=i.form||{{}},fh=f.home||{{}},fa=f.aw
  return `<div class="compare-hero">${{teamCard('home',fh.team?.name||'Home',st.home,hk,hp)}}${{teamCard('away',fa.team?.name||'Away',st.away,ak,ap)}}</div>
  <div class="card"><h2>Season comparison</h2>${{cmp('Win rate',hk.wr,ak.wr,'%')}}${{cmp('Goals scored',hk.gf,ak.gf)}}${{cmp('Goals conceded',hk.ga,ak.ga)}}${{cmp('League points',Number(hp)||0,Number(ap)||0)}}</div>
  <div class="grid2"><div class="card"><h3>${{E(fh.team?.name||'Home')}} · Last 10</h3>${{formRows(fh.last10)}}</div><div class="card"><h3>${{E(fa.team?.name||'Away')}} · Last 10</h3>${{formRows(fa.last10)}}</div></div>
- <div class="grid2"><div class="card"><h3>Head to head intelligence</h3><div class="grid3"><div class="metric"><span class="tiny muted">Meetings</span><b>${{E(h2.played??'???')}}</b></div><div class="metric"><span class="tiny muted">BTTS</span><b>${{E(h2.bttsPct==null?'???':h2.bttsPct+'%')}}</b></div><div class="metric"><span class="tiny muted">Over 2.5</span><b>${{E(h2.over25Pct==null?'???':h2.over25Pct+'%')}}</b></div></div><p class="tiny muted">${{E(fh.team?.name||'Home')}} wins ${{E(h2.homeWins??0)}} · Draws ${{E(h2.draws??0)}} · ${{E(fa.team?.name||'Away')}} wins ${{E(h2.awayWins??0)}}</p>${{(h2.meetings||[]).slice(0,10).map(x=>`<div class="event"><div class="minute">H2H</div><div><b>${{E(x.home||'')}} ${{E(x.score||'')}} ${{E(x.away||'')}}</b><div class="tiny muted">${{localDate(x.date)}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>'}}</div><div class="card"><h3>Availability</h3><div class="grid2"><div><b>${{E(fh.team?.name||'Home')}}</b>${{injuries(inj.home)}}</div><div><b>${{E(fa.team?.name||'Away')}}</b>${{injuries(inj.away)}}</div></div></div></div>
+ <div class="grid2"><div class="card"><h3>Head to head intelligence</h3><div class="grid3"><div class="metric"><span class="tiny muted">Meetings</span><b>${{E(h2.played??'?')}}</b></div><div class="metric"><span class="tiny muted">BTTS</span><b>${{h2.bttsPct==null?'?':E(h2.bttsPct)+'%'}}</b></div><div class="metric"><span class="tiny muted">Over 2.5</span><b>${{h2.over25Pct==null?'?':E(h2.over25Pct)+'%'}}</b></div></div><p class="tiny muted">${{h2.played!=null?(E(fh.team?.name||'Home')+' wins '+E(h2.homeWins??'?')+' | Draws '+E(h2.draws??'?')+' | '+E(fa.team?.name||'Away')+' wins '+E(h2.awayWins??'?')):'No verified head-to-head results available.'}}</p>${{(h2.meetings||[]).slice(0,10).map(x=>`<div class="event"><div class="minute">H2H</div><div><b>${{E(x.home||'')}} ${{E(x.score||'')}} ${{E(x.away||'')}}</b><div class="tiny muted">${{intelDate(x.date)}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>'}}</div><div class="card"><h3>Availability</h3><div class="grid2"><div><b>${{E(fh.team?.name||'Home')}}</b>${{injuries(inj.home)}}</div><div><b>${{E(fa.team?.name||'Away')}}</b>${{injuries(inj.away)}}</div></div></div></div>
  <div class="grid2"><div class="card"><h3>Next 5 · ${{E(fh.team?.name||'Home')}}</h3>${{nextRows(n.home)}}</div><div class="card"><h3>Next 5 · ${{E(fa.team?.name||'Away')}}</h3>${{nextRows(n.away)}}</div></div>`}}
 
 function odds(o){{o=o||{{}};const books=o.bookmakers||[],sel=o.selected||books[0]||{{}},markets=sel.markets||[];
