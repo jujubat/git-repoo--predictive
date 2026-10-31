@@ -18482,7 +18482,18 @@ const text=(parent,tag,value,className)=>{const el=document.createElement(tag);e
 const safeUrl=x=>{try{const u=new URL(x,location.origin);return u.protocol==='https:'&&!u.username&&!u.password?u.href:null}catch(_){return null}};
 const data=k=>{try{return JSON.parse(localStorage.getItem(k)||'null')}catch(_){return null}};
 const asList=x=>Array.isArray(x)?x:[];
+/* V663 STEP 902B: SHARED TEAM IDENTITY FIX */
 function teamId(name){const v=asList(data(VERIFIED)).find(x=>x&&String(x.name).toLowerCase()===String(name).toLowerCase());return v?.publicRef||name}
+async function resolvedTeamId(name){
+ const reference=String(teamId(name)||'').trim();
+ if(/^[1-9][0-9]*$/.test(reference))return reference;
+ if(!reference.includes('--'))throw new Error('No verified team reference. Select the club from verified search first.');
+ const response=await fetch('/public-resolve/team/'+encodeURIComponent(reference),{credentials:'same-origin'});
+ if(!response.ok)throw new Error('Verified team identity unavailable ('+response.status+')');
+ const payload=await response.json();const id=String(payload?.id||'');
+ if(!/^[1-9][0-9]*$/.test(id))throw new Error('No numeric football team ID');
+ return id;
+}
 function badge(parent,url,alt){const src=safeUrl(url);if(src){const img=document.createElement('img');img.src=src;img.alt=alt;img.loading='lazy';img.referrerPolicy='no-referrer';parent.append(img)}}
 function metric(parent,title,value){const node=text(parent,'div','', 'mk901-metric');text(node,'b',value);text(node,'small',title)}
 function dateString(value){const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString('en-ZA',{timeZone:'Africa/Johannesburg',dateStyle:'medium',timeStyle:'short'}):'—'}
@@ -18496,7 +18507,7 @@ function renderSelectedTeamMatches(root,past,future,team){
  const teamNum=String(team?.id||'');
  const selectedSide=x=>{const h=x?.teams?.home||x?.homeTeam||x?.home;const a=x?.teams?.away||x?.awayTeam||x?.away;const eq=t=>String(t?.id||'')===teamNum&&teamNum||String(t?.name||t||'').toLowerCase()===teamName&&teamName;return eq(h)?'home':eq(a)?'away':null};
  const matchScore=(x,s)=>{const y=x?.goals?.[s]??x?.score?.fulltime?.[s]??x?.[s+'Score'];return y===null||y===undefined||y===''?'—':String(y)};
- const matchId=x=>{const n=String(x?.providerFixtureId||x?.fixtureId||x?.fixture?.id||'');return /^[1-9][0-9]*$/.test(n)?n:null};
+ const matchId=x=>{const n=String(x?.providerFixtureId||x?.fixtureId||x?.fixture?.id||x?.id||'');return /^[1-9][0-9]*$/.test(n)?n:null};
  const statsLine=x=>{
    const s=x?.statistics||x?.stats||x?.matchStats||{};
    const items=[];
@@ -18519,8 +18530,8 @@ function renderSelectedTeamMatches(root,past,future,team){
      const opponent=side==='home'?matchName(x,'away'):side==='away'?matchName(x,'home'):matchName(x,'home')+' vs '+matchName(x,'away');
      const match=text(tr,'td','');const home=x?.teams?.home||x?.homeTeam||{};const away=x?.teams?.away||x?.awayTeam||{};
      const opp=side==='home'?away:side==='away'?home:null;
-     badge(match,opp?.logo||opp?.badge||null,String(opponent)+' badge');text(match,'span',opponent);
-     text(tr,'td',x?.league?.name||x?.competition?.name||x?.leagueName||'—');
+     badge(match,opp?.logo||opp?.badge||(side==='home'?x?.awayLogo:side==='away'?x?.homeLogo:null),String(opponent)+' badge');text(match,'span',opponent);
+     text(tr,'td',(typeof x?.league==='string'?x.league:x?.league?.name)||x?.competition?.name||x?.leagueName||'—');
      const when=fixtureDate(x);const whenText=Number.isFinite(when)?dateString(new Date(when).toISOString()):'Date unavailable';
      const homeScore=matchScore(x,'home'),awayScore=matchScore(x,'away');
      let status=whenText;
@@ -18544,7 +18555,7 @@ function renderSelectedTeamMatches(root,past,future,team){
 
 let sequence=0;
 async function showTeam(name){const box=get('mk901TeamDetails');if(!box)return;const ticket=++sequence;box.replaceChildren();text(box,'p','Loading verified team data…');try{
- const res=await fetch('/team/profile?team='+encodeURIComponent(teamId(name)),{credentials:'same-origin'});
+ const resolvedId=await resolvedTeamId(name);if(ticket!==sequence)return;const res=await fetch('/team/profile?team='+encodeURIComponent(resolvedId),{credentials:'same-origin'});
  if(!res.ok)throw new Error('Profile unavailable ('+res.status+')');const d=await res.json();if(ticket!==sequence)return;
  const t=d?.team||{},stats=d?.teamStats||{},stand=asList(d?.standings);const row=stand.find(x=>String(x?.team?.id||'')===String(t.id||''))||stand.find(x=>String(x?.team?.name||'').toLowerCase()===String(t.name||name).toLowerCase())||{};
  box.replaceChildren();const hero=text(box,'div','','mk901-team');badge(hero,t.logo||t.badge,t.name||name);const title=text(hero,'div','');text(title,'h4',t.name||name);text(title,'small',t.country||'Football club');
@@ -18553,7 +18564,7 @@ async function showTeam(name){const box=get('mk901TeamDetails');if(!box)return;c
  renderSelectedTeamMatches(box,d?.past10||[],d?.future||[],t);
  const actions=text(box,'div','','mk901-actions');const profile=document.createElement('a');profile.textContent='Full team profile, squad and injuries';const ref=String(teamId(name));profile.href='/teams/'+encodeURIComponent(ref);actions.append(profile);
  text(box,'p','H2H requires a selected opponent or match. Open a match profile to view verified head-to-head data.','mk901-note');
- }catch(e){if(ticket!==sequence)return;box.replaceChildren();text(box,'p','Team details unavailable from the existing profile API. No statistics have been invented.','mk901-note');}}
+ }catch(e){if(ticket!==sequence)return;box.replaceChildren();text(box,'p','Unable to resolve this club to a verified team profile. Re-select the club using verified search. No statistics have been invented.','mk901-note');}}
 function installTeam(){const fav=get('ksnV663MyKasi');if(!fav||get('mk901TeamDetails'))return;const detail=text(fav,'section','','mk901-detail');detail.id='mk901TeamDetails';text(detail,'p','Select a saved team to see its football statistics.');const list=get('favouritesList');const area=get('ksnMkDashboard')||fav;area.addEventListener('click',event=>{const tr=event.target.closest('tr');if(!tr||!tr.closest('.ksn-mk-table'))return;if(event.target.closest('button'))return;const name=tr.querySelector('td')?.textContent?.trim();const saved=asList(data(FAV));if(name&&saved.some(x=>String(x).toLowerCase()===name.toLowerCase()))showTeam(name)});
  const controls=text(fav,'div','','mk901-actions');const select=document.createElement('select');select.setAttribute('aria-label','Select followed team for details');const button=document.createElement('button');button.type='button';button.textContent='View team statistics';button.addEventListener('click',()=>{if(select.value)showTeam(select.value)});const remove=document.createElement('button');remove.type='button';remove.textContent='Remove selected team';remove.addEventListener('click',()=>{if(select.value&&typeof window.removeFavourite==='function'){window.removeFavourite(select.value);detail.replaceChildren();text(detail,'p','Team removed.');update()}});controls.append(select,button,remove);fav.insertBefore(controls,detail);
  function update(){const names=asList(data(FAV));const before=select.value;select.replaceChildren();const opt=document.createElement('option');opt.value='';opt.textContent='Select one of your followed teams';select.append(opt);names.forEach(name=>{const o=document.createElement('option');o.value=String(name);o.textContent=String(name);select.append(o)});if(names.includes(before))select.value=before;button.disabled=!select.value;remove.disabled=!select.value}select.addEventListener('change',updateButtons);function updateButtons(){button.disabled=!select.value;remove.disabled=!select.value}update();const orig=get('favouritesList');if(orig)new MutationObserver(update).observe(orig,{childList:true,subtree:true});}
