@@ -11665,6 +11665,17 @@ def _ksn_v590_team_view(profile, team_id, season):
                 _snap = (_snaps or {}).get(_key) or {}
                 _data = _snap.get("data") or {}
                 _table = _data.get("standings") if isinstance(_data, dict) else None
+                # V663 Step 826: retry the existing individual snapshot reader
+                # when the bulk read has not returned the complete EPL table.
+                if not isinstance(_table, list) or len(_table) != 20:
+                    _single = _dashboard_snapshot_get(_key) or {}
+                    _single_data = _single.get("data") or {}
+                    _single_table = (
+                        _single_data.get("standings")
+                        if isinstance(_single_data, dict) else None
+                    )
+                    if isinstance(_single_table, list) and len(_single_table) == 20:
+                        _table = _single_table
                 if isinstance(_table, list) and len(_table) == 20:
                     _ids = [
                         str((r.get("team") or {}).get("id") or "")
