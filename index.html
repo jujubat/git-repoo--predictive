@@ -18714,6 +18714,54 @@ function boot(){const card=$('ksnV663MyKasi'), list=$('favouritesList');if(!card
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
 </script>
+
+<!-- V663 STEP 905A: RELOCATE ACCOUNT PUSH AND ADVERTISING TO ADMIN -->
+<style id="ksn-step905a-admin-move-style">
+#ksnV663AdminSupportSettings{margin-top:20px;padding-top:14px;border-top:1px solid var(--line,#333)}
+#ksnV663AdminSupportSettings>.fc-card{margin:10px 0;max-width:100%}
+#ksnV663AdminSupportSettings>h3{margin:0 0 12px;font-size:17px}
+</style>
+<script id="ksn-step905a-admin-move">
+(function(){'use strict';
+const names=['Account & Pro','Push Notifications','Advertising'];
+function move(){
+  const platform=document.getElementById('platform');
+  const admin=document.getElementById('adminWidgetTools');
+  if(!platform||!admin||!admin.closest('#kasiscoreAdminWidget')){
+    console.warn('V663 905A: Authenticated Admin tools area unavailable; no relocation');return;
+  }
+  // Move the actual cards, preserving forms, IDs, buttons and listeners.
+  const all=Array.from(platform.querySelectorAll('.fc-card'));
+  const matches=names.map(name=>all.filter(card=>{
+    const heading=card.querySelector(':scope > h3');
+    return heading&&heading.textContent.trim()===name;
+  }));
+  if(matches.some(group=>group.length!==1)){
+    console.warn('V663 905A: Expected panels not found uniquely; no relocation');return;
+  }
+  let destination=document.getElementById('ksnV663AdminSupportSettings');
+  if(!destination){
+    destination=document.createElement('section');
+    destination.id='ksnV663AdminSupportSettings';
+    destination.setAttribute('aria-label','Account, notifications and advertising');
+    const title=document.createElement('h3');
+    title.textContent='Account, notifications and advertising';
+    destination.appendChild(title);
+    admin.appendChild(destination);
+  }
+  for(const group of matches)destination.appendChild(group[0]);
+  // Hide only a redundant heading after its related controls have been relocated.
+  for(const heading of platform.querySelectorAll('h2,h3,h4')){
+    if(heading.textContent.trim().toLowerCase()==='account & preferences'){
+      const parent=heading.parentElement;
+      if(parent&&parent.querySelectorAll('input,select,button,.fc-card').length===0)heading.hidden=true;
+    }
+  }
+  console.info('V663 905A: Three settings panels relocated to authenticated Admin tools');
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',move,{once:true});else move();
+})();
+</script>
 </body>
 </html>
 
