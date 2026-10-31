@@ -25816,6 +25816,108 @@ function ksnNormalizeMatchIntel(raw, match, standings) {{
   return i;
 }}
 
+
+async function ksnMatchIntelEnrich(match, original) {{
+  const teams = match?.teams || {{}};
+  const homeId = teams.home?.id, awayId = teams.away?.id;
+  if (!homeId || !awayId) return;
+  const panel = document.getElementById('intel');
+  if (!panel) return;
+  const matchKey = String(match?.fixture?.id || ID);
+  const sequence = (window.__ksnIntelRequestSeq || 0) + 1;
+  window.__ksnIntelRequestSeq = sequence;
+  const read = async (url, limit=7500) => {{
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(),limit);
+    try {{
+      const response=await fetch(url, {{signal:controller.signal,headers:{{Accept:'application/json'}}}});
+      if (!response.ok) return null;
+      return await response.json();
+    }} catch(_) {{ return null; }}
+    finally {{ clearTimeout(timeout); }}
+  }};
+  const params = id => '/team/profile?team='+encodeURIComponent(id);
+  const [homeProfile,awayProfile,h2hResponse]=await Promise.all([
+    read(params(homeId)),read(params(awayId)),
+    read('/team/h2h?home='+encodeURIComponent(homeId)+'&away='+encodeURIComponent(awayId)+'&last=10',6000)
+  ]);
+  if (window.__ksnIntelRequestSeq !== sequence ||
+      String(match?.fixture?.id || ID)!==matchKey || !panel.isConnected) return;
+  const converted = ksnNormalizeMatchIntel(original?.insights,match,original?.standings);
+  const stat = x => x && typeof x==='object';
+  const completed = new Set(['FT','AET','PEN']);
+  const parseFixture = r => {{
+    if (!stat(r)) return null;
+    const status=String(r.status?.short||r.status||r.fixture?.status?.short||'').toUpperCase();
+    const home=r.home||r.teams?.home?.name;
+    const away=r.away||r.teams?.away?.name;
+    const hg=r.homeScore??r.goals?.home, ag=r.awayScore??r.goals?.away;
+    return {{
+      id:r.id||r.fixture?.id,
+      date:r.date||r.fixture?.date,
+      home:typeof home==='string'?home:'',
+      away:typeof away==='string'?away:'',
+      homeId:r.homeId||r.teams?.home?.id,
+      awayId:r.awayId||r.teams?.away?.id,
+      score:(hg!=null&&ag!=null)?String(hg)+' ??? '+String(ag):'???',
+      status, goalsHome:hg, goalsAway:ag
+    }};
+  }};
+  converted.form={{...(converted.form||{{}})}};
+  converted.next5={{...(converted.next5||{{}})}};
+  converted.injuries={{...(converted.injuries||{{}})}};
+  for (const [side,p] of [['home',homeProfile],['away',awayProfile]]) {{
+    if (!stat(p) || p.dataUnavailable === true) continue;
+    const past=Array.isArray(p.past10)?p.past10.map(parseFixture).filter(Boolean)
+      .filter(x=>completed.has(x.status)):[];
+    const future=Array.isArray(p.future)?p.future.map(parseFixture).filter(Boolean)
+      .filter(x=>!completed.has(x.status)):[];
+    const teamId=String(teams[side].id);
+    const mappedPast=past.slice(0,10).map(x=>{{
+      const isHome=String(x.homeId)===teamId;
+      const scored=isHome?x.goalsHome:x.goalsAway;
+      const conceded=isHome?x.goalsAway:x.goalsHome;
+      return {{date:x.date,home:x.home,away:x.away,score:x.score,
+        result:scored==null||conceded==null?'???':scored>conceded?'W':scored<conceded?'L':'D'}};
+    }});
+    converted.form[side]={{...(converted.form[side]||{{}}),last10:mappedPast}};
+    converted.next5[side]=future.slice(0,5).map(x=>({{date:x.date,home:x.home,away:x.away}}));
+    if (Array.isArray(p.injuries) && p.injuries.length) {{
+      converted.injuries[side]=p.injuries.map(x=>({{
+        player:x.player?.name||x.player||x.name||'Player',
+        type:x.type||x.reason||'Unavailable'
+      }}));
+    }}
+  }}
+  // H2H: only count fully identified, completed fixtures with real scores.
+  // Never turn a failed/empty response into a claim of zero meetings.
+  const h2rows=Array.isArray(h2hResponse)?h2hResponse:
+    Array.isArray(h2hResponse?.matches)?h2hResponse.matches:
+    Array.isArray(h2hResponse?.response)?h2hResponse.response:
+    Array.isArray(h2hResponse?.fixtures)?h2hResponse.fixtures:[];
+  const meetings=h2rows.map(parseFixture).filter(x=>
+    x&&completed.has(x.status)&&x.goalsHome!=null&&x.goalsAway!=null&&
+    [String(x.homeId),String(x.awayId)].includes(String(homeId))&&
+    [String(x.homeId),String(x.awayId)].includes(String(awayId))
+  ).slice(0,10);
+  if (meetings.length) {{
+    let hw=0,aw=0,draws=0,btts=0,over25=0;
+    for (const x of meetings) {{
+      const homeScore=String(x.homeId)===String(homeId)?Number(x.goalsHome):Number(x.goalsAway);
+      const awayScore=String(x.homeId)===String(homeId)?Number(x.goalsAway):Number(x.goalsHome);
+      if (homeScore>awayScore)hw++; else if(homeScore<awayScore)aw++; else draws++;
+      if (homeScore>0&&awayScore>0)btts++;
+      if (homeScore+awayScore>2.5)over25++;
+    }}
+    converted.h2h={{played:meetings.length,homeWins:hw,awayWins:aw,draws,
+      bttsPct:Math.round(btts*100/meetings.length),
+      over25Pct:Math.round(over25*100/meetings.length),
+      meetings:meetings.map(x=>({{date:x.date,home:x.home,away:x.away,score:x.score}}))}};
+  }}
+  // Preserve standings and all original match tabs.
+  panel.innerHTML=intelligence(converted);
+}}
+
 function intelligence(i){{i=i||{{}};const f=i.form||{{}},fh=f.home||{{}},fa=f.away||{{}},st=i.standings||{{}},h2=i.h2h||{{}},n=i.next5||{{}},ts=i.teamStatistics||{{}},inj=i.injuries||{{}};
  const formRows=x=>(x||[]).map(r=>`<div class="event"><div class="minute">${{E(r.result||'—')}}</div><div><b>${{E(r.home||'')}} ${{E(r.score||'')}} ${{E(r.away||'')}}</b><div class="tiny muted">${{localDate(r.date)}}${{(r.scorers||[]).length?' · Scorers: '+E((r.scorers||[]).join(', ')):''}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>';
  const nextRows=x=>(x||[]).map(r=>`<div class="event"><div class="minute">NEXT</div><div><b>${{E(r.home||'')}} vs ${{E(r.away||'')}}</b><div class="tiny muted">${{localDate(r.date)}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>';
@@ -25824,11 +25926,11 @@ function intelligence(i){{i=i||{{}};const f=i.form||{{}},fh=f.home||{{}},fa=f.aw
  const hk=k(ts.home),ak=k(ts.away),hp=st.home?.points??'—',ap=st.away?.points??'—';
  const teamCard=(side,name,row,kp,points)=>{{const th=matchTeamTheme(row?.team?.id||0,name);return `<div class="compare-team ${{side}}" style="${{teamCardStyle(th)}}"><div class="tiny muted">${{side==='home'?'HOME TEAM':'AWAY TEAM'}}</div><div class="compare-name">${{E(name)}}</div><div class="tiny muted">League position #${{E(row?.rank??'—')}} · ${{E(points)}} pts</div><div class="compare-kpis"><div class="compare-kpi"><span>Win rate</span><b>${{E(kp.wr)}}%</b></div><div class="compare-kpi"><span>W-D-L</span><b>${{E(kp.w)}}-${{E(kp.d)}}-${{E(kp.l)}}</b></div><div class="compare-kpi"><span>Goals/game</span><b>${{E(kp.gfpg)}}</b></div><div class="compare-kpi"><span>Concede/game</span><b>${{E(kp.gapg)}}</b></div></div></div>`}};
  const cmp=(label,h,a,suffix='')=>{{h=Number(h)||0;a=Number(a)||0;const sum=h+a||1;return `<div class="compare-bar"><b>${{E(h)}}${{suffix}}</b><div><div class="tiny muted" style="text-align:center;margin-bottom:5px">${{E(label)}}</div><div class="track"><i class="homefill" style="width:${{Math.round(h/sum*100)}}%"></i><i class="awayfill" style="width:${{Math.round(a/sum*100)}}%"></i></div></div><b style="text-align:right">${{E(a)}}${{suffix}}</b></div>`}};
- const injuries=(rows)=>rows?.length?rows.slice(0,8).map(x=>`<div class="person"><span></span><div><b>${{E(x.player||'Player')}}</b><div class="tiny muted">${{E(x.type||x.reason||'Unavailable')}}</div></div><span></span></div>`).join(''):'<div class="empty">No current absences returned.</div>';
+ const injuries=(rows)=>rows?.length?rows.slice(0,8).map(x=>`<div class="person"><span></span><div><b>${{E(x.player||'Player')}}</b><div class="tiny muted">${{E(x.type||x.reason||'Unavailable')}}</div></div><span></span></div>`).join(''):'<div class="empty">Availability data not confirmed.</div>';
  return `<div class="compare-hero">${{teamCard('home',fh.team?.name||'Home',st.home,hk,hp)}}${{teamCard('away',fa.team?.name||'Away',st.away,ak,ap)}}</div>
  <div class="card"><h2>Season comparison</h2>${{cmp('Win rate',hk.wr,ak.wr,'%')}}${{cmp('Goals scored',hk.gf,ak.gf)}}${{cmp('Goals conceded',hk.ga,ak.ga)}}${{cmp('League points',Number(hp)||0,Number(ap)||0)}}</div>
  <div class="grid2"><div class="card"><h3>${{E(fh.team?.name||'Home')}} · Last 10</h3>${{formRows(fh.last10)}}</div><div class="card"><h3>${{E(fa.team?.name||'Away')}} · Last 10</h3>${{formRows(fa.last10)}}</div></div>
- <div class="grid2"><div class="card"><h3>Head to head intelligence</h3><div class="grid3"><div class="metric"><span class="tiny muted">Meetings</span><b>${{E(h2.played??0)}}</b></div><div class="metric"><span class="tiny muted">BTTS</span><b>${{E(h2.bttsPct??0)}}%</b></div><div class="metric"><span class="tiny muted">Over 2.5</span><b>${{E(h2.over25Pct??0)}}%</b></div></div><p class="tiny muted">${{E(fh.team?.name||'Home')}} wins ${{E(h2.homeWins??0)}} · Draws ${{E(h2.draws??0)}} · ${{E(fa.team?.name||'Away')}} wins ${{E(h2.awayWins??0)}}</p>${{(h2.meetings||[]).slice(0,10).map(x=>`<div class="event"><div class="minute">H2H</div><div><b>${{E(x.home||'')}} ${{E(x.score||'')}} ${{E(x.away||'')}}</b><div class="tiny muted">${{localDate(x.date)}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>'}}</div><div class="card"><h3>Availability</h3><div class="grid2"><div><b>${{E(fh.team?.name||'Home')}}</b>${{injuries(inj.home)}}</div><div><b>${{E(fa.team?.name||'Away')}}</b>${{injuries(inj.away)}}</div></div></div></div>
+ <div class="grid2"><div class="card"><h3>Head to head intelligence</h3><div class="grid3"><div class="metric"><span class="tiny muted">Meetings</span><b>${{E(h2.played??'???')}}</b></div><div class="metric"><span class="tiny muted">BTTS</span><b>${{E(h2.bttsPct==null?'???':h2.bttsPct+'%')}}</b></div><div class="metric"><span class="tiny muted">Over 2.5</span><b>${{E(h2.over25Pct==null?'???':h2.over25Pct+'%')}}</b></div></div><p class="tiny muted">${{E(fh.team?.name||'Home')}} wins ${{E(h2.homeWins??0)}} · Draws ${{E(h2.draws??0)}} · ${{E(fa.team?.name||'Away')}} wins ${{E(h2.awayWins??0)}}</p>${{(h2.meetings||[]).slice(0,10).map(x=>`<div class="event"><div class="minute">H2H</div><div><b>${{E(x.home||'')}} ${{E(x.score||'')}} ${{E(x.away||'')}}</b><div class="tiny muted">${{localDate(x.date)}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>'}}</div><div class="card"><h3>Availability</h3><div class="grid2"><div><b>${{E(fh.team?.name||'Home')}}</b>${{injuries(inj.home)}}</div><div><b>${{E(fa.team?.name||'Away')}}</b>${{injuries(inj.away)}}</div></div></div></div>
  <div class="grid2"><div class="card"><h3>Next 5 · ${{E(fh.team?.name||'Home')}}</h3>${{nextRows(n.home)}}</div><div class="card"><h3>Next 5 · ${{E(fa.team?.name||'Away')}}</h3>${{nextRows(n.away)}}</div></div>`}}
 
 function odds(o){{o=o||{{}};const books=o.bookmakers||[],sel=o.selected||books[0]||{{}},markets=sel.markets||[];
@@ -25870,7 +25972,7 @@ function ksnMatchStatus(fx){{
  return label||'Match status unavailable';
 }}
 async function load(force=false){{try{{const qs=new URLSearchParams();if(LEAGUE)qs.set('league',LEAGUE);if(force)qs.set('refresh','1');const tipMode=new URLSearchParams(location.search).get('tip')==='1';const d=tipMode?{{match:{{}}}}:await J('/sports/'+encodeURIComponent(SPORT)+'/match/'+encodeURIComponent(ID)+(qs.toString()?'?'+qs.toString():'')),m=d.match||{{}};if(SPORT!=='football'){{page.innerHTML=`<div class="card"><h1>${{E(m.home||m.homeTeam||'Home')}} vs ${{E(m.away||m.awayTeam||'Away')}}</h1><div class="score">${{E(m.homeScore??'—')}} - ${{E(m.awayScore??'—')}}</div><p class="muted">${{E(m.league||SPORT)}} · ${{E(m.status||'')}}</p></div><div class="card"><h2>Sport-specific match data</h2><pre style="white-space:pre-wrap">${{E(JSON.stringify(d.statistics?.sportSpecific||d.statistics||{{}},null,2))}}</pre></div>`;return}}const matchStatus=String(m.fixture?.status?.short||m.status?.short||m.fixture?.status?.long||m.status||'').toUpperCase();const isPreMatch=['NS','TBD','SCHEDULED','NOT STARTED','POSTPONED'].some(x=>matchStatus===x||matchStatus.includes(x));if(isPreMatch||!m.teams?.home?.name||!m.teams?.away?.name){{try{{const q=await J('/tip-stats/'+encodeURIComponent(ID),16000),h=q.home||{{}},a=q.away||{{}},o=q.odds||{{}},hh=q.headToHead||[],ht=matchTeamTheme(h.id,h.name),at=matchTeamTheme(a.id,a.name);page.innerHTML=`<div class="card hero"><div class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px">${{h.badge?`<img src="${{E(h.badge)}}">`:''}}<div class="team-name">${{E(h.name||'Home')}}</div></div><div><div class="status">TIP OF THE DAY · PRE-MATCH STATS</div><div class="score">vs</div><div class="tiny muted">Live match statistics will populate when available.</div></div><div class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px">${{a.badge?`<img src="${{E(a.badge)}}">`:''}}<div class="team-name">${{E(a.name||'Away')}}</div></div></div><div class="grid3"><div class="metric"><span class="tiny muted">Home wins · last 5</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}}/${{E(h.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">Away wins · last 5</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}}/${{E(a.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">H2H matches</span><b>${{E(hh.length)}}</b></div></div><div class="card"><h2>1X2 Odds</h2><p>${{E(h.name||'Home')}}: <b>${{E(o.home??'—')}}</b> · Draw: <b>${{E(o.draw??'—')}}</b> · ${{E(a.name||'Away')}}: <b>${{E(o.away??'—')}}</b></p><p class="tiny muted">${{E(o.bookmaker||'No bookmaker odds currently returned')}}</p></div><div class="grid2"><div class="card" style="${{teamCardStyle(ht)}}"><h2>${{E(h.name||'Home')}} · Last 5</h2>${{(h.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div><div class="card" style="${{teamCardStyle(at)}}"><h2>${{E(a.name||'Away')}} · Last 5</h2>${{(a.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div></div><div class="card"><h2>Head to Head</h2>${{hh.map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No H2H returned.</div>'}}</div><div class="card"><h2>Pre-match Statistics</h2><div class="grid3"><div class="metric"><span class="tiny muted">${{E(h.name||'Home')}} recent wins</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">${{E(a.name||'Away')}} recent wins</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">H2H sample</span><b>${{E(hh.length)}}</b></div></div><p class="tiny muted">These are pre-match indicators from available recent-form, H2H and bookmaker data. Live match statistics populate after kickoff when the provider returns them.</p></div><div class="card"><h2>Standings</h2>${{standingsTable(d.standings,m.teams?.home?.id,m.teams?.away?.id)}}</div>`;return}}catch(_){{}}}}
-const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs"><button class="active" data-p="overview">Overview</button><button data-p="timeline">Timeline</button><button data-p="stats">Statistics</button><button data-p="standings">Standings</button><button data-p="lineups">Lineups</button><button data-p="players">Player Stats</button><button data-p="intel">Match Intelligence</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14))}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{lineups(lu)}}</div></section><section class="panel" id="players"><div class="card"><h2>Player Match Data</h2><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></section><section class="panel" id="intel">${{intelligence(ksnNormalizeMatchIntel(d.insights,m,d.standings))}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}load();
+const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs"><button class="active" data-p="overview">Overview</button><button data-p="timeline">Timeline</button><button data-p="stats">Statistics</button><button data-p="standings">Standings</button><button data-p="lineups">Lineups</button><button data-p="players">Player Stats</button><button data-p="intel">Match Intelligence</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14))}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{lineups(lu)}}</div></section><section class="panel" id="players"><div class="card"><h2>Player Match Data</h2><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></section><section class="panel" id="intel">${{intelligence(ksnNormalizeMatchIntel(d.insights,m,d.standings))}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();void ksnMatchIntelEnrich(m,d);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}load();
 </script></body></html>""")
 
 def _standalone_sports_page(kind:str, entity_id:str, sport:str="football", league:str="") -> str:
