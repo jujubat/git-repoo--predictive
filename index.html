@@ -1632,15 +1632,80 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
       }).format(date)+' SAST',
       'mk-kickoff'
     ));
+    // V663 STEP 906J: AUTHENTICATED SUPPORTER VOTE CONTROLS
     const options=text('div','','mk-options');
-    for(const label of [match.home.name,'Draw',match.away.name]){
-      const button=text('button',label);
-      button.type='button';
-      button.disabled=true;
-      button.title='Anonymous voting is not active yet';
-      options.append(button);
+    const status=text('p','Checking voting availability…','mk-status');
+    status.setAttribute('role','status');
+    status.setAttribute('aria-live','polite');
+    const totals=text('p','','mk-status');
+    const choices=[['H',match.home.name],['D','Draw'],['A',match.away.name]];
+    const buttons=new Map();
+    let enabled=false, busy=false, selected=null;
+    const isOpen=()=>Date.now()<match.kickoff;
+    function syncButtons(){
+      for(const [key,button] of buttons){
+        button.disabled=!enabled||busy||!isOpen();
+        button.setAttribute('aria-pressed',String(selected===key));
+      }
     }
-    wrapper.append(options);
+    function showTotals(data){
+      const count=data&&data.counts;
+      const pct=data&&data.percentages;
+      if(!count||!pct){totals.textContent='';return;}
+      const total=Number(data.total);
+      if(!Number.isFinite(total)||total<0){totals.textContent='';return;}
+      totals.textContent='Community votes: '+total+' · '+choices.map(([key,label])=>
+        label+': '+Number(count[key]||0)+' ('+Number(pct[key]||0)+'%)'
+      ).join(' · ');
+    }
+    for(const [key,label] of choices){
+      const button=text('button',label);
+      button.type='button';button.disabled=true;
+      button.setAttribute('aria-pressed','false');
+      button.addEventListener('click',async()=>{
+        if(!enabled||busy||!isOpen())return;
+        let token='';
+        try{token=localStorage.getItem('kasiscore_session')||'';}catch(_){}
+        if(!token){status.textContent='Sign in to KasiScore to vote.';return;}
+        busy=true;syncButtons();status.textContent='Recording vote…';
+        try{
+          const r=await fetch('/my-kasi/votes/'+encodeURIComponent(match.id),{
+            method:'POST',cache:'no-store',
+            headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+            body:JSON.stringify({choice:key})
+          });
+          if(!r.ok){
+            if(r.status===401||r.status===403)throw new Error('Sign in to KasiScore to vote.');
+            if(r.status===409)throw new Error('Voting has closed for this fixture.');
+            if(r.status===429)throw new Error('Too many attempts. Try again later.');
+            if(r.status===503)throw new Error('Voting is currently unavailable.');
+            throw new Error('Vote could not be saved. Please try again.');
+          }
+          const data=await r.json();
+          if(data.ok!==true)throw new Error('Vote was not confirmed.');
+          selected=key;showTotals(data);
+          status.textContent='Your vote was saved. You can change it before kickoff.';
+        }catch(error){status.textContent=error.message||'Voting unavailable.';}
+        finally{busy=false;syncButtons();}
+      });
+      buttons.set(key,button);options.append(button);
+    }
+    wrapper.append(options,status,totals);
+    (async()=>{
+      try{
+        const r=await fetch('/my-kasi/votes/'+encodeURIComponent(match.id),{
+          cache:'no-store',headers:{Accept:'application/json'}
+        });
+        if(!r.ok)throw new Error('Vote totals unavailable');
+        const data=await r.json();
+        enabled=data.votingEnabled===true;
+        showTotals(data);
+        status.textContent=!enabled?'Voting is not enabled yet.':
+          !isOpen()?'Voting is closed for this fixture.':
+          'Sign in to vote. You can change your vote before kickoff.';
+      }catch(_){enabled=false;status.textContent='Voting is currently unavailable.';}
+      syncButtons();
+    })();
     return wrapper;
   }
   async function refresh(){

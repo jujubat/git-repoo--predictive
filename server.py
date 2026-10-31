@@ -6532,7 +6532,7 @@ async def my_kasi_upcoming_fixtures():
             "source": "existing-football-snapshot",
             "count": len(matches),
             "matches": matches,
-            "votingEnabled": False,
+            "votingEnabled": _mk906_enabled(),
         },
         headers={
             "Cache-Control": "no-store, max-age=0",
@@ -6540,6 +6540,129 @@ async def my_kasi_upcoming_fixtures():
             "X-My-Kasi-Contract": "v663-898a",
         },
     )
+
+# V663 STEP 906F: AUTHENTICATED MY KASI SUPPORTER VOTING
+# Opt-in activation: KSN_MY_KASI_VOTING_ENABLED=1 after staging tests.
+# One active pick per authenticated account per verified upcoming fixture.
+
+def _mk906_enabled():
+    return os.getenv('KSN_MY_KASI_VOTING_ENABLED', '').strip().lower() in ('1', 'true', 'yes')
+
+
+def _mk906_available_fixture(fixture_id):
+    # Read only the existing last-known-good snapshot; no provider calls.
+    from my_kasi_fixtures import select_my_kasi_fixtures
+    key = 'fixtures:football:ALL:upcoming:last_good'
+    snapshot = _dashboard_snapshot_get(key)
+    payload = snapshot.get('data') if isinstance(snapshot, dict) else None
+    for row in select_my_kasi_fixtures(payload):
+        if not isinstance(row, dict):
+            continue
+        obj = row.get('fixture') if isinstance(row.get('fixture'),dict) else {}
+        raw_id = obj.get('id') or row.get('fixtureId') or row.get('id')
+        if str(raw_id) != str(fixture_id):
+            continue
+        raw_date = obj.get('date') or row.get('date') or row.get('kickoff')
+        if not isinstance(raw_date,str):
+            return None
+        try:
+            when = datetime.fromisoformat(raw_date.replace('Z','+00:00'))
+            if when.tzinfo is None:
+                return None
+            if when <= datetime.now(timezone.utc):
+                return None
+        except (TypeError, ValueError):
+            return None
+        status = str(obj.get('status',{}).get('short','') if isinstance(obj.get('status'),dict) else (row.get('providerStatusShort') or row.get('statusShort') or 'NS')).upper()
+        if status not in ('NS','TBD','SCHEDULED','UPCOMING'):
+            return None
+        return row
+    return None
+
+
+def _mk906_db():
+    c = _auth_db()
+    try:
+        c.execute('''CREATE TABLE IF NOT EXISTS my_kasi_supporter_votes (
+            fixture_id TEXT NOT NULL,
+            user_id BIGINT NOT NULL,
+            choice TEXT NOT NULL CHECK(choice IN ('H','D','A')),
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (fixture_id, user_id)
+        )''')
+        c.commit()
+        return c
+    except Exception:
+        c.close()
+        raise
+
+
+def _mk906_totals(c, fixture_id):
+    rows = c.execute('SELECT choice, COUNT(*) FROM my_kasi_supporter_votes WHERE fixture_id=? GROUP BY choice', (fixture_id,)).fetchall()
+    totals = {'H':0,'D':0,'A':0}
+    for row in rows:
+        if row[0] in totals:
+            totals[row[0]] = int(row[1])
+    total = sum(totals.values())
+    return {'total':total, 'counts':totals, 'percentages':{k:round(100*v/total,1) if total else 0 for k,v in totals.items()}}
+
+
+@app.get('/my-kasi/votes/{fixture_id}')
+def my_kasi_vote_totals(fixture_id: str):
+    from fastapi.responses import JSONResponse
+    if not re.fullmatch(r'[1-9][0-9]{0,17}', fixture_id):
+        raise HTTPException(status_code=400, detail='Invalid fixture ID')
+    if not _mk906_enabled():
+        return JSONResponse({'votingEnabled':False,'fixtureId':fixture_id}, headers={'Cache-Control':'no-store'})
+    try:
+        with_fixture = _mk906_available_fixture(fixture_id)
+    except Exception:
+        raise HTTPException(status_code=503,detail='Fixture validation unavailable')
+    if with_fixture is None:
+        raise HTTPException(status_code=404,detail='Voting fixture unavailable')
+    c = _mk906_db()
+    try:
+        result = _mk906_totals(c,fixture_id)
+    finally:
+        c.close()
+    return JSONResponse({'votingEnabled':True,'fixtureId':fixture_id,**result}, headers={'Cache-Control':'no-store, max-age=0'})
+
+
+@app.post('/my-kasi/votes/{fixture_id}')
+async def my_kasi_submit_vote(fixture_id: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    from fastapi.responses import JSONResponse
+    if not _mk906_enabled():
+        raise HTTPException(status_code=503,detail='Supporter voting is not enabled')
+    if not re.fullmatch(r'[1-9][0-9]{0,17}',fixture_id):
+        raise HTTPException(status_code=400,detail='Invalid fixture ID')
+    user = get_current_user(authorization)
+    if user.get('status') != 'active':
+        raise HTTPException(status_code=403,detail='Account unavailable')
+    _require_auth_rate(request,'my-kasi-vote',str(user['id']),limit=20,window=300)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400,detail='Invalid JSON')
+    if not isinstance(body,dict) or set(body) != {'choice'} or body.get('choice') not in ('H','D','A'):
+        raise HTTPException(status_code=422,detail='Choice must be H, D or A')
+    try:
+        valid = await asyncio.to_thread(_mk906_available_fixture,fixture_id)
+    except Exception:
+        raise HTTPException(status_code=503,detail='Fixture validation unavailable')
+    if valid is None:
+        raise HTTPException(status_code=409,detail='Fixture is not open for voting')
+    c = _mk906_db()
+    try:
+        # Upsert is atomic and uses the composite primary key to prevent duplicates.
+        c.execute('''INSERT INTO my_kasi_supporter_votes(fixture_id,user_id,choice,updated_at)
+            VALUES(?,?,?,?)
+            ON CONFLICT(fixture_id,user_id) DO UPDATE SET choice=excluded.choice,updated_at=excluded.updated_at''',
+            (fixture_id,int(user['id']),body['choice'],datetime.now(timezone.utc).isoformat()))
+        c.commit()
+        result = _mk906_totals(c,fixture_id)
+    finally:
+        c.close()
+    return JSONResponse({'ok':True,'votingEnabled':True,'fixtureId':fixture_id,'myChoice':body['choice'],**result},headers={'Cache-Control':'no-store, max-age=0'})
 
 @app.get("/fixtures")
 async def fixtures(
