@@ -22186,7 +22186,7 @@ def _v660_fp_parse_bundled_seasons(js_text: str) -> dict:
     import json5
     import re
 
-    match = re.search(r'(?:^|[,;])[A-Za-z_$][\w$]*\s*=\s*\{2025:\{"eng\.1"\s*:', js_text)
+    match = re.search('\\bece\\s*=\\s*\\{', js_text)
     if not match:
         raise ValueError("FantasyPlayoffs season data declaration missing")
 
