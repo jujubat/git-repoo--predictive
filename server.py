@@ -19071,7 +19071,6 @@ async def fixture_enhanced_bundle(fixture_id:int, refresh:int=Query(0,ge=0,le=1)
             return {**saved,"cached":True,"cacheLayer":"persistent-enhanced"}
     return await _football_match_details_build(fixture_id)
 
-@app.get("/sports/{sport}/match/{match_id}")
 def _v662_match_data_assess(payload):
     """Describe football match data coverage without modifying provider records."""
     if not isinstance(payload, dict):
@@ -19519,6 +19518,7 @@ async def _v662_match_recovery_dispatch(
 
 
 
+@app.get("/sports/{sport}/match/{match_id}")
 async def sport_match_details(sport:str,match_id:str,league:str=Query(""),refresh:int=Query(0,ge=0,le=1)):
     sport=(sport or "football").lower().strip()
     if sport=="football":
