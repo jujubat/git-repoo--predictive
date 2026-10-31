@@ -6607,6 +6607,35 @@ def _mk906_totals(c, fixture_id):
     return {'total':total, 'counts':totals, 'percentages':{k:round(100*v/total,1) if total else 0 for k,v in totals.items()}}
 
 
+# V663 Step 907B: Authenticated read-back of the supporter's existing vote.
+@app.get('/my-kasi/votes/{fixture_id}/mine')
+def my_kasi_my_vote(fixture_id: str, authorization: Optional[str] = Header(default=None)):
+    from fastapi.responses import JSONResponse
+    if not re.fullmatch(r'[1-9][0-9]{0,17}', fixture_id):
+        raise HTTPException(status_code=400, detail='Invalid fixture ID')
+    user = get_current_user(authorization)
+    if user.get('status') != 'active':
+        raise HTTPException(status_code=403, detail='Account unavailable')
+    if not _mk906_enabled():
+        return JSONResponse(
+            {'votingEnabled': False, 'fixtureId': fixture_id, 'myChoice': None},
+            headers={'Cache-Control': 'private, no-store'}
+        )
+    c = _mk906_db()
+    try:
+        row = c.execute(
+            'SELECT choice FROM my_kasi_supporter_votes WHERE fixture_id=? AND user_id=?',
+            (fixture_id, int(user['id']))
+        ).fetchone()
+    finally:
+        c.close()
+    choice = row[0] if row and row[0] in ('H', 'D', 'A') else None
+    return JSONResponse(
+        {'votingEnabled': True, 'fixtureId': fixture_id, 'myChoice': choice},
+        headers={'Cache-Control': 'private, no-store'}
+    )
+
+
 @app.get('/my-kasi/votes/{fixture_id}')
 def my_kasi_vote_totals(fixture_id: str):
     from fastapi.responses import JSONResponse

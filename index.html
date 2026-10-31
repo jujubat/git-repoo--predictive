@@ -1699,6 +1699,27 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
         if(!r.ok)throw new Error('Vote totals unavailable');
         const data=await r.json();
         enabled=data.votingEnabled===true;
+        if(enabled){
+          let savedToken='';
+          try{savedToken=localStorage.getItem('kasiscore_session')||'';}catch(_){}
+          if(savedToken){
+            try{
+              const mineResponse=await fetch(
+                '/my-kasi/votes/'+encodeURIComponent(match.id)+'/mine',
+                {headers:{Authorization:'Bearer '+savedToken},cache:'no-store'}
+              );
+              if(mineResponse.ok){
+                const mine=await mineResponse.json();
+                if(['H','D','A'].includes(mine.myChoice)){
+                  selected=mine.myChoice;
+                  options.querySelectorAll('button').forEach((button,i)=>{
+                    button.setAttribute('aria-pressed',String(selected===choices[i]?.[0]));
+                  });
+                }
+              }
+            }catch(_){/* Vote totals remain available if restoration fails. */}
+          }
+        }
         showTotals(data);
         status.textContent=!enabled?'Voting is not enabled yet.':
           !isOpen()?'Voting is closed for this fixture.':
