@@ -5505,6 +5505,24 @@ def _ksn_v663_football_only_publication_active():
 # V663 STEP 070: shared endpoint staging safety
 @app.middleware("http")
 async def ksn_v663_shared_endpoint_safety(request: Request, call_next):
+    # V663 Step 846B: disable unauthenticated legacy sync endpoints.
+    # Internal synchronization remains available to guarded repair jobs.
+    _sync_path = request.url.path.lower().rstrip("/")
+    if (
+        _sync_path.startswith("/sports-db/sync/team/")
+        or _sync_path.startswith("/sports-db/sync/player/")
+        or _sync_path in (
+            "/sports-db/sync/team",
+            "/sports-db/sync/player",
+        )
+    ):
+        return Response(
+            content="Not Found",
+            status_code=404,
+            media_type="text/plain",
+            headers={"Cache-Control": "no-store"},
+        )
+
     if _ksn_v663_football_only_publication_active():
         path = request.url.path.lower().rstrip("/") or "/"
 
