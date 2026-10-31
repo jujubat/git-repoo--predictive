@@ -1572,20 +1572,25 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
     const fixture=row.fixture||{};
     const teams=row.teams||{};
     const home=teamObj(teams.home||row.homeTeam||row.home);
+    home.logo=home.logo||row.homeLogo||'';
     const away=teamObj(teams.away||row.awayTeam||row.away);
-    const date=fixture.date||row.date||row.datetime||
+    away.logo=away.logo||row.awayLogo||'';
+    const date=fixture.date||row.fixtureDate||row.date||row.datetime||
       row.kickoff||row.startTime;
     const kickoff=Date.parse(String(date||''));
     const status=String(
       fixture.status?.short||row.statusShort||
       row.status?.short||row.status||'NS'
     ).toUpperCase();
-    const id=fixture.id||row.fixtureId||row.id;
+    const id=fixture.id||row._afootFixtureId||row.fixtureId||row.id;
     if(!id||!home.name||!away.name||
        !Number.isFinite(kickoff)||kickoff<=Date.now())return null;
-    if(!['NS','TBD','SCHEDULED','NOT STARTED'].includes(status))return null;
+    if(!['NS','TBD','SCHEDULED','NOT STARTED','UPCOMING'].includes(status))
+      return null;
     const league=row.league?.name||row.competition||
       row.leagueName||'Football';
+    if(row.isFinished===true||row.isLive===true||
+       row.homeScore!=null||row.awayScore!=null)return null;
     return {id:String(id),home,away,date,league,kickoff};
   }
   function rows(payload){
