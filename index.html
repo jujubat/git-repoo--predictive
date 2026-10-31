@@ -10731,6 +10731,98 @@ if(document.readyState==='loading'){
       const tableHtml=table.length?`<div class="tablewrap"><table class="kc-table"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr></thead><tbody>${table.map(x=>{const n=x.team?.name||'';return `<tr class="${n.toLowerCase()===teamName.toLowerCase()?'kc-highlight':''}"><td>${escX(x.rank??'—')}</td><td><span class="kc-link" onclick="event.stopPropagation();openKasiTeamPage(${Number(x.team?.id||0)},${JSON.stringify(n)})">${escX(n)}</span></td><td>${escX(x.all?.played??'—')}</td><td>${escX(x.all?.win??'—')}</td><td>${escX(x.all?.draw??'—')}</td><td>${escX(x.all?.lose??'—')}</td><td>${escX(x.goalsDiff??'—')}</td><td><b>${escX(x.points??'—')}</b></td></tr>`}).join('')}</tbody></table></div>`:'<div class="kc-empty">League table unavailable.</div>';
       const odds=d.nextOdds||{}; const oddsHtml=(Number(odds.homeWin)>1||Number(odds.draw)>1||Number(odds.awayWin)>1)?`<div class="kc-badges"><span class="kc-badge">1 ${Number(odds.homeWin)>1?Number(odds.homeWin).toFixed(2):'—'}</span><span class="kc-badge">X ${Number(odds.draw)>1?Number(odds.draw).toFixed(2):'—'}</span><span class="kc-badge">2 ${Number(odds.awayWin)>1?Number(odds.awayWin).toFixed(2):'—'}</span></div>`:'<div class="kc-row-meta">No current 1X2 odds supplied.</div>';
       r.innerHTML=`<main class="kc-entity-page"><div class="kc-back"></div><section class="kc-entity-hero"><div class="kc-entity-head">${img(t.logo||((t.id&&Number(t.id)>0)?('https://media.api-sports.io/football/teams/'+Number(t.id)+'.png'):''))}<div class="kc-entity-title"><h1>${escX(teamName)}</h1><p>${league.flag?`<img src="${escX(league.flag)}" style="width:22px;height:15px;object-fit:cover;vertical-align:middle;margin-right:6px" loading="lazy" decoding="async">`:''}${escX(t.country||league.country||'')}</p><div class="kc-actions"><button onclick="track&&track('follow',{entityId:'team:'+${JSON.stringify(teamName)}})">⭐ Follow team</button><button onclick="navigator.clipboard?.writeText(location.href)">Copy team link</button></div></div></div></section><div class="kc-grid"><div class="kc-stat"><b>${escX(row.rank??'—')}</b><span>League position</span></div><div class="kc-stat"><b>${escX(row.points??'—')}</b><span>Points</span></div><div class="kc-stat"><b>${escX(row.all?.played??'—')}</b><span>Played</span></div><div class="kc-stat"><b>${escX(row.goalsDiff??'—')}</b><span>Goal difference</span></div><div class="kc-stat"><b>${escX(gf)}</b><span>Goals scored</span></div><div class="kc-stat"><b>${escX(ga)}</b><span>Goals conceded</span></div><div class="kc-stat"><b>${escX(stats.clean_sheet?.total??'—')}</b><span>Clean sheets</span></div><div class="kc-stat"><b>${escX(stats.failed_to_score?.total??'—')}</b><span>Failed to score</span></div></div><section class="kc-card"><h2>Team form</h2><div class="kc-form">${formHtml}</div></section>${next?`<section class="kc-card"><h2>Next match</h2><div class="kc-row"><div><div class="kc-row-title">${teamCell(next.homeLogo||'',next.home||'Home','sm',next.homeId||0)} <span class="sub">vs</span> ${teamCell(next.awayLogo||'',next.away||'Away','sm',next.awayId||0)}</div><div class="kc-row-meta">${fmtDate(next.date)} · ${escX(next.league||'')}</div>${oddsHtml}</div><div><b>NEXT</b></div></div></section>`:''}<div class="kc-grid2"><section class="kc-card"><h2>Recent results</h2><div class="kc-list">${past.slice(0,10).map(matchRow).join('')||'<div class="kc-empty">No recent results.</div>'}</div></section><section class="kc-card"><h2>Upcoming fixtures</h2><div class="kc-list">${future.slice(0,10).map(matchRow).join('')||'<div class="kc-empty">No upcoming fixtures.</div>'}</div></section></div><section class="kc-card"><h2>Squad · Players</h2><p class="sub">Click any player to open their full player page.</p><div class="kc-squad">${squad}</div></section><section class="kc-card"><h2>League table</h2>${tableHtml}</section></main>`;
+
+      // V663: Optional FantasyPlayoffs points for verified squad IDs.
+      // Never block or replace the official team profile.
+      (async () => {
+        const teamId = Number(t.id || internalTeam);
+
+        if (!Number.isInteger(teamId) || teamId <= 0) return;
+
+        const squadContainer = r.querySelector(
+          'section.kc-card .kc-squad'
+        );
+
+        if (!squadContainer) return;
+
+        // Only the original team page may receive these statistics.
+        const expectedSquad = squadContainer;
+
+        const controller = new AbortController();
+        const timeout = setTimeout(
+          () => controller.abort(),
+          7000
+        );
+
+        try {
+          const response = await fetch(
+            '/teams/' + encodeURIComponent(teamId)
+            + '/fantasy?season=2026',
+            {
+              method: 'GET',
+              headers: {'Accept': 'application/json'},
+              signal: controller.signal
+            }
+          );
+
+          if (!response.ok) return;
+
+          const fantasy = await response.json();
+
+          if (
+            Number(fantasy.teamId) !== teamId ||
+            Number(fantasy.season) !== 2026 ||
+            !fantasy.players ||
+            typeof fantasy.players !== 'object' ||
+            !expectedSquad.isConnected ||
+            r.querySelector('section.kc-card .kc-squad') !== expectedSquad
+          ) return;
+
+          const cards = Array.from(
+            expectedSquad.querySelectorAll('.kc-player')
+          );
+
+          players.forEach((player, index) => {
+            const id = Number(player.id || 0);
+            const card = cards[index];
+
+            if (
+              !Number.isInteger(id) ||
+              id <= 0 ||
+              !card ||
+              !card.isConnected
+            ) return;
+
+            const record = fantasy.players[String(id)];
+
+            if (
+              !record ||
+              typeof record.fantasyPoints !== 'number' ||
+              !Number.isFinite(record.fantasyPoints)
+            ) return;
+
+            const info = card.querySelector('div');
+            if (!info || info.querySelector('.kc-fantasy-points')) return;
+
+            const badge = document.createElement('small');
+            badge.className = 'kc-fantasy-points';
+            badge.textContent =
+              'Fantasy: ' + record.fantasyPoints + ' pts';
+
+            badge.style.cssText =
+              'display:block;font-size:11px;' +
+              'margin-top:3px;color:var(--muted)';
+
+            info.appendChild(badge);
+          });
+
+        } catch (_) {
+          // Fantasy unavailability must not break team pages.
+        } finally {
+          clearTimeout(timeout);
+        }
+      })();
+
     }catch(e){r.innerHTML=`<main class="kc-entity-page"><div class="kc-empty">Team data could not be loaded.<br><small>${escX(e.message||e)}</small><br><button onclick="return window.kasiDashboardBack()">Return to dashboard</button></div></main>`}
   }
   async function playerPage(slug){

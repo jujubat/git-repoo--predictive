@@ -22678,6 +22678,137 @@ async def _fantasyplayoffs_midnight_refresh_loop():
         except Exception as exc:
             log.warning("FantasyPlayoffs midnight refresh failed: %s", exc)
 
+
+@app.get("/teams/{team_id}/fantasy")
+async def ksn_v663_team_fantasy(team_id: int, season: int = Query(2026)):
+    """Fantasy points for verified club/player IDs; no squad mutation."""
+    if team_id <= 0 or season != 2026:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "UNSUPPORTED_TEAM_FANTASY_REQUEST"}
+        )
+
+    cache_key = "v663:verified_team_fantasy_index:2026"
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+
+    cached = _players_cache.get(cache_key)
+    valid_cache = (
+        isinstance(cached, dict)
+        and isinstance(cached.get("expires"), (int, float))
+        and cached["expires"] > now
+        and isinstance(cached.get("data"), dict)
+    )
+
+    if valid_cache:
+        data = cached["data"]
+    else:
+        try:
+            snapshot = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _dashboard_snapshot_get,
+                    "ksn_fantasy_team_index_v663:2026"
+                ),
+                timeout=5.0
+            )
+            data = (
+                snapshot.get("data")
+                if isinstance(snapshot, dict)
+                else None
+            )
+
+            if not isinstance(data, dict) or data.get("season") != 2026:
+                raise ValueError("Verified fantasy index missing")
+
+            if not isinstance(data.get("teams"), dict):
+                raise ValueError("Verified fantasy teams missing")
+
+            _players_cache[cache_key] = {
+                "data": data,
+                "expires": loop.time() + 300.0,
+            }
+
+        except Exception as exc:
+            log.warning(
+                "V663 fantasy team index read failed team=%s error=%s",
+                team_id,
+                type(exc).__name__
+            )
+
+            if (
+                isinstance(cached, dict)
+                and isinstance(cached.get("data"), dict)
+            ):
+                data = cached["data"]
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "FANTASY_TEAM_INDEX_UNAVAILABLE",
+                        "message": "Fantasy statistics temporarily unavailable."
+                    }
+                )
+
+    teams = data.get("teams") or {}
+    entry = teams.get(str(team_id))
+
+    if (
+        not isinstance(entry, dict)
+        or entry.get("teamId") != team_id
+        or entry.get("season") != 2026
+        or entry.get("leagueId") not in FANTASYPLAYOFFS_LEAGUES
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "VERIFIED_TEAM_FANTASY_NOT_FOUND"}
+        )
+
+    records = entry.get("players")
+
+    if (
+        not isinstance(records, dict)
+        or len(records) != entry.get("count")
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "FANTASY_TEAM_INDEX_INCOMPLETE"}
+        )
+
+    verified = {}
+
+    for player_id, record in records.items():
+        expected_id = f"fp:{entry['leagueId']}:{player_id}"
+
+        if not (
+            str(player_id).isdigit()
+            and int(player_id) > 0
+            and isinstance(record, dict)
+            and isinstance(record.get("fantasyPoints"), (int, float))
+            and not isinstance(record.get("fantasyPoints"), bool)
+            and record.get("fantasyPlayerId") == expected_id
+            and record.get("leagueId") == entry["leagueId"]
+            and record.get("season") == 2026
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "FANTASY_PLAYER_MAPPING_INVALID"}
+            )
+
+        verified[str(player_id)] = {
+            "fantasyPoints": record["fantasyPoints"],
+            "source": "FantasyPlayoffs",
+        }
+
+    return {
+        "source": "FantasyPlayoffs",
+        "teamId": team_id,
+        "leagueId": entry["leagueId"],
+        "season": 2026,
+        "count": len(verified),
+        "updatedAt": data.get("updatedAt"),
+        "players": verified,
+    }
+
 @app.get("/players/fantasyplayoffs/all")
 async def players_fantasyplayoffs_all(refresh: int=Query(0, ge=0, le=1)):
     """Shared Big-5 player dataset for Teams & Players pages."""
