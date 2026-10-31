@@ -25889,7 +25889,99 @@ async function match(){{
   if(SPORT==='football'){{const ts=m.teams||{{}},stats=d.statistics||[],events=d.events||[],line=d.teams||[];
    const statRows=(stats[0]?.statistics||[]).map(s=>{{const other=(stats[1]?.statistics||[]).find(x=>x.type===s.type);return `<div class="row"><b>${{E(s.value??'—')}}</b><span class="muted">${{E(s.type)}}</span><b>${{E(other?.value??'—')}}</b></div>`}}).join('');
    const lineups=line.map(t=>`<div class="card"><h3>${{E(t.team?.name||'Team')}}</h3>${{(t.startXI||t.players||[]).map(z=>{{const q=z.player||z;return `<div class="person" onclick="location.href='/players/${{encodeURIComponent(q.id)}}'">${{E(q.name||'Player')}}</div>`}}).join('')||'<div class="muted">No lineup returned.</div>'}}</div>`).join('');
-   page.innerHTML=`<div class="card hero">${{teamLink(ts.home?.id,ts.home?.name||'Home',ts.home?.logo)}}<div><div class="muted">${{E(m.league?.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="muted">${{E(m.fixture?.status?.long||'Match')}}</div></div>${{teamLink(ts.away?.id,ts.away?.name||'Away',ts.away?.logo)}}</div><div class="grid"><div class="card"><h2>Match Statistics</h2>${{statRows||'<div class="muted">No statistics returned for this match.</div>'}}</div><div class="card"><h2>Match Information</h2><p>Venue: ${{E(m.fixture?.venue?.name||'—')}}</p><p>Referee: ${{E(m.fixture?.referee||'—')}}</p><p>Status: ${{E(m.fixture?.status?.long||'—')}}</p></div></div>${{events.length?`<div class="card"><h2>Events</h2>${{events.map(x=>`<p>${{E(x.time?.elapsed??'')}}′ · ${{E(x.team?.name||'')}} · ${{E(x.type||'')}} ${{E(x.detail||'')}}</p>`).join('')}}</div>`:''}}<div class="grid">${{lineups}}</div>`;
+   const fixture=m.fixture||{{}};
+   const st=fixture.status||{{}};
+   const activeCodes=['1H','HT','2H','ET','BT','P','INT','LIVE'];
+   const isActive=s=>activeCodes.includes(String(s||'').toUpperCase());
+   const fmtStatus=s=>{{
+     const short=String(s?.short||'').toUpperCase();
+     return [short||'Status unavailable',
+       isActive(short)&&s?.elapsed!=null?String(s.elapsed)+"'":''].filter(Boolean).join(' ?? ');
+   }};
+   const fmtScore=g=>String(g?.home??'???')+' ??? '+String(g?.away??'???');
+   const unavailable=s=>'<p class="muted">'+E(s)+'</p>';
+   const details=[
+     ['Competition',m.league?.name],['Round',m.league?.round],
+     ['Venue',fixture.venue?.name],['City',fixture.venue?.city],
+     ['Referee',fixture.referee],['Status',st.long||st.short],
+     ['Kickoff',fixture.date]
+   ].map(([k,v])=>'<div class="row"><span class="muted">'+E(k)+'</span><strong>'+E(v??'Unavailable')+'</strong></div>').join('');
+   const eventHtml=a=>Array.isArray(a)&&a.length?a.map(x=>{{
+     const minute=x.time?.elapsed;
+     const extra=x.time?.extra;
+     const time=minute==null?'???':String(minute)+(extra?'+'+String(extra):'')+"'";
+     return '<div class="row"><span>'+E(time)+' ?? '+E(x.team?.name||'Team')+'</span><span>'+E(x.type||'Event')+' ?? '+E(x.detail||'')+(x.player?.name?' ?? '+E(x.player.name):'')+'</span></div>';
+   }}).join(''):unavailable('No verified match events are available.');
+   const statisticsHtml=a=>{{
+     if(!Array.isArray(a)||!a.length)return unavailable('Verified statistics are unavailable.');
+     const left=a[0]?.statistics||[],right=a[1]?.statistics||[];
+     const entries=left.map(x=>{{
+       const other=right.find(y=>y.type===x.type);
+       return '<div class="row"><b>'+E(x.value??'???')+'</b><span class="muted">'+E(x.type||'')+'</span><b>'+E(other?.value??'???')+'</b></div>';
+     }}).join('');
+     return entries||unavailable('Verified statistics are unavailable.');
+   }};
+   const tabNames=[['match','Match'],['lineups','Lineups'],['stats','Stats'],
+     ['trends','Trends'],['news','News'],['h2h','Head to Head'],['commentary','Commentary']];
+   page.innerHTML=`<div id="ksn-v663-unified-live-match" style="max-width:1050px;margin:auto">
+     <header style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+       <strong>KasiScore ?? Match Centre</strong><a href="/#live">Back to Live Matches</a>
+     </header>
+     <p class="muted" style="margin-top:16px">${{E(m.league?.name||'Football')}}${{m.league?.round?' ?? '+E(m.league.round):''}}</p>
+     <section class="card" aria-label="Match scoreboard" style="display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:14px;padding:24px 12px;background:#172231;text-align:center">
+       <div>${{teamLink(ts.home?.id,ts.home?.name||'Home',ts.home?.logo)}}</div>
+       <div><div id="ksn-live-score" style="font-size:32px;font-weight:800">${{E(fmtScore(m.goals))}}</div>
+       <strong id="ksn-live-status">${{E(fmtStatus(st))}}</strong></div>
+       <div>${{teamLink(ts.away?.id,ts.away?.name||'Away',ts.away?.logo)}}</div>
+     </section>
+     <nav aria-label="Match details" style="display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid #35445a">
+       ${{tabNames.map(([key,label])=>`<button type="button" data-kmatch-tab="${{key}}" aria-selected="${{key==='match'}}" style="flex:none;padding:13px;border:0;background:transparent;color:#d9e5f0;cursor:pointer">${{E(label)}}</button>`).join('')}}
+     </nav>
+     <section class="card" data-kmatch-panel="match"><h2>Match</h2>${{details}}<h3>Events</h3><div id="ksn-live-events">${{eventHtml(events)}}</div></section>
+     <section class="card" data-kmatch-panel="lineups"><h2>Lineups</h2>${{lineups||unavailable('Verified lineups are unavailable.')}}</section>
+     <section class="card" data-kmatch-panel="stats"><h2>Match Statistics</h2><div id="ksn-live-stats">${{statisticsHtml(stats)}}</div></section>
+     <section class="card" data-kmatch-panel="trends"><h2>Trends</h2>${{unavailable('Verified match momentum data is unavailable.')}}</section>
+     <section class="card" data-kmatch-panel="news"><h2>News</h2>${{unavailable('Fixture-specific verified news is not linked to this match.')}}</section>
+     <section class="card" data-kmatch-panel="h2h"><h2>Head to Head</h2>${{unavailable('Verified head-to-head meetings are not integrated into this live view.')}}</section>
+     <section class="card" data-kmatch-panel="commentary"><h2>Commentary</h2><div id="ksn-live-commentary">${{eventHtml(events)}}</div></section>
+     <p class="muted">Source: ${{E(d.source||'Verified match data')}}. Missing details are not estimated.</p>
+   </div>`;
+   const liveRoot=page.querySelector('#ksn-v663-unified-live-match');
+   const buttons=[...liveRoot.querySelectorAll('[data-kmatch-tab]')];
+   const panels=[...liveRoot.querySelectorAll('[data-kmatch-panel]')];
+   const showTab=key=>{{
+     buttons.forEach(b=>{{
+       const chosen=b.dataset.kmatchTab===key;
+       b.setAttribute('aria-selected',String(chosen));
+       b.style.borderBottom=chosen?'3px solid #499dfa':'3px solid transparent';
+     }});
+     panels.forEach(p=>{{p.hidden=p.dataset.kmatchPanel!==key;p.style.display=p.hidden?'none':'';}});
+   }};
+   buttons.forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.kmatchTab)));
+   showTab('match');
+   // Update only verified fields; failed refreshes leave the existing screen intact.
+   // Timers are page-local and only run for an active match.
+   if(isActive(st.short)){{
+     const poll=async()=>{{
+       if(document.hidden||!liveRoot.isConnected)return;
+       try{{
+         const response=await fetch('/sports/'+encodeURIComponent(SPORT)+'/match/'+encodeURIComponent(ID),
+           {{headers:{{Accept:'application/json'}},cache:'no-store'}});
+         if(!response.ok)return;
+         const next=await response.json();
+         if(!next?.match?.fixture?.id||!next?.match?.teams)return;
+         const nextStatus=next.match.fixture.status||{{}};
+         liveRoot.querySelector('#ksn-live-score').textContent=fmtScore(next.match.goals);
+         liveRoot.querySelector('#ksn-live-status').textContent=fmtStatus(nextStatus);
+         liveRoot.querySelector('#ksn-live-events').innerHTML=eventHtml(next.events);
+         liveRoot.querySelector('#ksn-live-commentary').innerHTML=eventHtml(next.events);
+         liveRoot.querySelector('#ksn-live-stats').innerHTML=statisticsHtml(next.statistics);
+         if(!isActive(nextStatus.short))clearInterval(interval);
+       }}catch(e){{/* retain last verified display */}}
+     }};
+     const interval=setInterval(poll,90000);
+     window.addEventListener('pagehide',()=>clearInterval(interval),{{once:true}});
+   }}
   }}else{{const x=m.fixture||m,st=d.statistics||{{}},periods=st.scoresByPeriod||{{}};
    const scoreRows=Object.entries(periods).map(([k,v])=>`<div class="row"><b>${{E(v?.participant1Score??'—')}}</b><span class="muted">Period ${{E(k)}}</span><b>${{E(v?.participant2Score??'—')}}</b></div>`).join('');
    const hf=st.homeForm||{{}},af=st.awayForm||{{}};
