@@ -22416,6 +22416,75 @@ async def _fetch_fantasyplayoffs_league(league_id: int, season: int=2026, bust_c
         raise HTTPException(400, detail={"code":"UNSUPPORTED_FANTASY_SEASON","message":"Supported Fantasy seasons are 2023/24 through 2026/27."})
     season_label=f"{season}-{str(season+1)[-2:]}"
     ck=f"fantasyplayoffs:{league_id}:{season_label}"
+
+    # V663: Complete verified 2026 fantasy dataset.
+    # Never download or parse the upstream bundle on this request path.
+    if season == 2026:
+        snapshot_key = "ksn_fantasy_verified_big5_v663:2026"
+        cached = _players_cache.get(ck)
+        if isinstance(cached, dict) and (cached.get("completeness") or {}).get("complete"):
+            return cached
+
+        try:
+            stored = await asyncio.wait_for(
+                asyncio.to_thread(_dashboard_snapshot_get, snapshot_key),
+                timeout=6.0,
+            )
+        except Exception as exc:
+            log.warning("V663 fantasy snapshot read unavailable league=%s: %s", league_id, exc)
+            stored = None
+
+        data = stored.get("data") if isinstance(stored, dict) else None
+        entry = (data.get("leagues") or {}).get(str(league_id)) if isinstance(data, dict) else None
+        players = entry.get("players") if isinstance(entry, dict) else None
+
+        if (
+            data.get("season") == 2026 if isinstance(data, dict) else False
+        ) and (
+            isinstance(players, list)
+            and len(players) > 100
+            and entry.get("count") == len(players)
+            and all(
+                isinstance(p, dict)
+                and isinstance(p.get("fantasyPoints"), (int, float))
+                and not isinstance(p.get("fantasyPoints"), bool)
+                and isinstance(p.get("name"), str)
+                and p.get("name")
+                and isinstance(p.get("team"), str)
+                and p.get("team")
+                for p in players
+            )
+        ):
+            positions = {
+                k: sum(1 for p in players if p.get("position") == k)
+                for k in ("GK", "DEF", "MID", "FWD")
+            }
+            result = {
+                "source": "FantasyPlayoffs",
+                "sourceUrl": f"{FANTASYPLAYOFFS_BASE}/{meta['slug']}/stats/",
+                "leagueId": league_id,
+                "league": meta["name"],
+                "country": meta["country"],
+                "season": season_label,
+                "seasonStart": season,
+                "players": players,
+                "count": len(players),
+                "positionCounts": positions,
+                "completeness": {"complete": True, "reasons": []},
+                "updatedAt": data.get("updatedAt"),
+            }
+            _players_cache[ck] = result
+            return result
+
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "FANTASY_SNAPSHOT_UNAVAILABLE",
+                "message": "Verified FantasyPlayoffs data temporarily unavailable.",
+                "leagueId": league_id,
+            },
+        )
+
     if not bust_cache:
         cached=_players_cache.get(ck)
         if cached is not None:
@@ -22503,27 +22572,87 @@ async def _fetch_fantasyplayoffs_league(league_id: int, season: int=2026, bust_c
     return payload
 
 async def _fantasyplayoffs_refresh_all_big5() -> dict:
-    """Refresh all Big-5 FantasyPlayoffs datasets and return a shared snapshot.
+    """Use the verified durable snapshot, never an upstream request."""
+    ck = "fantasyplayoffs:big5:shared"
+    key = "ksn_fantasy_verified_big5_v663:2026"
 
-    One failed league never blocks the other four. This snapshot is reusable by
-    Teams & Players surfaces without extra upstream calls.
-    """
-    leagues={}
-    players=[]
-    errors={}
-    for lid,meta in FANTASYPLAYOFFS_LEAGUES.items():
-        try:
-            payload=await _fetch_fantasyplayoffs_league(lid, season=2026, bust_cache=True)
-            leagues[str(lid)]={"league":meta["name"],"count":payload.get("count",0),"positionCounts":payload.get("positionCounts",{}),
-                               "complete":(payload.get("completeness") or {}).get("complete"),"reasons":(payload.get("completeness") or {}).get("reasons",[])}
-            players.extend(payload.get("players") or [])
-        except Exception as exc:
-            errors[str(lid)]=str(exc)
-            log.warning("FantasyPlayoffs daily refresh failed league=%s: %s", lid, exc)
-    snap={"source":"FantasyPlayoffs","season":"2026-27","updatedAt":datetime.now(timezone.utc).isoformat(),"leagues":leagues,"players":players,"count":len(players),"errors":errors}
-    if players:
-        _players_cache["fantasyplayoffs:big5:shared"] = snap
-    return snap
+    try:
+        stored = await asyncio.wait_for(
+            asyncio.to_thread(_dashboard_snapshot_get, key),
+            timeout=6.0,
+        )
+    except Exception as exc:
+        log.warning("V663 shared fantasy snapshot unavailable: %s", exc)
+        stored = None
+
+    data = stored.get("data") if isinstance(stored, dict) else None
+    entries = data.get("leagues") if isinstance(data, dict) else None
+
+    if isinstance(data, dict) and data.get("season") == 2026 and isinstance(entries, dict):
+        leagues = {}
+        players = []
+        valid = True
+
+        for lid, meta in FANTASYPLAYOFFS_LEAGUES.items():
+            entry = entries.get(str(lid))
+            rows = entry.get("players") if isinstance(entry, dict) else None
+
+            if not (
+                isinstance(rows, list)
+                and len(rows) > 100
+                and entry.get("count") == len(rows)
+                and all(
+                    isinstance(p, dict)
+                    and isinstance(p.get("fantasyPoints"), (int, float))
+                    and not isinstance(p.get("fantasyPoints"), bool)
+                    and isinstance(p.get("name"), str)
+                    and p.get("name")
+                    and isinstance(p.get("team"), str)
+                    and p.get("team")
+                    for p in rows
+                )
+            ):
+                valid = False
+                break
+
+            positions = {
+                k: sum(1 for p in rows if p.get("position") == k)
+                for k in ("GK", "DEF", "MID", "FWD")
+            }
+            leagues[str(lid)] = {
+                "league": meta["name"],
+                "count": len(rows),
+                "positionCounts": positions,
+                "complete": True,
+                "reasons": [],
+            }
+            players.extend(rows)
+
+        if valid and len(leagues) == 5 and len(players) == data.get("totalPlayers"):
+            payload = {
+                "source": "FantasyPlayoffs",
+                "season": "2026-27",
+                "updatedAt": data.get("updatedAt"),
+                "leagues": leagues,
+                "players": players,
+                "count": len(players),
+                "errors": {},
+            }
+            _players_cache[ck] = payload
+            return payload
+
+    previous = _players_cache.get(ck)
+    if isinstance(previous, dict) and previous.get("count", 0) > 0:
+        return previous
+
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "FANTASY_SNAPSHOT_UNAVAILABLE",
+            "message": "Verified Big-5 fantasy rankings temporarily unavailable.",
+        },
+    )
+
 
 async def _fantasyplayoffs_midnight_refresh_loop():
     """Refresh Big-5 player data daily at 00:00 Africa/Johannesburg."""
