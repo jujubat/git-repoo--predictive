@@ -25907,7 +25907,7 @@ async function team(){{
   // v586: start existing Teams data requests concurrently; never touch shared widget paths.
   // Intelligence can synchronise SQL/provider records, so 3.5 seconds was insufficient.
   const v622=V622_TEAMS==='all'||(Array.isArray(V622_TEAMS)&&V622_TEAMS.includes(Number(id)));
-  const _dP=J('/team/profile?team='+encodeURIComponent(id),9000);
+  const _dP=J('/team/profile?team='+encodeURIComponent(id),9000).then(p=>{{window.__ksnVerifiedOverview=p;return p;}});
   const _tiP=J('/team/intelligence?team='+encodeURIComponent(id),14000).catch(()=>({{}}));
   const _hP=J('/team/seasons-history?team='+encodeURIComponent(id)+'&seasons=7',v622?12000:7000).catch(()=>({{seasons:[]}}));
   let d,ti,h;
@@ -27001,7 +27001,7 @@ async def canonical_team_page(team_id:str):
             raise HTTPException(404,"Team identity not verified")
         return RedirectResponse(url=f"/teams/{canonical_id}",status_code=308,
                                 headers={"Cache-Control":"no-store","X-KSN-Build":KSN_BUILD_VERSION})
-    html=_ksn_v491_seo_profile("team", canonical_id)
+    html=await asyncio.to_thread(_ksn_v491_seo_profile, "team", canonical_id)
     html=html.replace("</body>", f'<div id="ksn-build-marker" data-build="{KSN_BUILD_VERSION}" style="display:none"></div></body>', 1)
     return HTMLResponse(html,headers={"Cache-Control":"no-store, no-cache, must-revalidate","Pragma":"no-cache","X-KSN-Build":KSN_BUILD_VERSION})
 
@@ -29042,7 +29042,7 @@ def _ksn_v491_seo_profile(kind, entity_id):
                 f'</nav></div></div>'
             )
             # Verified data is rendered before JavaScript; JS can still replace #page.
-            verified_html = _ksn_v597_team_initial_html(entity_id, name)
+            verified_html = _KSN_V597_TEAM_HTML_CACHE.get(int(entity_id), '')
             if verified_html:
                 fallback = fallback.replace('<p class="muted">Loading verified team information from the existing shared data sources…</p>', verified_html, 1)
             else:
@@ -29062,6 +29062,12 @@ def _ksn_v491_seo_profile(kind, entity_id):
         document = document.replace('</head>', '<meta name="robots" content="noindex,follow"></head>', 1)
     if name and kind == "team":
         document = document.replace('</head>', '<script>window.KSN_SSR_NAME=' + json.dumps(name).replace('<', '\u003c') + ';</script></head>', 1)
+    if kind == 'team':
+        document = document.replace(
+            '</body>',
+            '\n<script id="ksn-v663-standalone-overview">\n(function(){\n  \'use strict\';\n\n  function showOverview(){\n    const d = window.__ksnVerifiedOverview;\n    const root = document.getElementById(\'page\');\n\n    if (!root || !d || !d.team ||\n        root.querySelector(\'#ksn-v663-public-overview\')) {\n      return false;\n    }\n\n    const teamId = Number(d.team.id || 0);\n    if (!teamId) return false;\n\n    // Never replace an error screen with a misleading success panel.\n    if (/Team data unavailable/i.test(root.textContent || \'\')) {\n      return false;\n    }\n\n    const table = Array.isArray(d.standings) ? d.standings : [];\n    const row = table.find(x =>\n      Number(x && x.team && x.team.id) === teamId\n    ) || {};\n\n    const stats = d.teamStats || {};\n    const fixtures = stats.fixtures || {};\n    const goals = stats.goals || {};\n    const all = row.all || {};\n    const venue = d.venue || {};\n    const league = d.league || {};\n\n    function value(){\n      for (const v of arguments) {\n        if (v !== null && v !== undefined &&\n            v !== \'\' && typeof v !== \'object\') {\n          return String(v);\n        }\n      }\n      return \'Unavailable\';\n    }\n\n    const fields = [\n      [\'Competition\', value(league.name)],\n      [\'Position\', value(row.rank)],\n      [\'Points\', value(row.points)],\n      [\'Played\', value(all.played, fixtures.played?.total)],\n      [\'Wins\', value(all.win, fixtures.wins?.total)],\n      [\'Draws\', value(all.draw, fixtures.draws?.total)],\n      [\'Losses\', value(all.lose, fixtures.loses?.total)],\n      [\'Goals scored\', value(\n        all.goals?.for, goals.for?.total?.total\n      )],\n      [\'Goals conceded\', value(\n        all.goals?.against, goals.against?.total?.total\n      )],\n      [\'Goal difference\', value(row.goalsDiff)],\n      [\'Clean sheets\', value(stats.clean_sheet?.total)],\n      [\'Stadium\', value(venue.name)],\n      [\'City\', value(venue.city)],\n      [\'Country\', value(d.team.country, league.country)]\n    ];\n\n    const section = document.createElement(\'section\');\n    section.id = \'ksn-v663-public-overview\';\n    section.className = \'card\';\n    section.setAttribute(\'aria-label\', \'Team Overview\');\n\n    const heading = document.createElement(\'h2\');\n    heading.textContent = \'Team Overview\';\n    section.appendChild(heading);\n\n    const grid = document.createElement(\'div\');\n    grid.style.cssText =\n      \'display:grid;grid-template-columns:\' +\n      \'repeat(auto-fit,minmax(145px,1fr));gap:10px\';\n\n    for (const [label, result] of fields) {\n      const cell = document.createElement(\'div\');\n      cell.style.cssText =\n        \'border:1px solid #333;border-radius:9px;\' +\n        \'padding:12px;min-width:0\';\n\n      const small = document.createElement(\'div\');\n      small.className = \'muted\';\n      small.textContent = label;\n\n      const strong = document.createElement(\'strong\');\n      strong.style.cssText = \'overflow-wrap:anywhere\';\n      strong.textContent = result;\n\n      cell.append(small, strong);\n      grid.appendChild(cell);\n    }\n\n    section.appendChild(grid);\n    root.prepend(section);\n    return true;\n  }\n\n  // The original team renderer owns the page. Observe its\n  // completion rather than starting another API request.\n  const root = document.getElementById(\'page\');\n  if (!root) return;\n\n  const observer = new MutationObserver(function(){\n    if (showOverview()) observer.disconnect();\n  });\n\n  observer.observe(root, {childList:true, subtree:false});\n\n  if (showOverview()) observer.disconnect();\n  setTimeout(() => observer.disconnect(), 20000);\n})();\n</script>\n' + '</body>',
+            1,
+        )
     return document
 
 # v492: read-only, bounded identity recovery from existing fixture provider cache.
