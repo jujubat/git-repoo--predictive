@@ -18453,6 +18453,63 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 
+<!-- V663 STEP 901C: MY KASI TEAM INTELLIGENCE & PREDICTION BRIDGE -->
+<style id="ksn-v663-mykasi-intelligence-css">
+#platform .mk901-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:13px 0}
+#platform .mk901-team{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+#platform .mk901-team img,#platform .mk901-pick img{width:42px;height:42px;object-fit:contain}
+#platform .mk901-detail{margin-top:18px;padding:16px;border:1px solid #36536b;border-radius:12px;background:#101f2e;color:#eff7ff}
+#platform .mk901-detail h4{margin:0 0 7px;font-size:18px}
+#platform .mk901-detail .mk901-note{font-size:12px;color:#b7c9d9;margin:7px 0}
+#platform .mk901-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:14px 0}
+#platform .mk901-metric{padding:12px;border-radius:8px;border:1px solid #304a60;background:#152b41}
+#platform .mk901-metric b{display:block;font-size:20px;color:white}
+#platform .mk901-metric small{color:#b8cee0}
+#platform .mk901-data{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+#platform .mk901-data th,#platform .mk901-data td{border-bottom:1px solid #30475b;padding:8px;text-align:left}
+#platform .mk901-pick{display:flex;align-items:center;gap:10px;margin:10px 0}
+#platform .mk901-actions button{cursor:pointer}
+#platform .mk901-actions button:disabled{opacity:.5;cursor:not-allowed}
+@media(max-width:650px){#platform .mk901-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+<script id="ksn-v663-mykasi-intelligence-js">
+(function(){'use strict';
+const FAV='ksn:v663:my-kasi:football-favourites';
+const VERIFIED='ksn:v663:my-kasi:verified-team-identities';
+const API='/my-kasi/fixtures';
+const get=id=>document.getElementById(id);
+const text=(parent,tag,value,className)=>{const el=document.createElement(tag);el.textContent=String(value??'');if(className)el.className=className;parent.append(el);return el};
+const safeUrl=x=>{try{const u=new URL(x,location.origin);return u.protocol==='https:'&&!u.username&&!u.password?u.href:null}catch(_){return null}};
+const data=k=>{try{return JSON.parse(localStorage.getItem(k)||'null')}catch(_){return null}};
+const asList=x=>Array.isArray(x)?x:[];
+function teamId(name){const v=asList(data(VERIFIED)).find(x=>x&&String(x.name).toLowerCase()===String(name).toLowerCase());return v?.publicRef||name}
+function badge(parent,url,alt){const src=safeUrl(url);if(src){const img=document.createElement('img');img.src=src;img.alt=alt;img.loading='lazy';img.referrerPolicy='no-referrer';parent.append(img)}}
+function metric(parent,title,value){const node=text(parent,'div','', 'mk901-metric');text(node,'b',value);text(node,'small',title)}
+function dateString(value){const d=new Date(value);return Number.isFinite(d.getTime())?d.toLocaleString('en-ZA',{timeZone:'Africa/Johannesburg',dateStyle:'medium',timeStyle:'short'}):'—'}
+function matchName(row,side){const x=row?.teams?.[side]||row?.[side+'Team']||row?.[side];return typeof x==='string'?x:(x?.name||row?.[side+'Name']||'—')}
+function score(x,side){return x?.goals?.[side]??x?.score?.fulltime?.[side]??x?.[side+'Score']??'—'}
+function resultsRows(container,rows){const table=document.createElement('table');table.className='mk901-data';const head=document.createElement('thead');const hr=document.createElement('tr');['Match','Result','Date'].forEach(x=>text(hr,'th',x));head.append(hr);table.append(head);const tbody=document.createElement('tbody');for(const r of asList(rows).slice(0,10)){const tr=document.createElement('tr');text(tr,'td',matchName(r,'home')+' vs '+matchName(r,'away'));text(tr,'td',score(r,'home')+' - '+score(r,'away'));text(tr,'td',dateString(r?.fixture?.date||r?.date||r?.datetime));tbody.append(tr)}if(!tbody.children.length){const row=document.createElement('tr');const td=text(row,'td','No verified recent results available');td.colSpan=3;tbody.append(row)}table.append(tbody);container.append(table)}
+let sequence=0;
+async function showTeam(name){const box=get('mk901TeamDetails');if(!box)return;const ticket=++sequence;box.replaceChildren();text(box,'p','Loading verified team data…');try{
+ const res=await fetch('/team/profile?team='+encodeURIComponent(teamId(name)),{credentials:'same-origin'});
+ if(!res.ok)throw new Error('Profile unavailable ('+res.status+')');const d=await res.json();if(ticket!==sequence)return;
+ const t=d?.team||{},stats=d?.teamStats||{},stand=asList(d?.standings);const row=stand.find(x=>String(x?.team?.id||'')===String(t.id||''))||stand.find(x=>String(x?.team?.name||'').toLowerCase()===String(t.name||name).toLowerCase())||{};
+ box.replaceChildren();const hero=text(box,'div','','mk901-team');badge(hero,t.logo||t.badge,t.name||name);const title=text(hero,'div','');text(title,'h4',t.name||name);text(title,'small',t.country||'Football club');
+ const metrics=text(box,'div','','mk901-metrics');const played=Number(row?.all?.played??stats?.fixtures?.played?.total);const won=Number(row?.all?.win??stats?.fixtures?.wins?.total);const pct=Number.isFinite(played)&&played>0&&Number.isFinite(won)?(won/played*100).toFixed(1)+'%':'—';
+ metric(metrics,'League position',row.rank??'—');metric(metrics,'Win rate',pct);metric(metrics,'Matches played',Number.isFinite(played)?played:'—');metric(metrics,'Points',row.points??'—');metric(metrics,'Goal difference',row.goalsDiff??'—');metric(metrics,'Current form',Array.isArray(d?.form)?d.form.join(' '):(row.form||'—'));
+ text(box,'h4','Last played matches');resultsRows(box,d?.past10||[]);
+ const actions=text(box,'div','','mk901-actions');const profile=document.createElement('a');profile.textContent='Full team profile, squad and injuries';const ref=String(teamId(name));profile.href='/teams/'+encodeURIComponent(ref);actions.append(profile);
+ text(box,'p','H2H requires a selected opponent or match. Open a match profile to view verified head-to-head data.','mk901-note');
+ }catch(e){if(ticket!==sequence)return;box.replaceChildren();text(box,'p','Team details unavailable from the existing profile API. No statistics have been invented.','mk901-note');}}
+function installTeam(){const fav=get('ksnV663MyKasi');if(!fav||get('mk901TeamDetails'))return;const detail=text(fav,'section','','mk901-detail');detail.id='mk901TeamDetails';text(detail,'p','Select a saved team to see its football statistics.');const list=get('favouritesList');const area=get('ksnMkDashboard')||fav;area.addEventListener('click',event=>{const tr=event.target.closest('tr');if(!tr||!tr.closest('.ksn-mk-table'))return;if(event.target.closest('button'))return;const name=tr.querySelector('td')?.textContent?.trim();const saved=asList(data(FAV));if(name&&saved.some(x=>String(x).toLowerCase()===name.toLowerCase()))showTeam(name)});
+ const controls=text(fav,'div','','mk901-actions');const select=document.createElement('select');select.setAttribute('aria-label','Select followed team for details');const button=document.createElement('button');button.type='button';button.textContent='View team statistics';button.addEventListener('click',()=>{if(select.value)showTeam(select.value)});const remove=document.createElement('button');remove.type='button';remove.textContent='Remove selected team';remove.addEventListener('click',()=>{if(select.value&&typeof window.removeFavourite==='function'){window.removeFavourite(select.value);detail.replaceChildren();text(detail,'p','Team removed.');update()}});controls.append(select,button,remove);fav.insertBefore(controls,detail);
+ function update(){const names=asList(data(FAV));const before=select.value;select.replaceChildren();const opt=document.createElement('option');opt.value='';opt.textContent='Select one of your followed teams';select.append(opt);names.forEach(name=>{const o=document.createElement('option');o.value=String(name);o.textContent=String(name);select.append(o)});if(names.includes(before))select.value=before;button.disabled=!select.value;remove.disabled=!select.value}select.addEventListener('change',updateButtons);function updateButtons(){button.disabled=!select.value;remove.disabled=!select.value}update();const orig=get('favouritesList');if(orig)new MutationObserver(update).observe(orig,{childList:true,subtree:true});}
+async function loadFixtures(){const select=get('ksnV663FixtureSelect');if(!select)return;const refresh=get('ksnV663FixtureRefresh');if(refresh)refresh.disabled=true;try{const response=await fetch(API,{credentials:'omit',cache:'no-store'});if(!response.ok)throw new Error('Feed '+response.status);const payload=await response.json();const now=Date.now();const rows=asList(payload?.matches).filter(x=>Number.isFinite(Date.parse(x?.kickoff))&&Date.parse(x.kickoff)>now&&String(x?.fixtureId||'').match(/^[1-9]\d*$/)&&x.home&&x.away).map(x=>({sport:'football',id:String(x.fixtureId),home:String(x.home),away:String(x.away),date:String(x.kickoff),providerStatusShort:'NS',homeLogo:x.homeLogo,awayLogo:x.awayLogo}));window.KSN_V663_SUPPORTER_FIXTURES=rows;if(typeof window.ksnV663RefreshSupporterFixtures==='function')window.ksnV663RefreshSupporterFixtures();const status=get('mk901FixtureStatus');if(status)status.textContent=rows.length?rows.length+' verified upcoming fixture(s) available.':'No future verified fixtures are available right now.';}catch(_){const status=get('mk901FixtureStatus');if(status)status.textContent='Unable to load the verified fixture feed.'}finally{if(refresh)refresh.disabled=false}}
+function installPredictions(){const box=get('ksnV663SupporterBallot');if(!box||get('mk901FixtureStatus'))return;const row=text(box,'div','','mk901-actions');const add=document.createElement('button');add.type='button';add.textContent='Add selected fixture';const remove=document.createElement('button');remove.type='button';remove.textContent='Remove fixture';const status=text(box,'p','Loading verified upcoming matches…','mk901-note');status.id='mk901FixtureStatus';row.append(add,remove);const match=get('ksnV663BallotMatch');if(match)box.insertBefore(row,match);else box.append(row);const sel=get('ksnV663FixtureSelect');add.addEventListener('click',()=>{const selected=asList(window.KSN_V663_SUPPORTER_FIXTURES).find(x=>x.id===sel?.value);if(selected&&typeof window.ksnV663LoadSupporterFixture==='function'){window.ksnV663LoadSupporterFixture(selected);status.textContent='Fixture selected for your personal prediction.'}else status.textContent='Select an upcoming fixture first.'});remove.addEventListener('click',()=>{if(sel)sel.value='';if(typeof window.ksnV663LoadSupporterFixture==='function')window.ksnV663LoadSupporterFixture(null);status.textContent='Fixture removed from the current selection. Saved predictions are unchanged.'});const refresh=get('ksnV663FixtureRefresh');if(refresh)refresh.addEventListener('click',()=>{setTimeout(loadFixtures,0)});loadFixtures()}
+function init(){installTeam();installPredictions();}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
+})();
+</script>
 </body>
 </html>
 
