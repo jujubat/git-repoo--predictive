@@ -9852,6 +9852,47 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
         try: league_hint=int(((((snaps.get(lastgood_key) or {}).get("data")) or {}).get("league") or {}).get("id") or 0) or None
         except (TypeError,ValueError): league_hint=None
     if not league_hint and SPORTS_DB_ENABLED: league_hint=_team_league_hint_db(team,current)
+    # V663 Step 861C: recover verified current-season league identity.
+    # Never infer historical league membership from this 2026 mapping.
+    if not league_hint and int(current) == 2026:
+        try:
+            _index_snap = _dashboard_snapshot_get(
+                "ksn_fantasy_team_index_v663:2026"
+            ) or {}
+            _index_data = _index_snap.get("data") or {}
+            _index_teams = _index_data.get("teams") or {}
+            _entry = _index_teams.get(str(int(team))) or {}
+            _candidate = int(_entry.get("leagueId") or 0)
+
+            if (
+                len(_index_teams) == 96
+                and int(_entry.get("teamId") or 0) == int(team)
+                and int(_entry.get("season") or 0) == 2026
+                and _candidate in (39, 140, 135, 78, 61)
+            ):
+                _snapshot = _dashboard_snapshot_get(
+                    f"canonical_standings:{_candidate}:2026"
+                ) or {}
+                _rows = (
+                    (_snapshot.get("data") or {})
+                    .get("standings") or []
+                )
+
+                if any(
+                    isinstance(_row, dict)
+                    and int(
+                        ((_row.get("team") or {}).get("id") or 0)
+                    ) == int(team)
+                    for _row in _rows
+                ):
+                    league_hint = _candidate
+
+        except Exception as _exc:
+            log.warning(
+                "V663 history league lookup skipped team=%s: %s",
+                team, type(_exc).__name__
+            )
+
     # V663 Step 740: verified Arsenal ID 42 is in Premier League ID 39.
     # Fail closed for all other teams; do not create synthetic season rows.
     if not league_hint and team == 42:
