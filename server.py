@@ -5425,18 +5425,18 @@ async def google_sitemap_xml():
         except Exception as exc:
             log.warning("Google sitemap registry expansion failed: %s", exc)
     if not rows:
-        rows = [{"path": p, "indexable": True} for p in ("/","/weekend","/football","/rugby","/cricket","/tennis","/about","/contact","/privacy","/terms")]
+        rows = [{"path": p, "indexable": True} for p in ("/","/weekend","/football","/tennis","/about","/contact","/privacy","/terms")]
 
     from xml.sax.saxutils import escape as _xml_safe
     seen = set()
     body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     for row in rows:
         path = str(row.get("path") or "").strip()
-        # V663 STEP 073: football-only sitemap filtering
-        if _ksn_v663_football_only_publication_active():
-            normalized_path = path.lower().rstrip("/") or "/"
-            if _ksn_v663_disabled_sport_path(normalized_path):
-                continue
+        # V663 Step 914E: Exclude Cricket and Rugby from public sitemap.
+        # Preserve Football, Tennis and every other valid URL.
+        normalized_path = path.lower().rstrip("/") or "/"
+        if _ksn_v663_disabled_sport_path(normalized_path):
+            continue
         if not path or not path.startswith("/") or path in seen or not row.get("indexable", True):
             continue
         if not _ksn_v663_seo_content_available(
@@ -21253,7 +21253,15 @@ def _ksn_v663_filter_bootstrap_payload(payload):
 def _v434_build_bootstrap()->dict:
     """Disk-only shared LKG payload (sync, SQLite reads). Never calls external providers."""
     def data(key):
-        snap=_dashboard_snapshot_get(key)
+        # V663 Step 914J: a failed snapshot must not fail all widgets.
+        try:
+            snap=_dashboard_snapshot_get(key)
+        except Exception as exc:
+            log.warning(
+                "Bootstrap snapshot unavailable for %s: %s",
+                key, type(exc).__name__
+            )
+            return None
         if not isinstance(snap,dict): return None
         payload=snap.get("data") if isinstance(snap.get("data"),dict) else None
         if payload is None and key=="news_verified_all":
@@ -21262,23 +21270,44 @@ def _v434_build_bootstrap()->dict:
             payload=_ksn_v663_filter_bootstrap_payload(payload)
         return {"payload":payload,"updatedAt":snap.get("updated_at")} if payload else None
     # V663 STEP 087B: restrict staging bootstrap before snapshot reads
-    keys = _V434_BOOTSTRAP_KEYS
-    if _ksn_v663_staging_football_only():
-        keys = {
-            name: key
-            for name, key in keys.items()
-            if not name.lower().startswith(("rugby", "cricket"))
-        }
+    # V663 Step 914J: remove only Rugby/Cricket widgets.
+    # Preserve Football, Tennis and all other approved sports.
+    keys = {
+        name: key
+        for name, key in _V434_BOOTSTRAP_KEYS.items()
+        if not name.lower().startswith(("rugby", "cricket"))
+    }
     widgets={name:data(key) for name,key in keys.items()}
     widgets={k:v for k,v in widgets.items() if v and v.get("payload")}
     return {"version":"v407","cacheFirst":True,"widgets":widgets,"generatedAt":datetime.now(timezone.utc).isoformat()}
 
 @app.get("/shared/bootstrap")
 async def shared_bootstrap_v407():
-    """One fast disk-only shared LKG payload for first paint; never calls external providers."""
-    body=await asyncio.to_thread(_v434_build_bootstrap)   # v434: SQLite reads off the event loop
-    return JSONResponse(body,
-      headers={"Cache-Control":"public, max-age=30, s-maxage=120, stale-while-revalidate=900, stale-if-error=86400", "X-KSN-Shared-Cache":"BOOTSTRAP-LKG"})
+    """Disk-only shared last-known-good data, with an isolated failure response."""
+    try:
+        body = await asyncio.to_thread(_v434_build_bootstrap)
+        return JSONResponse(
+            body,
+            headers={
+                "Cache-Control": "public, max-age=30, s-maxage=120, stale-while-revalidate=900, stale-if-error=86400",
+                "X-KSN-Shared-Cache": "BOOTSTRAP-LKG",
+            },
+        )
+    except Exception:
+        log.exception("V663 Step 914L: shared bootstrap failed")
+        return JSONResponse(
+            {
+                "version": "v407",
+                "cacheFirst": True,
+                "widgets": {},
+                "degraded": True,
+                "generatedAt": datetime.now(timezone.utc).isoformat(),
+            },
+            headers={
+                "Cache-Control": "no-store",
+                "X-KSN-Shared-Cache": "DEGRADED",
+            },
+        )
 
 # v434: inline the bootstrap into the home HTML so a first-time visitor (no localStorage) paints
 # from the HTML response itself, with no extra /shared/bootstrap round trip.
