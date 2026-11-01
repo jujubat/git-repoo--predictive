@@ -18693,151 +18693,126 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 #platform .mk902-picker .mk902-message{grid-column:1/-1;color:#bed0e0;font-size:12px;margin:0}
 @media(max-width:650px){#platform .mk902-picker{grid-template-columns:1fr}}
 </style>
-<script id="ksn-v663-league-first-js">
+<script id="ksn-v663-checkbox-league-first-js">
 (function(){'use strict';
-const leagues=[
- ['39','Premier League (England)'],
- ['140','La Liga (Spain)'],
- ['78','Bundesliga (Germany)'],
- ['135','Serie A (Italy)'],
- ['61','Ligue 1 (France)'],
- ['2','Champions League'],
- ['3','Europa League'],
- ['88','Eredivisie'],
- ['94','Primeira Liga'],
- ['179','Scottish Premiership'],
- ['253','MLS'],
- ['144','Belgian Pro League'],
- ['203','Turkish Super League'],
- ['307','Saudi Pro League'],
- ['71','Brazilian Serie A'],
- ['128','Argentine Primera Division'],
- ['288','South African Premiership']
-];
-function node(tag,txt){const e=document.createElement(tag);if(txt!==undefined)e.textContent=txt;return e;}
-function boot(){
- const input=document.getElementById('favTeam');const fav=document.getElementById('ksnV663MyKasi');
- if(!input||!fav||document.getElementById('mk902League'))return;
- const wrap=node('div');wrap.className='mk902-picker';
- const lgroup=node('div'),tgroup=node('div');
- const ll=node('label','1. Select league'),tl=node('label','2. Select favourite team');
- const league=node('select'),team=node('select');league.id='mk902League';team.id='mk902Team';ll.htmlFor=league.id;tl.htmlFor=team.id;
- league.append(new Option('Choose a football league',''));for(const [id,name] of leagues)league.append(new Option(name,id));
- team.append(new Option('Select a league first',''));team.disabled=true;
- lgroup.append(ll,league);tgroup.append(tl,team);
-  team.multiple=true;
-  team.size=7;
-  team.setAttribute('aria-label','Select multiple favourite clubs');
-
-  const addSelected=node('button','Add selected favourites');
-  addSelected.type='button';
-  addSelected.disabled=true;
-  addSelected.style.cssText='margin-top:10px;padding:9px 12px';
-  tgroup.append(addSelected);
-
-  team.addEventListener('change',()=>{
-    addSelected.disabled=!Array.from(team.selectedOptions)
-      .some(option=>option.value);
-  });
-
-  addSelected.addEventListener('click',async()=>{
-    const names=Array.from(team.selectedOptions)
-      .map(option=>option.value).filter(Boolean);
-
-    if(!names.length)return;
-
-    addSelected.disabled=true;
-    let processed=0,failed=0;
-
-    for(const name of names){
-      try{
-        const response=await fetch(
-          '/my-kasi/teams/search?q='+encodeURIComponent(name),
-          {credentials:'omit',cache:'no-store'}
-        );
-
-        if(!response.ok)throw Error('Search failed');
-
-        const payload=await response.json();
-
-        const verified=(Array.isArray(payload.teams)?payload.teams:[])
-          .find(row=>
-            String(row.name||'').trim().toLowerCase()===
-              name.toLowerCase() &&
-            typeof row.publicRef==='string' &&
-            row.publicRef.trim()
-          );
-
-        if(!verified)throw Error('Unverified team');
-
-        if(typeof window.ksnV663SelectVerifiedTeam!=='function' ||
-           typeof window.addFavourite!=='function')
-          throw Error('Save handler unavailable');
-
-        input.value=verified.name;
-        window.ksnV663SelectVerifiedTeam(verified);
-        if(window.addFavourite()!==true)
-          throw new Error('Favourite was not saved');
-
-        processed++;
-      }catch(error){failed++;}
+  // V663 Step 909F: verified league and team checkboxes; existing favourites are untouched.
+  const leagues=[
+    ['39','Premier League (England)'],['140','La Liga (Spain)'],
+    ['78','Bundesliga (Germany)'],['135','Serie A (Italy)'],
+    ['61','Ligue 1 (France)'],['2','UEFA Champions League'],
+    ['3','UEFA Europa League'],['88','Eredivisie (Netherlands)'],
+    ['94','Primeira Liga (Portugal)'],['179','Scottish Premiership'],
+    ['253','MLS (USA / Canada)'],['144','Belgian Pro League'],
+    ['203','Turkish Super League'],['307','Saudi Pro League'],
+    ['71','Brazilian Serie A'],['128','Argentine Primera Division'],
+    ['288','South African Premiership']
+  ];
+  const el=(tag,txt)=>{const n=document.createElement(tag);if(txt!==undefined)n.textContent=txt;return n;};
+  const validId=x=>/^[1-9][0-9]*$/.test(String(x||''));
+  function boot(){
+    const input=document.getElementById('favTeam'),fav=document.getElementById('ksnV663MyKasi');
+    if(!input||!fav||document.getElementById('mk909fCheckboxPicker'))return;
+    const wrap=el('section');wrap.id='mk909fCheckboxPicker';wrap.className='mk902-picker';
+    wrap.style.gridTemplateColumns='minmax(0,1fr) minmax(0,1fr)';
+    const left=el('div'),right=el('div');
+    left.append(el('h4','1. Select leagues'));
+    const leagueSearch=el('input');leagueSearch.type='search';leagueSearch.placeholder='Search leagues';leagueSearch.setAttribute('aria-label','Search leagues');left.append(leagueSearch);
+    const leagueList=el('div');leagueList.style.cssText='max-height:270px;overflow:auto;display:grid;gap:7px;padding:9px 0';left.append(leagueList);
+    right.append(el('h4','2. Select favourite teams'));
+    const clubSearch=el('input');clubSearch.type='search';clubSearch.placeholder='Search available teams';clubSearch.setAttribute('aria-label','Search teams');right.append(clubSearch);
+    const controls=el('div');controls.style.cssText='display:flex;gap:8px;flex-wrap:wrap;margin:8px 0';
+    const all=el('button','Select all displayed'),clear=el('button','Clear team ticks');
+    all.type=clear.type='button';controls.append(all,clear);right.append(controls);
+    const clubList=el('div');clubList.style.cssText='max-height:270px;overflow:auto;display:grid;gap:7px;padding:9px 0';right.append(clubList);
+    const status=el('p','Tick one or more leagues to load verified clubs.');status.id='mk902PickerStatus';status.className='mk902-message';status.setAttribute('role','status');
+    const save=el('button','Add selected favourites');save.type='button';save.disabled=true;
+    save.style.cssText='padding:10px 14px;justify-self:start';
+    wrap.append(left,right,status,save);
+    const anchor=input.closest('.fc-card')||fav;
+    if(anchor===fav)fav.insertBefore(wrap,fav.firstChild);
+    else {const parent=input.parentElement;if(parent&&parent.parentElement)parent.parentElement.insertBefore(wrap,parent);else fav.insertBefore(wrap,fav.firstChild);}
+    const selectedLeagues=new Set(),selectedTeams=new Map(),loaded=new Map();
+    let generation=0,working=false;
+    const key=(leagueId,teamId)=>leagueId+':'+teamId;
+    function updateSave(){save.disabled=working||selectedTeams.size===0;save.textContent='Add selected favourites ('+selectedTeams.size+')';}
+    function paintLeagues(){
+      leagueList.replaceChildren();const q=leagueSearch.value.trim().toLowerCase();
+      for(const [id,name] of leagues){if(!name.toLowerCase().includes(q))continue;
+        const label=el('label');label.style.cssText='display:flex;align-items:center;gap:8px;font-weight:400';
+        const cb=el('input');cb.type='checkbox';cb.checked=selectedLeagues.has(id);
+        cb.addEventListener('change',()=>{if(cb.checked)selectedLeagues.add(id);else{selectedLeagues.delete(id);for(const [k,t] of selectedTeams){if(t.leagueId===id)selectedTeams.delete(k);}}refreshClubs();});
+        label.append(cb,el('span',name));leagueList.append(label);
+      }
     }
-
-    status.textContent=processed+' team selections processed.'+
-      (failed?' '+failed+' could not be verified.':'');
-
-    addSelected.disabled=false;
-  });
-
- const status=node('p','Choose a league to load its verified football clubs.');status.className='mk902-message';status.id='mk902PickerStatus';status.setAttribute('role','status');
- wrap.append(lgroup,tgroup,status);
- // Insert ahead of the existing favourite input without altering the original handlers.
- const anchor=input.closest('.fc-card')||fav;
- if(anchor===fav)fav.insertBefore(wrap,fav.firstChild);
- else { const parent=input.parentElement; if(parent&&parent.parentElement)parent.parentElement.insertBefore(wrap,parent);else fav.insertBefore(wrap,fav.firstChild); }
- let version=0;
- league.addEventListener('change',async()=>{
-  const ticket=++version;team.disabled=true;team.replaceChildren(new Option('Loading teams…',''));input.value='';
-  if(typeof window.ksnV663ClearVerifiedSelection==='function')window.ksnV663ClearVerifiedSelection();
-  if(!league.value){team.replaceChildren(new Option('Select a league first',''));status.textContent='Choose a league first.';return;}
-  status.textContent='Loading verified clubs from existing standings…';
-  try{
-   const res=await fetch('/standings/2026-27?league='+encodeURIComponent(league.value),{credentials:'same-origin'});
-   if(!res.ok)throw new Error('Standings HTTP '+res.status);
-   const payload=await res.json();if(ticket!==version)return;
-   const candidates=(Array.isArray(payload.leagues)?payload.leagues:[]).filter(x=>String(x.leagueId||x.league?.id||league.value)===league.value);
-   const table=candidates.flatMap(x=>Array.isArray(x.table)?x.table:[]);
-   // Standings API uses flat rows: {team:'Arsenal', teamId:42, logo:'...'}.
-   // Accept legacy nested team records as a backward-compatible fallback.
-   const teams=table.map(x=>({
-    name:typeof x?.team==='string'?x.team:x?.team?.name,
-    id:x?.teamId??x?.team?.id,
-    logo:x?.logo??x?.team?.logo
-   })).filter(x=>typeof x.name==='string'&&x.name.trim()&&Number(x.id)>0);
-   team.replaceChildren(new Option('Choose a team',''));
-   const seen=new Set();
-   for(const t of teams){const name=t.name.trim();if(seen.has(name.toLowerCase()))continue;seen.add(name.toLowerCase());const opt=new Option(name,name);opt.dataset.teamId=String(t.id);if(t.logo)opt.dataset.logo=String(t.logo);team.append(opt);}
-   team.disabled=seen.size===0;status.textContent=seen.size?seen.size+' league teams available. Choose a club, then click Add favourite.':'No verified league standings available. Use existing team search below.';
-  }catch(e){if(ticket!==version)return;team.replaceChildren(new Option('Teams unavailable',''));status.textContent='League teams unavailable: '+e.message+'. Existing manual search remains available.';}
- });
- team.addEventListener('change',async()=>{
-  if(team.multiple)return;
-   const name=team.value;const ticket=version;
-  if(!name){input.value='';return;}
-  status.textContent='Resolving '+name+' against verified team identities…';
-  try{
-   const res=await fetch('/my-kasi/teams/search?q='+encodeURIComponent(name),{credentials:'omit'});
-   if(!res.ok)throw new Error('Team search HTTP '+res.status);
-   const payload=await res.json();if(ticket!==version||team.value!==name)return;
-   const exact=(Array.isArray(payload.teams)?payload.teams:[]).find(x=>String(x.name||'').trim().toLowerCase()===name.toLowerCase()&&typeof x.publicRef==='string'&&x.publicRef);
-   if(!exact){status.textContent='This club has no verified identity in the current cache. Use verified search below; do not add an unverified team.';input.value='';return;}
-   input.value=exact.name;
-   if(typeof window.ksnV663SelectVerifiedTeam==='function')window.ksnV663SelectVerifiedTeam(exact);
-   status.textContent='Verified '+exact.name+'. Click the existing Add favourite button.';
-  }catch(e){status.textContent='Could not verify the selected club: '+e.message;input.value='';}
- });
-}
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+    function paintClubs(){
+      clubList.replaceChildren();const q=clubSearch.value.trim().toLowerCase();let visible=0;
+      for(const id of selectedLeagues){for(const team of loaded.get(id)||[]){
+        if(!team.name.toLowerCase().includes(q))continue;visible++;
+        const k=key(id,team.id),label=el('label');label.style.cssText='display:flex;align-items:center;gap:8px;font-weight:400';
+        const cb=el('input');cb.type='checkbox';cb.checked=selectedTeams.has(k);
+        cb.addEventListener('change',()=>{if(cb.checked)selectedTeams.set(k,{...team,leagueId:id});else selectedTeams.delete(k);updateSave();});
+        label.append(cb,el('span',team.name));clubList.append(label);
+      }}
+      if(!visible)clubList.append(el('small',selectedLeagues.size?'No matching verified clubs available.':'Select leagues first.'));
+      updateSave();
+    }
+    async function refreshClubs(){
+      const ticket=++generation;paintClubs();
+      if(!selectedLeagues.size){status.textContent='Tick one or more leagues.';return;}
+      const ids=[...selectedLeagues].filter(id=>!loaded.has(id));
+      status.textContent='Loading clubs from verified standings…';
+      const results=await Promise.all(ids.map(async id=>{
+        try{
+          const res=await fetch('/standings/2026-27?league='+encodeURIComponent(id),{credentials:'same-origin'});
+          if(!res.ok)throw new Error('HTTP '+res.status);
+          const payload=await res.json();const candidates=(Array.isArray(payload.leagues)?payload.leagues:[])
+            .filter(x=>String(x.leagueId||x.league?.id||id)===id);
+          const records=candidates.flatMap(x=>Array.isArray(x.table)?x.table:[]),seen=new Set();
+          const teams=records.map(x=>({name:typeof x?.team==='string'?x.team:x?.team?.name,id:x?.teamId??x?.team?.id}))
+            .filter(x=>typeof x.name==='string'&&x.name.trim()&&validId(x.id))
+            .filter(x=>{const k=String(x.id);if(seen.has(k))return false;seen.add(k);return true;});
+          return {id,teams};
+        }catch(e){return {id,teams:[],error:String(e)};}
+      }));
+      if(ticket!==generation)return;
+      for(const result of results)loaded.set(result.id,result.teams);
+      const failures=results.filter(x=>x.error).length;
+      const count=[...selectedLeagues].reduce((n,id)=>n+(loaded.get(id)||[]).length,0);
+      status.textContent=count+' verified league clubs available.'+(failures?' '+failures+' leagues unavailable; no clubs invented.':'');
+      paintClubs();
+    }
+    leagueSearch.addEventListener('input',paintLeagues);clubSearch.addEventListener('input',paintClubs);
+    all.addEventListener('click',()=>{if(working)return;for(const id of selectedLeagues){for(const team of loaded.get(id)||[]){if(team.name.toLowerCase().includes(clubSearch.value.trim().toLowerCase()))selectedTeams.set(key(id,team.id),{...team,leagueId:id});}}paintClubs();});
+    clear.addEventListener('click',()=>{if(working)return;selectedTeams.clear();paintClubs();});
+    save.addEventListener('click',async()=>{
+      if(working||!selectedTeams.size)return;working=true;updateSave();
+      let added=0,already=0,failed=0;
+      const picked=[...selectedTeams.entries()];
+      for(const [k,team] of picked){
+        try{
+          const r=await fetch('/my-kasi/teams/search?q='+encodeURIComponent(team.name),{credentials:'omit',cache:'no-store'});
+          if(!r.ok)throw new Error('Search HTTP '+r.status);
+          const payload=await r.json();const verified=(Array.isArray(payload.teams)?payload.teams:[])
+            .find(x=>String(x.name||'').trim().toLowerCase()===team.name.trim().toLowerCase()&&String(x.id||x.teamId||'')===String(team.id)&&typeof x.publicRef==='string'&&x.publicRef.trim());
+          // Some verified search results expose publicRef but not provider ID.
+          const exact=verified||(Array.isArray(payload.teams)?payload.teams:[])
+            .find(x=>String(x.name||'').trim().toLowerCase()===team.name.trim().toLowerCase()&&typeof x.publicRef==='string'&&x.publicRef.trim());
+          if(!exact)throw new Error('Verified identity missing');
+          if(typeof window.ksnV663SelectVerifiedTeam!=='function'||typeof window.addFavourite!=='function')throw new Error('Save handler missing');
+          input.value=exact.name;window.ksnV663SelectVerifiedTeam(exact);
+          if(window.addFavourite()===true){added++;selectedTeams.delete(k);}
+          else { // Existing favourites are not failures; do not alter browser storage.
+            const list=document.getElementById('favouritesList');
+            if(list&&list.textContent.toLowerCase().includes(exact.name.toLowerCase())){already++;selectedTeams.delete(k);}else failed++;
+          }
+        }catch(_){failed++;}
+      }
+      working=false;status.textContent=added+' added · '+already+' already followed · '+failed+' not saved.';
+      paintClubs();
+    });
+    paintLeagues();paintClubs();
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
 </script>
 
@@ -18904,26 +18879,53 @@ function boot(){const card=$('ksnV663MyKasi'), list=$('favouritesList');if(!card
   const validRecentResult=x=>{
     if(!x||typeof x!=='object')return false;
     const date=fixtureDate(x);
-    const maxAge=365*24*60*60*1000;
-    if(!Number.isFinite(date)||date>now||date<now-maxAge)return false;
-    if(!['FT','AET','PEN'].includes(
-      String(x.status||'').toUpperCase()))return false;
-
-    const fixtureId=x.providerFixtureId||x.fixtureId||x.fixture?.id||x.id;
-    if(!/^[1-9][0-9]*$/.test(String(fixtureId||'')))return false;
-
-    const homeId=x.homeId??x.teams?.home?.id??x.homeTeam?.id;
-    const awayId=x.awayId??x.teams?.away?.id??x.awayTeam?.id;
-    if(String(homeId||'')!==id&&String(awayId||'')!==id)return false;
-
-    const homeScore=score(x,'home'),awayScore=score(x,'away');
-    if(homeScore===null||homeScore===undefined||
-       awayScore===null||awayScore===undefined)return false;
-    if(!/^\d+$/.test(String(homeScore))||
-       !/^\d+$/.test(String(awayScore)))return false;
-    return true;
+    if(!Number.isFinite(date)||date>Date.now())return false;
+    const status=String(x.status||x.fixture?.status?.short||'').toUpperCase();
+    if(!['FT','AET','PEN'].includes(status))return false;
+    const home=score(x,'home'),away=score(x,'away');
+    if(!/^\\d+$/.test(String(home))||!/^\\d+$/.test(String(away)))return false;
+    const homeId=String(x.homeId??x.teams?.home?.id??'');
+    const awayId=String(x.awayId??x.teams?.away?.id??'');
+    if(homeId&&awayId)return homeId===id||awayId===id;
+    return !!(teamText(x,'home')||teamText(x,'away'));
   };
-  const past=uniqueSorted(d.past10,false,validRecentResult);const future=uniqueSorted(d.future,true,x=>fixtureDate(x)>now&&['NS','TBD',''].includes(String(x.status||'').toUpperCase()));matchTable(detail,'Last 3 completed matches',past,true,id);matchTable(detail,'Next 3 scheduled matches',future,false,id);
+
+  const profilePast=(Array.isArray(d.past10)?d.past10:[])
+    .filter(validRecentResult)
+    .sort((a,b)=>fixtureDate(b)-fixtureDate(a));
+
+  const providerId=x=>String(
+    x.providerFixtureId||x.fixtureId||x.fixture?.id||x.id||''
+  );
+
+  const sameMatch=(a,b)=>{
+    const ai=providerId(a),bi=providerId(b);
+    if(ai&&bi&&ai===bi)return true;
+    const ah=String(a.homeId??a.teams?.home?.id??teamText(a,'home')).toLowerCase();
+    const bh=String(b.homeId??b.teams?.home?.id??teamText(b,'home')).toLowerCase();
+    const aa=String(a.awayId??a.teams?.away?.id??teamText(a,'away')).toLowerCase();
+    const ba=String(b.awayId??b.teams?.away?.id??teamText(b,'away')).toLowerCase();
+    return ah&&aa&&ah===bh&&aa===ba&&
+      score(a,'home')===score(b,'home')&&
+      score(a,'away')===score(b,'away')&&
+      Math.abs(fixtureDate(a)-fixtureDate(b))<=3*60*60*1000;
+  };
+
+  const deduped=[];
+  for(const match of profilePast){
+    const index=deduped.findIndex(x=>sameMatch(x,match));
+    if(index<0){deduped.push(match);continue;}
+    const existing=deduped[index];
+    if(!/^[1-9]\\d*$/.test(providerId(existing))&&
+       /^[1-9]\\d*$/.test(providerId(match))){
+      deduped[index]=match;
+    }
+  }
+
+  const past=deduped.sort(
+    (a,b)=>fixtureDate(b)-fixtureDate(a)
+  ).slice(0,3);
+  const future=uniqueSorted(d.future,true,x=>fixtureDate(x)>now&&['NS','TBD',''].includes(String(x.status||'').toUpperCase()));matchTable(detail,'Last 3 completed matches',past,true,id);matchTable(detail,'Next 3 scheduled matches',future,false,id);
  const full=el('a','Open complete Teams & Players profile','mk904-link');full.href='/teams/'+encodeURIComponent(String(identity(name)?.publicRef||id));detail.append(el('p'));detail.lastChild.append(full);
  }catch(err){if(ticket!==seq)return;detail.replaceChildren(el('p','Verified team profile unavailable: '+err.message,'mk904-subtle'))}}
  refresh();new MutationObserver(refresh).observe(list,{childList:true,subtree:true,characterData:true});
@@ -19010,6 +19012,27 @@ function init(){const label=get('ksnV663BallotMatch');if(label)new MutationObser
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
 </script>
+
+<script id="ksn-v663-step909d-voting-placement">
+(function(){
+  'use strict';
+  function mountVoting(){
+    const panel=document.getElementById('ksnMyKasiHomeVotes');
+    const target=document.getElementById('ksnV663MyKasi');
+    if(!panel||!target)return;
+    if(panel.parentElement!==target){
+      target.appendChild(panel);
+    }
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',mountVoting,{once:true});
+  }else{
+    mountVoting();
+  }
+  window.addEventListener('hashchange',mountVoting);
+})();
+</script>
+
 </body>
 </html>
 
