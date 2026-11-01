@@ -21279,6 +21279,61 @@ def _v434_build_bootstrap()->dict:
     }
     widgets={name:data(key) for name,key in keys.items()}
     widgets={k:v for k,v in widgets.items() if v and v.get("payload")}
+
+    # V663 Step 915D: compact only the first-paint finished snapshot.
+    # No mutation of the disk snapshot or the permanent results archive.
+    finished_widget = widgets.get("finished")
+    if isinstance(finished_widget, dict):
+        original_payload = finished_widget.get("payload")
+        if isinstance(original_payload, dict) and isinstance(original_payload.get("matches"), list):
+            original_matches = original_payload["matches"]
+
+            def finished_sort_key(match):
+                for field in ("archiveUtcKickoff", "datetime", "fixtureDate", "date"):
+                    value = match.get(field)
+                    if not value:
+                        continue
+                    try:
+                        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=timezone.utc)
+                        return parsed.astimezone(timezone.utc)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                return datetime.min.replace(tzinfo=timezone.utc)
+
+            eligible = [
+                match for match in original_matches
+                if isinstance(match, dict)
+                and str(match.get("sport") or "").strip().lower()
+                not in ("rugby", "cricket")
+            ]
+            eligible.sort(key=finished_sort_key, reverse=True)
+            recent = eligible[:50]
+
+            compact_payload = dict(original_payload)
+            compact_payload["matches"] = recent
+            compact_payload["count"] = len(recent)
+            compact_payload["sports"] = sorted({
+                str(match.get("sport")).strip().lower()
+                for match in recent if match.get("sport")
+            })
+            compact_payload["allValidResultsIncluded"] = (
+                len(recent) == len(original_matches)
+            )
+            compact_payload["bootstrapLimited"] = (
+                len(recent) < len(original_matches)
+            )
+            compact_payload["availableSnapshotCount"] = len(original_matches)
+
+            # Original full-snapshot aggregates do not describe this subset.
+            for field in ("sportsBreakdown", "footballRegionBreakdown", "africaPriority"):
+                compact_payload.pop(field, None)
+
+            widgets["finished"] = {
+                **finished_widget, "payload": compact_payload
+            }
+
     return {"version":"v407","cacheFirst":True,"widgets":widgets,"generatedAt":datetime.now(timezone.utc).isoformat()}
 
 @app.get("/shared/bootstrap")
