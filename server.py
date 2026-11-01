@@ -23949,9 +23949,140 @@ def _ksn_v663_seo_content_available(path: str, cached_data=None) -> bool:
                 return True
     return False
 
+def _ksn_v663_920e_match_sitemap_rows() -> list[dict]:
+    """Discover real completed football matches from the archive only.
+
+    No upstream calls, writes, archive mutation, or synthetic IDs.
+    Failed or unavailable archive access produces no match URLs.
+    """
+    import re as _re
+
+    if _ksn_v663_staging_football_only() or _ksn_staging_seo_test_mode():
+        return []
+
+    conn = None
+    cur = None
+    try:
+        conn, kind = _results_db()
+        cur = conn.cursor()
+
+        # Both supported backends permit this read-only query.
+        # The grouped subquery excludes ambiguous duplicate provider IDs.
+        # LIMIT caps rows examined by Python and XML growth.
+        cur.execute(
+            "SELECT a.ksn_key, a.provider_id, a.provider, "
+            "a.competition, a.kickoff, a.home_id, a.home_name, "
+            "a.away_id, a.away_name, a.home_score, "
+            "a.away_score, a.status "
+            "FROM ksn_results_archive a "
+            "WHERE a.sport='football' "
+            "AND a.provider_id IN ("
+            "SELECT provider_id FROM ksn_results_archive "
+            "WHERE sport='football' AND provider_id IS NOT NULL "
+            "GROUP BY provider_id HAVING COUNT(*)=1"
+            ") "
+            "ORDER BY a.kickoff DESC LIMIT 600"
+        )
+
+        rows = cur.fetchall()
+        output = []
+        seen = set()
+        numeric = _re.compile(r"[1-9][0-9]{0,11}")
+        completed = {"FT", "AET", "PEN", "FINISHED", "FULL TIME"}
+
+        for row in rows:
+            if len(row) != 12:
+                continue
+
+            (key, pid, provider, competition, kickoff,
+             home_id, home, away_id, away,
+             home_score, away_score, status) = row
+
+            pid = str(pid or "").strip()
+            if numeric.fullmatch(pid) is None:
+                continue
+
+            if str(key or "").strip() != "football:" + pid:
+                continue
+
+            if str(provider or "").strip().lower() not in (
+                "api-football", "api football"
+            ):
+                continue
+
+            if str(status or "").strip().upper() not in completed:
+                continue
+
+            if not all((competition, kickoff, home, away)):
+                continue
+
+            if any(
+                numeric.fullmatch(str(value or "")) is None
+                for value in (home_id, away_id)
+            ):
+                continue
+
+            home = str(home).strip()
+            away = str(away).strip()
+
+            if (
+                not home or not away or
+                home.casefold() == away.casefold() or
+                home.casefold() in {"unknown", "unknown team"} or
+                away.casefold() in {"unknown", "unknown team"}
+            ):
+                continue
+
+            try:
+                hs = int(home_score)
+                aws = int(away_score)
+                if (
+                    isinstance(home_score, bool)
+                    or isinstance(away_score, bool)
+                    or hs < 0 or aws < 0
+                ):
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                continue
+
+            if pid in seen:
+                continue
+
+            seen.add(pid)
+            output.append({
+                "path": f"/matches/{pid}/stats",
+                "pageType": "match",
+                "indexable": True,
+            })
+
+            if len(output) >= 150:
+                break
+
+        return output
+
+    except Exception as exc:
+        log.warning(
+            "Step 920E sitemap archive discovery unavailable: %s",
+            type(exc).__name__,
+        )
+        return []
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
+
+
 async def _seo_dynamic_rows() -> list[dict]:
-    """SEO registry plus durable canonical team URLs; never call upstream APIs."""
-    return list(_seo_registry_pages()) + _ksn_v483_sitemap_team_rows()
+    """SEO registry, verified teams and archived football matches.
+
+    Source data is local or durable; never call upstream providers.
+    """
+    return (
+        list(_seo_registry_pages())
+        + _ksn_v483_sitemap_team_rows()
+        + _ksn_v663_920e_match_sitemap_rows()
+    )
 
 @app.get("/seo/sitemap.xml", response_class=Response)
 @app.get("//sitemap.xml", response_class=Response)
