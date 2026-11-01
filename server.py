@@ -21284,6 +21284,7 @@ def _v434_build_bootstrap()->dict:
 @app.get("/shared/bootstrap")
 async def shared_bootstrap_v407():
     """Disk-only shared last-known-good data, with an isolated failure response."""
+    from fastapi.responses import JSONResponse
     try:
         body = await asyncio.to_thread(_v434_build_bootstrap)
         return JSONResponse(
