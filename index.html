@@ -1626,10 +1626,7 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
     const date=new Date(match.kickoff);
     wrapper.append(text(
       'div',
-      new Intl.DateTimeFormat('en-ZA',{
-        day:'numeric',month:'short',hour:'2-digit',
-        minute:'2-digit',timeZone:'Africa/Johannesburg'
-      }).format(date)+' SAST',
+      window.ksn907gLocalTime(date),
       'mk-kickoff'
     ));
     // V663 STEP 906J: AUTHENTICATED SUPPORTER VOTE CONTROLS
@@ -18846,6 +18843,37 @@ function move(){
   console.info('V663 905A: Three settings panels relocated to authenticated Admin tools');
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',move,{once:true});else move();
+})();
+</script>
+<!-- V663 STEP 907G: LOCAL MATCH DETAILS -->
+<style id="ksn907g-match-detail-styles">
+.ksn907g-details{margin:10px 0 14px;padding:12px;border:1px solid rgba(140,165,190,.36);border-radius:12px;background:rgba(120,150,180,.07)}
+.ksn907g-teams{display:flex;justify-content:space-around;align-items:center;gap:14px;text-align:center}
+.ksn907g-team{display:flex;flex:1;align-items:center;flex-direction:column;gap:6px;min-width:0;font-weight:700;font-size:13px}
+.ksn907g-team img{width:54px;height:54px;object-fit:contain}
+.ksn907g-placeholder{width:54px;height:54px;display:grid;place-items:center;font-size:28px;color:#a4b5c8}
+.ksn907g-vs{font-weight:800;color:#8fdcff}
+.ksn907g-meta{text-align:center;margin:8px 0 0;font-size:13px;line-height:1.6}
+.ksn907g-meta small{display:block;opacity:.8}
+</style>
+<script id="ksn907g-match-detail-js">
+(function(){'use strict';
+const get=id=>document.getElementById(id);
+const list=x=>Array.isArray(x)?x:[];
+function kickoffOf(x){const raw=x?.kickoff||x?.date||x?.fixture?.date;const ms=Date.parse(String(raw||''));return Number.isFinite(ms)?ms:null;}
+function localTime(d){const ms=d instanceof Date?d.getTime():kickoffOf(d);if(!Number.isFinite(ms))return 'Kickoff time to be confirmed';const x=new Date(ms);const parts=new Intl.DateTimeFormat('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h12'}).formatToParts(x);const val=k=>parts.find(v=>v.type===k)?.value||'';return val('day')+'/'+val('month')+'/'+val('year')+' – '+val('hour')+':'+val('minute')+' '+val('dayPeriod').toUpperCase();}
+window.ksn907gLocalTime=localTime;
+function countdown(ms){if(ms===null)return 'Kickoff time to be confirmed';const delta=ms-Date.now();if(delta<=0)return 'Kickoff reached';const min=Math.ceil(delta/60000);const days=Math.floor(min/1440),hours=Math.floor(min%1440/60),minutes=min%60;return 'Starts in '+(days?days+'d ':'')+(hours?hours+'h ':'')+minutes+'m';}
+function safeLogo(value){if(typeof value!=='string')return '';try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password?u.href:'';}catch(_){return '';}}
+function el(tag,cls,value){const n=document.createElement(tag);if(cls)n.className=cls;if(value!==undefined)n.textContent=String(value);return n;}
+function icon(container,src,alt){const url=safeLogo(src);if(url){const img=el('img');img.src=url;img.alt=alt+' badge or flag';img.loading='lazy';img.referrerPolicy='no-referrer';img.onerror=()=>{img.replaceWith(el('span','ksn907g-placeholder','♢'));};container.append(img);}else container.append(el('span','ksn907g-placeholder','♢'));}
+function matchDetails(row){const wrap=el('div','ksn907g-details');const teams=el('div','ksn907g-teams');const home=el('div','ksn907g-team'),away=el('div','ksn907g-team');icon(home,row.homeLogo||row.homeBadge||row.homeFlag,row.home);home.append(el('span','',row.home));icon(away,row.awayLogo||row.awayBadge||row.awayFlag,row.away);away.append(el('span','',row.away));teams.append(home,el('strong','ksn907g-vs','VS'),away);wrap.append(teams);const meta=el('div','ksn907g-meta');const league=String(row.leagueName||row.competition||row.league?.name||'').trim();if(league)meta.append(el('small','',league));meta.append(el('div','',localTime(row)));const cd=el('small','',countdown(kickoffOf(row)));cd.dataset.ksn907gCountdown='1';meta.append(cd);wrap.append(meta);return wrap;}
+function activeRows(){return list(window.KSN_V663_SUPPORTER_FIXTURES);}
+function renderPersonal(){const label=get('ksnV663BallotMatch');if(!label)return;const text=label.textContent.trim().toLowerCase();const row=activeRows().find(x=>(String(x.home)+' vs '+String(x.away)).toLowerCase()===text);const current=get('ksn907gPersonalDetails');if(!row){if(current)current.remove();return;}const same=current?.dataset?.fixtureId===String(row.id);if(same)return;const node=matchDetails(row);node.id='ksn907gPersonalDetails';node.dataset.fixtureId=String(row.id);label.insertAdjacentElement('afterend',node);if(current)current.remove();}
+function renderCommunity(){const target=get('ksnMyKasiVoteMatches');if(!target)return;const cards=target.querySelectorAll('.mk-match');for(const card of cards){const names=[...card.querySelectorAll('.mk-club span')].map(e=>e.textContent.trim());if(names.length<2)continue;const row=activeRows().find(x=>x.home===names[0]&&x.away===names[1]);if(!row)continue;const prior=card.querySelector('.ksn907g-details');if(prior?.dataset.fixtureId===String(row.id))continue;const detail=matchDetails(row);detail.dataset.fixtureId=String(row.id);const options=card.querySelector('.mk-options');if(options)card.insertBefore(detail,options);else card.append(detail);if(prior)prior.remove();const old=card.querySelector('.mk-kickoff');if(old)old.hidden=true;}}
+function refresh(){renderPersonal();renderCommunity();document.querySelectorAll('[data-ksn907g-countdown]').forEach(node=>{const row=activeRows().find(x=>String(x.id)===node.closest('.ksn907g-details')?.dataset.fixtureId);if(row)node.textContent=countdown(kickoffOf(row));});}
+function init(){const label=get('ksnV663BallotMatch');if(label)new MutationObserver(refresh).observe(label,{childList:true,characterData:true,subtree:true});const cards=get('ksnMyKasiVoteMatches');if(cards)new MutationObserver(refresh).observe(cards,{childList:true});refresh();setInterval(refresh,30000);}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
 </script>
 </body>
