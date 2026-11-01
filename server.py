@@ -23981,7 +23981,7 @@ def _ksn_v663_920e_match_sitemap_rows() -> list[dict]:
             "WHERE sport='football' AND provider_id IS NOT NULL "
             "GROUP BY provider_id HAVING COUNT(*)=1"
             ") "
-            "ORDER BY a.kickoff DESC LIMIT 600"
+            "ORDER BY a.kickoff DESC, a.provider_id DESC, a.ksn_key DESC LIMIT 600"
         )
 
         rows = cur.fetchall()
@@ -27848,7 +27848,7 @@ def _ksn_v657_match_document(fixture_id):
         '</nav></section>'
     )
 
-    title_marker = '<title>Match Centre | Kasi Sports News</title>'
+    title_marker = '<title>Match Centre | KasiScore</title>'
     robots_marker = '<meta name="robots" content="noindex,follow">'
     page_marker = '<div id="page">'
 
