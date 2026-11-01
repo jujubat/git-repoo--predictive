@@ -1173,6 +1173,17 @@ header .brand .logo.ksn-official-logo img { object-fit:contain!important; backgr
 
 
 
+
+<style id="ksn-v663-step913a">
+/* Single mobile navigation row: retain the primary top-level controls. */
+@media screen and (max-width: 767px) {
+  .kasiscore-primary-nav {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+}
+</style>
 </head>
 <body><!-- KSN v386 PRODUCTION STRUCTURE LOCK
 Public navigation: Home | Live | Fixtures | Predictions | Teams & Players Data | News | Search | Admin.
@@ -1636,6 +1647,8 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
     status.setAttribute('role','status');
     status.setAttribute('aria-live','polite');
     const totals=text('p','','mk-status');
+    totals.hidden=true;
+    totals.style.display='none';
     const choices=[['H',match.home.name],['D','Draw'],['A',match.away.name]];
     const buttons=new Map();
     let enabled=false, busy=false, selected=null;
@@ -1651,10 +1664,16 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
     }
     function showTotals(data){
       const counts=data?.counts,percentages=data?.percentages;
+      if(!selected){
+        totals.hidden=true;
+        totals.style.display='none';
+        return;
+      }
       if(!counts||!percentages)return;
       const total=Number(data.total);
       if(!Number.isFinite(total)||total<0)return;
       totals.replaceChildren();
+      totals.hidden=false;
       totals.style.display='block';
       totals.style.marginTop='12px';
 
@@ -18948,7 +18967,7 @@ function boot(){const card=$('ksnV663MyKasi'), list=$('favouritesList');if(!card
     const status=String(x.status||x.fixture?.status?.short||'').toUpperCase();
     if(!['FT','AET','PEN'].includes(status))return false;
     const home=score(x,'home'),away=score(x,'away');
-    if(!/^\\d+$/.test(String(home))||!/^\\d+$/.test(String(away)))return false;
+    if(!/^\d+$/.test(String(home))||!/^\d+$/.test(String(away)))return false;
     const homeId=String(x.homeId??x.teams?.home?.id??'');
     const awayId=String(x.awayId??x.teams?.away?.id??'');
     // V663 912L: Attribute each result to the selected team.
@@ -18991,8 +19010,8 @@ function boot(){const card=$('ksnV663MyKasi'), list=$('favouritesList');if(!card
     const index=deduped.findIndex(x=>sameMatch(x,match));
     if(index<0){deduped.push(match);continue;}
     const existing=deduped[index];
-    if(!/^[1-9]\\d*$/.test(providerId(existing))&&
-       /^[1-9]\\d*$/.test(providerId(match))){
+    if(!/^[1-9]\d*$/.test(providerId(existing))&&
+       /^[1-9]\d*$/.test(providerId(match))){
       deduped[index]=match;
     }
   }
