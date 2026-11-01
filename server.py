@@ -18471,7 +18471,15 @@ try{
  line(panels.match,'Away',m.away_name);
  line(panels.match,'Final score',el('score').textContent);
  line(panels.match,'Competition',m.competition);
- line(panels.match,'Round',m.round_name);
+  // V663 Step 923IK: competition-aware round formatting.
+  function matchRound(rawValue){
+   const raw=String(rawValue??'').trim();
+   const found=/^Regular Season\\s*-\\s*([1-9][0-9]*)$/i.exec(raw);
+   if(found)return {label:'Game Week',value:'GW-'+Number(found[1])};
+   return {label:'Round',value:raw||'Unavailable'};
+  }
+  const savedRound=matchRound(m.round_name);
+  line(panels.match,savedRound.label,savedRound.value);
  line(panels.match,'Venue',m.venue);
  line(panels.match,'Referee',m.referee);
  const unavailable={
@@ -18482,9 +18490,137 @@ try{
   h2h:'Verified previous meetings have not yet been integrated.',
   commentary:'Detailed recorded match events are unavailable.'
  };
- Object.entries(unavailable).forEach(([k,v])=>{
-  const p=text('p',v);p.className='muted';panels[k].append(p);
- });
+ // V663 STEP 923IK MATCH ENRICHMENT
+  function missing(name){
+   const node=text('p',unavailable[name]);
+   node.className='muted';
+   panels[name].append(node);
+  }
+  function matchField(label,value){
+   if(value==null||String(value).trim()==='')return;
+   const rows=[...panels.match.querySelectorAll('.row')];
+   const row=rows.find(x=>x.firstElementChild?.textContent===label);
+   if(row&&row.lastElementChild){
+    row.lastElementChild.textContent=String(value);
+   }else{
+    line(panels.match,label,value);
+   }
+  }
+
+  const fixtureId=String(
+   m.provider_id??(
+    String(m.ksn_key||key).startsWith('football:')
+     ?String(m.ksn_key||key).slice(9):''
+   )
+  ).trim();
+  const canonicalKey=String(m.ksn_key||key||'');
+  const verifiedId=/^[1-9][0-9]{0,11}$/.test(fixtureId)
+   &&canonicalKey==='football:'+fixtureId;
+
+  let enhanced=null;
+
+  if(verifiedId){
+   try{
+    const response=await fetch(
+     '/fixtures/'+encodeURIComponent(fixtureId)+'/enhanced',
+     {headers:{Accept:'application/json'},cache:'no-store'}
+    );
+    if(response.ok){
+     const candidate=await response.json();
+     const fixture=candidate.match?.fixture||{};
+     const teams=candidate.match?.teams||{};
+     const sameFixture=String(fixture.id||candidate.matchId||'')
+      ===fixtureId;
+     const sameTeams=(
+      String(teams.home?.id||'')===String(m.home_id||'')
+      &&String(teams.away?.id||'')===String(m.away_id||'')
+     );
+     if(sameFixture&&sameTeams)enhanced=candidate;
+    }
+   }catch(_){
+    // Archive remains usable if enrichment fails.
+   }
+  }
+
+  if(enhanced){
+   const data=enhanced.match||{};
+   const fixture=data.fixture||{};
+   const league=data.league||{};
+
+   const round=matchRound(league.round||m.round_name);
+   if(round.label===savedRound.label){
+    matchField(round.label,round.value);
+   }
+
+   matchField('Venue',fixture.venue?.name||m.venue);
+   matchField('Referee',fixture.referee||m.referee);
+   matchField('City',fixture.venue?.city);
+   matchField('Kickoff',fixture.date);
+
+   const lineups=Array.isArray(enhanced.teams)?enhanced.teams:[];
+   if(lineups.length){
+    lineups.forEach(t=>{
+     const team=t.team||{};
+     const heading=text('h3',(team.name||'Team')+' ? '+
+      (t.formation||'Formation unavailable'));
+     panels.lineups.append(heading);
+     if(t.coach?.name)line(panels.lineups,'Coach',t.coach.name);
+
+     const starting=Array.isArray(t.startXI)?t.startXI:[];
+     const subs=Array.isArray(t.substitutes)?t.substitutes:[];
+     const entries=starting.length||subs.length
+      ?[...starting.map(x=>['Starting XI',x]),
+        ...subs.map(x=>['Substitute',x])]
+      :(t.players||[]).map(x=>['Player',x]);
+
+     entries.forEach(([role,item])=>{
+      const p=item.player||item;
+      const value=[
+       p.number!=null?'#'+p.number:'',
+       p.name||'Unknown player',
+       p.pos||''
+      ].filter(Boolean).join(' ? ');
+      line(panels.lineups,role,value);
+     });
+    });
+   }else missing('lineups');
+
+   const stats=Array.isArray(enhanced.statistics)
+    ?enhanced.statistics:[];
+   if(stats.length>=2){
+    const home=stats[0],away=stats[1];
+    const awayValues=new Map(
+     (away.statistics||[]).map(s=>[s.type,s.value])
+    );
+    line(panels.stats,'Home / Away',
+     (home.team?.name||m.home_name)+' / '+
+     (away.team?.name||m.away_name));
+    (home.statistics||[]).forEach(s=>{
+     line(panels.stats,s.type||'Statistic',
+      String(s.value??'Unavailable')+' ? '+
+      String(awayValues.get(s.type)??'Unavailable'));
+    });
+   }else missing('stats');
+
+   const events=Array.isArray(enhanced.events)?enhanced.events:[];
+   if(events.length){
+    events.forEach(e=>{
+     const t=e.time||{};
+     const minute=t.elapsed==null?'Time unavailable':
+      String(t.elapsed)+(t.extra?'+'+t.extra:'')+"'";
+     line(panels.commentary,
+      minute+' ? '+(e.team?.name||'Team'),
+      [e.type,e.detail,e.player?.name,
+       e.assist?.name?'Assist: '+e.assist.name:'']
+       .filter(Boolean).join(' ? '));
+    });
+   }else missing('commentary');
+  }else{
+   ['lineups','stats','commentary'].forEach(missing);
+  }
+
+  // Preserve the dedicated existing Head to Head integration.
+  ['trends','news'].forEach(missing);
 }catch(e){
  el('error').textContent=e.message;
  el('meta').textContent='Historical match unavailable';
@@ -26725,8 +26861,15 @@ async function match(){{
    }};
    const fmtScore=g=>String(g?.home??'???')+' ??? '+String(g?.away??'???');
    const unavailable=s=>'<p class="muted">'+E(s)+'</p>';
-   const details=[
-     ['Competition',m.league?.name],['Round',m.league?.round],
+   // V663 STEP 923IY LIVE GAME WEEK
+    const matchGameWeek=value=>{{
+      const raw=String(value??'').trim();
+      const result=/^Regular Season[ ]*-[ ]*([1-9][0-9]*)$/i.exec(raw);
+      if(result)return ['Game Week','GW-'+Number(result[1])];
+      return ['Round',raw||'Unavailable'];
+    }};
+    const details=[
+     ['Competition',m.league?.name],matchGameWeek(m.league?.round),
      ['Venue',fixture.venue?.name],['City',fixture.venue?.city],
      ['Referee',fixture.referee],['Status',st.long||st.short],
      ['Kickoff',fixture.date]
@@ -26750,7 +26893,7 @@ async function match(){{
      ['trends','Trends'],['news','News'],['h2h','Head to Head'],['commentary','Commentary']];
    page.innerHTML=`<div id="ksn-v663-unified-live-match" style="max-width:1050px;margin:auto">
      <header style="display:flex;justify-content:space-between;align-items:center;gap:12px">
-       <strong>KasiScore ?? Match Centre</strong><a href="/#live">Back to Live Matches</a>
+       <strong>KasiScore ?? Match Centre</strong><a href="/#live">Back to Results</a>
      </header>
      <p class="muted" style="margin-top:16px">${{E(m.league?.name||'Football')}}${{m.league?.round?' ?? '+E(m.league.round):''}}</p>
      <section class="card" aria-label="Match scoreboard" style="display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:14px;padding:24px 12px;background:#172231;text-align:center">
@@ -27883,6 +28026,106 @@ async def canonical_match_stats_page(fixture_id:str):
                 "X-Robots-Tag": "noindex, nofollow, noarchive",
             },
         )
+    # V663 STEP 923IO CANONICAL UNIFICATION
+    # Verified finished fixtures use the selected historical Match Centre UI.
+    # Unverified/live fixture IDs preserve the original SEO-safe renderer.
+    archive_record = _ksn_v657_archived_match_seo(fixture_id)
+    if archive_record:
+        import json as _ksn_json
+        from html import escape as _ksn_escape
+
+        archive_shell = await ksn_v659_archive_view()
+        document = archive_shell.body.decode("utf-8")
+
+        archive_key = "football:" + str(fixture_id)
+        key_marker = (
+            "const key=new URLSearchParams(location.search)"
+            ".get('archive_key');"
+        )
+        title_marker = "<title>Historical Match Centre | KasiScore</title>"
+        head_marker = "</head>"
+        header_marker = (
+            '<header><strong>KasiScore ? Match Centre</strong>'
+            '<a href="/#live">Back to Results</a></header>'
+        )
+
+        if not all((
+            document.count(key_marker) >= 1,
+            document.count(title_marker) == 1,
+            document.count(head_marker) == 1,
+            document.count("<main>") == 1,
+        )):
+            # Never serve an incorrectly indexed or incomplete document.
+            return HTMLResponse(
+                _ksn_v657_match_document(fixture_id),
+                headers={
+                    "Cache-Control": "no-store, max-age=0",
+                    "CDN-Cache-Control": "no-store",
+                },
+            )
+
+        def e(value):
+            return _ksn_escape(str(value), quote=True)
+
+        title = (
+            f"{archive_record['home']} "
+            f"{archive_record['home_score']}?"
+            f"{archive_record['away_score']} "
+            f"{archive_record['away']} | "
+            f"{archive_record['league']} | KasiScore"
+        )
+
+        # A visible, unique SSR heading supports search engines and users.
+        summary = (
+            '<section id="ksn-v657-ssr-result" '
+            'aria-label="Verified match result">'
+            f'<h1 style="font-size:18px;margin:18px 0 6px">'
+            f'{e(archive_record["home"])} '
+            f'{e(archive_record["home_score"])}?'
+            f'{e(archive_record["away_score"])} '
+            f'{e(archive_record["away"])}</h1>'
+            f'<p class="meta">{e(archive_record["league"])} ? '
+            f'{e(archive_record["kickoff"])} ? '
+            f'{e(archive_record["status"])}</p>'
+            '<nav aria-label="Match teams">'
+            f'<a href="/teams/{e(archive_record["home_id"])}">'
+            f'{e(archive_record["home"])}</a> ? '
+            f'<a href="/teams/{e(archive_record["away_id"])}">'
+            f'{e(archive_record["away"])}</a>'
+            '</nav></section>'
+        )
+
+        document = document.replace(
+            key_marker,
+            key_marker[:-1] + "||"
+            + _ksn_json.dumps(archive_key) + ";",
+            1,
+        )
+        document = document.replace(
+            title_marker,
+            "<title>" + e(title) + "</title>",
+            1,
+        )
+        document = document.replace(
+            head_marker,
+            '<meta name="robots" content="index,follow">\n'
+            + head_marker,
+            1,
+        )
+        document = document.replace(
+            "<main>",
+            "<main>" + summary,
+            1,
+        )
+
+        return HTMLResponse(
+            document,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "CDN-Cache-Control": "no-store",
+            },
+        )
+
     return HTMLResponse(
         _ksn_v657_match_document(fixture_id),
         headers={
