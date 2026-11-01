@@ -1535,17 +1535,17 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
  aria-label="My Kasi supporter picks">
   <div class="mk-heading">
     <div>
-      <div class="mk-eyebrow">My Kasi ? Supporter Picks</div>
+      <div class="mk-eyebrow">MY KASI - SUPPORTER PICKS</div>
       <h2>Who will win?</h2>
     </div>
-    <span class="mk-status">2 matches ? 4 teams</span>
+    <span class="mk-status">2 matches | 4 teams</span>
   </div>
   <div class="mk-grid" id="ksnMyKasiVoteMatches"
        aria-live="polite">
-    <p class="mk-status">Loading verified upcoming fixtures?</p>
+    <p class="mk-status">Loading verified upcoming fixtures...</p>
   </div>
   <p class="mk-footnote" id="ksnMyKasiVoteNote">
-    Voting will open once secure anonymous vote recording is enabled.
+    Choose Home, Draw or Away for each match. No login required.
   </p>
 </section>
 
@@ -1639,7 +1639,10 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
     const choices=[['H',match.home.name],['D','Draw'],['A',match.away.name]];
     const buttons=new Map();
     let enabled=false, busy=false, selected=null;
-    const isOpen=()=>Date.now()<match.kickoff;
+    const kickoffMs=typeof match.kickoff==='number'
+      ?match.kickoff
+      :Date.parse(match.kickoff);
+    const isOpen=()=>Number.isFinite(kickoffMs)&&Date.now()<kickoffMs;
     function syncButtons(){
       for(const [key,button] of buttons){
         button.disabled=!enabled||busy||!isOpen();
@@ -1668,7 +1671,7 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
         const name=document.createElement('span');
         name.textContent=label;
         const value=document.createElement('strong');
-        value.textContent=count+' votes ? '+pct.toFixed(1)+'%';
+        value.textContent=count+' votes | '+pct.toFixed(1)+'%';
         line.append(name,value);
 
         const track=document.createElement('div');
@@ -1746,7 +1749,45 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
           selected
             ?'Your vote is saved. You can change it before kickoff.'
             :'Choose Home, Draw or Away. No login required.';
-      }catch(_){enabled=false;status.textContent='Voting is currently unavailable.';}
+      }catch(error){
+        enabled=false;
+        status.textContent='Voting connection interrupted. Retrying...';
+        syncButtons();
+        if(isOpen()){
+          setTimeout(async()=>{
+            try{
+              const retry=await fetch(
+                '/my-kasi/votes/'+encodeURIComponent(match.id),
+                {credentials:'same-origin',cache:'no-store',
+                 headers:{Accept:'application/json'}}
+              );
+              if(!retry.ok)throw new Error('Voting unavailable');
+              const data=await retry.json();
+              enabled=data.votingEnabled===true;
+              if(enabled){
+                const mine=await fetch(
+                  '/my-kasi/votes/'+encodeURIComponent(match.id)+'/mine',
+                  {credentials:'same-origin',cache:'no-store'}
+                );
+                if(mine.ok){
+                  const saved=await mine.json();
+                  selected=['H','D','A'].includes(saved.myChoice)
+                    ?saved.myChoice:null;
+                }
+              }
+              showTotals(data);
+              status.textContent=enabled
+                ?(selected?'Your vote is saved. You can change it before kickoff.'
+                  :'Choose Home, Draw or Away. No login required.')
+                :'Voting is not enabled for this fixture.';
+            }catch(_){
+              status.textContent='Voting is temporarily unavailable. Refresh to retry.';
+            }finally{
+              syncButtons();
+            }
+          },1200);
+        }
+      }
       syncButtons();
     })();
     return wrapper;
@@ -18910,8 +18951,18 @@ function boot(){const card=$('ksnV663MyKasi'), list=$('favouritesList');if(!card
     if(!/^\\d+$/.test(String(home))||!/^\\d+$/.test(String(away)))return false;
     const homeId=String(x.homeId??x.teams?.home?.id??'');
     const awayId=String(x.awayId??x.teams?.away?.id??'');
-    if(homeId&&awayId)return homeId===id||awayId===id;
-    return !!(teamText(x,'home')||teamText(x,'away'));
+    // V663 912L: Attribute each result to the selected team.
+    // Some archived matches lack one or both provider team IDs.
+    const selectedId=String(id);
+    const homeName=String(teamText(x,'home')||'').trim().toLowerCase();
+    const awayName=String(teamText(x,'away')||'').trim().toLowerCase();
+    const selectedName=String(name||'').trim().toLowerCase();
+    if(homeId===selectedId||awayId===selectedId)return true;
+    // Never use a name fallback to override conflicting verified IDs.
+    if(homeId&&awayId)return false;
+    return !!selectedName&&(
+      homeName===selectedName||awayName===selectedName
+    );
   };
 
   const profilePast=(Array.isArray(d.past10)?d.past10:[])
@@ -19172,6 +19223,40 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 })();
 </script>
 
+
+<script id="ksn-v663-step912-mobile-mykasi">
+(function(){
+  'use strict';
+  function openMyKasi(event){
+    const target=event.target.closest(
+      'button[data-mobile="platform"],button[data-primary="platform"]'
+    );
+    if(!target)return;
+
+    // Allow existing navigation to execute first.
+    setTimeout(function(){
+      const panel=document.getElementById('platform');
+      if(!panel)return;
+
+      if(panel.classList.contains('hidden')){
+        if(typeof window.kasiscorePrimaryNav==='function'){
+          window.kasiscorePrimaryNav('platform',target);
+        }
+      }
+
+      // Ensure the selected My Kasi section is visible.
+      const active=document.getElementById('platform');
+      if(active&&!active.classList.contains('hidden')){
+        active.scrollIntoView({
+          behavior:'smooth',
+          block:'start'
+        });
+      }
+    },80);
+  }
+  document.addEventListener('click',openMyKasi);
+})();
+</script>
 </body>
 </html>
 
