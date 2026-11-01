@@ -27948,6 +27948,33 @@ async def ssr_cricket(path:str):
 @app.get("/tennis",response_class=HTMLResponse)
 async def ssr_tennis_root():
     return Response(status_code=410, headers={"Cache-Control":"no-store", "X-Robots-Tag":"noindex, nofollow"})
+
+
+# V663 STEP 919C: retire tennis root before generic locale route.
+# FastAPI matches routes in order. Keep all existing route declarations
+# and move only the retired root endpoint ahead of /{lang}.
+def _ksn_v663_919c_prioritize_tennis_root():
+    routes = app.router.routes
+    tennis = [
+        (i, route) for i, route in enumerate(routes)
+        if getattr(route, "path", None) == "/tennis"
+        and "GET" in (getattr(route, "methods", set()) or set())
+    ]
+    locale = [
+        (i, route) for i, route in enumerate(routes)
+        if getattr(route, "path", None) == "/{lang}"
+        and "GET" in (getattr(route, "methods", set()) or set())
+    ]
+    if len(tennis) != 1 or len(locale) != 1:
+        raise RuntimeError("V663 Step 919C: unexpected route registry")
+    tennis_i, tennis_route = tennis[0]
+    locale_i, _ = locale[0]
+    if tennis_i > locale_i:
+        routes.pop(tennis_i)
+        routes.insert(locale_i, tennis_route)
+
+_ksn_v663_919c_prioritize_tennis_root()
+
 @app.get("/tennis/{path:path}",response_class=HTMLResponse)
 async def ssr_tennis(path:str):
     return Response(status_code=410, headers={"Cache-Control":"no-store", "X-Robots-Tag":"noindex, nofollow"})
