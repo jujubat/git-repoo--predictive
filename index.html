@@ -1646,14 +1646,40 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
       }
     }
     function showTotals(data){
-      const count=data&&data.counts;
-      const pct=data&&data.percentages;
-      if(!count||!pct){totals.textContent='';return;}
+      const counts=data?.counts,percentages=data?.percentages;
+      if(!counts||!percentages)return;
       const total=Number(data.total);
-      if(!Number.isFinite(total)||total<0){totals.textContent='';return;}
-      totals.textContent='Community votes: '+total+' · '+choices.map(([key,label])=>
-        label+': '+Number(count[key]||0)+' ('+Number(pct[key]||0)+'%)'
-      ).join(' · ');
+      if(!Number.isFinite(total)||total<0)return;
+      totals.replaceChildren();
+      totals.style.display='block';
+      totals.style.marginTop='12px';
+
+      const title=document.createElement('strong');
+      title.textContent='Total votes: '+total;
+      totals.append(title);
+
+      for(const [key,label] of choices){
+        const count=Number(counts[key]||0);
+        const pct=Math.max(0,Math.min(100,Number(percentages[key]||0)));
+        const line=document.createElement('div');
+        line.style.cssText='display:flex;justify-content:space-between;gap:8px;margin-top:10px;font-size:13px';
+
+        const name=document.createElement('span');
+        name.textContent=label;
+        const value=document.createElement('strong');
+        value.textContent=count+' votes ? '+pct.toFixed(1)+'%';
+        line.append(name,value);
+
+        const track=document.createElement('div');
+        track.style.cssText='height:9px;border-radius:8px;background:#344454;overflow:hidden;margin-top:5px';
+
+        const fill=document.createElement('div');
+        fill.style.cssText='height:100%;border-radius:8px;transition:width .25s ease;background:'+
+          (key==='H'?'#16a34a':key==='D'?'#d97706':'#2563eb');
+        fill.style.width=pct+'%';
+        track.append(fill);
+        totals.append(line,track);
+      }
     }
     for(const [key,label] of choices){
       const button=text('button',label);
@@ -10300,13 +10326,13 @@ function render(message){
 
 window.addFavourite=function(){
   const input=document.getElementById('favTeam');
-  if(!input)return;
+  if(!input)return false;
 
   const name=input.value.trim().replace(/\\s+/g,' ');
 
   if(!name||name.length>120){
     render('Enter a valid football team name.');
-    return;
+    return false;
   }
 
   const teams=read();
@@ -10314,7 +10340,7 @@ window.addFavourite=function(){
   if(teams.some(x=>x.toLocaleLowerCase()===name.toLocaleLowerCase())){
     setVerifiedSelection(null);
     render('This team is already selected.');
-    return;
+    return false;
   }
 
   const verified=selectedVerified
@@ -10329,7 +10355,7 @@ window.addFavourite=function(){
 
     if(!saveVerified([...nextVerified,selectedVerified])){
       render('Unable to save verified team identity.');
-      return;
+      return false;
     }
   }
 
@@ -10338,12 +10364,13 @@ window.addFavourite=function(){
     render(restored
       ?'Unable to save favourites in this browser.'
       :'Unable to save favourites; identity recovery is required.');
-    return;
+    return false;
   }
 
   setVerifiedSelection(null);
   input.value='';
   render('Favourite team added.');
+  return true;
 };
 
 window.removeFavourite=function(team){
@@ -18668,7 +18695,25 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 </style>
 <script id="ksn-v663-league-first-js">
 (function(){'use strict';
-const leagues=[['39','Premier League (England)'],['140','La Liga (Spain)'],['78','Bundesliga (Germany)'],['135','Serie A (Italy)'],['61','Ligue 1 (France)']];
+const leagues=[
+ ['39','Premier League (England)'],
+ ['140','La Liga (Spain)'],
+ ['78','Bundesliga (Germany)'],
+ ['135','Serie A (Italy)'],
+ ['61','Ligue 1 (France)'],
+ ['2','Champions League'],
+ ['3','Europa League'],
+ ['88','Eredivisie'],
+ ['94','Primeira Liga'],
+ ['179','Scottish Premiership'],
+ ['253','MLS'],
+ ['144','Belgian Pro League'],
+ ['203','Turkish Super League'],
+ ['307','Saudi Pro League'],
+ ['71','Brazilian Serie A'],
+ ['128','Argentine Primera Division'],
+ ['288','South African Premiership']
+];
 function node(tag,txt){const e=document.createElement(tag);if(txt!==undefined)e.textContent=txt;return e;}
 function boot(){
  const input=document.getElementById('favTeam');const fav=document.getElementById('ksnV663MyKasi');
@@ -18680,6 +18725,70 @@ function boot(){
  league.append(new Option('Choose a football league',''));for(const [id,name] of leagues)league.append(new Option(name,id));
  team.append(new Option('Select a league first',''));team.disabled=true;
  lgroup.append(ll,league);tgroup.append(tl,team);
+  team.multiple=true;
+  team.size=7;
+  team.setAttribute('aria-label','Select multiple favourite clubs');
+
+  const addSelected=node('button','Add selected favourites');
+  addSelected.type='button';
+  addSelected.disabled=true;
+  addSelected.style.cssText='margin-top:10px;padding:9px 12px';
+  tgroup.append(addSelected);
+
+  team.addEventListener('change',()=>{
+    addSelected.disabled=!Array.from(team.selectedOptions)
+      .some(option=>option.value);
+  });
+
+  addSelected.addEventListener('click',async()=>{
+    const names=Array.from(team.selectedOptions)
+      .map(option=>option.value).filter(Boolean);
+
+    if(!names.length)return;
+
+    addSelected.disabled=true;
+    let processed=0,failed=0;
+
+    for(const name of names){
+      try{
+        const response=await fetch(
+          '/my-kasi/teams/search?q='+encodeURIComponent(name),
+          {credentials:'omit',cache:'no-store'}
+        );
+
+        if(!response.ok)throw Error('Search failed');
+
+        const payload=await response.json();
+
+        const verified=(Array.isArray(payload.teams)?payload.teams:[])
+          .find(row=>
+            String(row.name||'').trim().toLowerCase()===
+              name.toLowerCase() &&
+            typeof row.publicRef==='string' &&
+            row.publicRef.trim()
+          );
+
+        if(!verified)throw Error('Unverified team');
+
+        if(typeof window.ksnV663SelectVerifiedTeam!=='function' ||
+           typeof window.addFavourite!=='function')
+          throw Error('Save handler unavailable');
+
+        input.value=verified.name;
+        window.ksnV663SelectVerifiedTeam(verified);
+        if(window.addFavourite()!==true)
+          throw new Error('Favourite was not saved');
+
+        processed++;
+      }catch(error){failed++;}
+    }
+
+    status.textContent=processed+' team selections processed.'+
+      (failed?' '+failed+' could not be verified.':'');
+
+    addSelected.disabled=false;
+  });
+
  const status=node('p','Choose a league to load its verified football clubs.');status.className='mk902-message';status.id='mk902PickerStatus';status.setAttribute('role','status');
  wrap.append(lgroup,tgroup,status);
  // Insert ahead of the existing favourite input without altering the original handlers.
@@ -18712,7 +18821,8 @@ function boot(){
   }catch(e){if(ticket!==version)return;team.replaceChildren(new Option('Teams unavailable',''));status.textContent='League teams unavailable: '+e.message+'. Existing manual search remains available.';}
  });
  team.addEventListener('change',async()=>{
-  const name=team.value;const ticket=version;
+  if(team.multiple)return;
+   const name=team.value;const ticket=version;
   if(!name){input.value='';return;}
   status.textContent='Resolving '+name+' against verified team identities…';
   try{
@@ -18789,7 +18899,31 @@ function boot(){const card=$('ksnV663MyKasi'), list=$('favouritesList');if(!card
  if(!rows.length){const row=el('tr'),c=addCell(row,'No verified fixtures available.');c.colSpan=4;tbody.append(row)}wrap.append(table);container.append(wrap)}
  async function load(name){selected=name;const ticket=++seq;detail.replaceChildren(el('p','Loading '+name+' from Teams & Players…','mk904-subtle'));try{const id=await resolveId(name);const response=await fetch('/team/profile?team='+encodeURIComponent(id),{credentials:'same-origin'});if(!response.ok)throw new Error('Profile HTTP '+response.status);const d=await response.json();if(ticket!==seq)return;const t=d?.team||{};if(String(t.id||'')!==id)throw new Error('Team identity mismatch');const standings=Array.isArray(d.standings)?d.standings:[];const row=standings.find(x=>String(x?.team?.id??x?.teamId??'')===id)||{};const total=row?.all||{},played=Number(total.played),wins=Number(total.win);const pct=Number.isFinite(played)&&played>0&&Number.isFinite(wins)?(wins/played*100).toFixed(1)+'%':'—';const form=typeof row.form==='string'?row.form:'—';snapshots.set(name,{team:t,rank:row.rank??'—',form});refresh();detail.replaceChildren();const hero=el('div',undefined,'mk904-team');logo(hero,t.logo||'',name+' badge','mk904-detail-crest');const title=el('div');title.append(el('h4',t.name||name),el('small',t.country||''));hero.append(title);detail.append(hero);
  const stats=el('div',undefined,'mk904-meta');[['League position',row.rank??'—'],['League win rate',pct],['League played',Number.isFinite(played)?played:'—'],['League points',row.points??'—']].forEach(([k,v])=>{const s=el('div',undefined,'mk904-stat');s.append(el('b',v),el('small',k));stats.append(s)});detail.append(stats);detail.append(el('p','League statistics are sourced from the returned standings and may differ from all-competition match history.','mk904-subtle'));
- const now=Date.now();const past=uniqueSorted(d.past10,false,x=>fixtureDate(x)<=now&&['FT','AET','PEN'].includes(String(x.status||'').toUpperCase()));const future=uniqueSorted(d.future,true,x=>fixtureDate(x)>now&&['NS','TBD',''].includes(String(x.status||'').toUpperCase()));matchTable(detail,'Last 3 completed matches',past,true,id);matchTable(detail,'Next 3 scheduled matches',future,false,id);
+ const now=Date.now();
+  // V663 Step 908I: Show recent, attributable, verified results only.
+  const validRecentResult=x=>{
+    if(!x||typeof x!=='object')return false;
+    const date=fixtureDate(x);
+    const maxAge=365*24*60*60*1000;
+    if(!Number.isFinite(date)||date>now||date<now-maxAge)return false;
+    if(!['FT','AET','PEN'].includes(
+      String(x.status||'').toUpperCase()))return false;
+
+    const fixtureId=x.providerFixtureId||x.fixtureId||x.fixture?.id||x.id;
+    if(!/^[1-9][0-9]*$/.test(String(fixtureId||'')))return false;
+
+    const homeId=x.homeId??x.teams?.home?.id??x.homeTeam?.id;
+    const awayId=x.awayId??x.teams?.away?.id??x.awayTeam?.id;
+    if(String(homeId||'')!==id&&String(awayId||'')!==id)return false;
+
+    const homeScore=score(x,'home'),awayScore=score(x,'away');
+    if(homeScore===null||homeScore===undefined||
+       awayScore===null||awayScore===undefined)return false;
+    if(!/^\d+$/.test(String(homeScore))||
+       !/^\d+$/.test(String(awayScore)))return false;
+    return true;
+  };
+  const past=uniqueSorted(d.past10,false,validRecentResult);const future=uniqueSorted(d.future,true,x=>fixtureDate(x)>now&&['NS','TBD',''].includes(String(x.status||'').toUpperCase()));matchTable(detail,'Last 3 completed matches',past,true,id);matchTable(detail,'Next 3 scheduled matches',future,false,id);
  const full=el('a','Open complete Teams & Players profile','mk904-link');full.href='/teams/'+encodeURIComponent(String(identity(name)?.publicRef||id));detail.append(el('p'));detail.lastChild.append(full);
  }catch(err){if(ticket!==seq)return;detail.replaceChildren(el('p','Verified team profile unavailable: '+err.message,'mk904-subtle'))}}
  refresh();new MutationObserver(refresh).observe(list,{childList:true,subtree:true,characterData:true});
