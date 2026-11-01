@@ -10164,7 +10164,32 @@ window.loadExpectedScorers = async function() {
   const rows=v=>Array.isArray(v)?v:(v?.games||v?.matches||v?.items||[]);
   const team=(r,k)=>{const x=r?.teams?.[k]||r?.[k+'Team']||r?.[k];return typeof x==='string'?x:(x?.name||r?.[k+'Name']||'')};
   const clean=x=>String(x||'').trim().toLocaleLowerCase();
-  const distinct=rs=>{const seen=new Set();return rs.filter(r=>{if(!r||typeof r!=='object')return false;const k=String(r.id||r.fixtureId||r.providerFixtureId||[team(r,'home'),team(r,'away'),r.date||r.datetime].join('|'));if(seen.has(k))return false;seen.add(k);return true})};
+  // V663 STEP 910F: Cached content is unverified; restrict recent-score display.
+  const fixtureId=r=>String(r?.providerFixtureId||r?.fixtureId||r?.fixture?.id||r?.id||'');
+  const kickoff=r=>{
+    const raw=r?.fixture?.date||r?.date||r?.datetime||r?.kickoff;
+    if(typeof raw!=='string'||!/(?:Z|[+-]\d\d:?\d\d)$/.test(raw.trim()))return NaN;
+    return Date.parse(raw);
+  };
+  const goal=(r,side)=>r?.[side+'Score']??r?.goals?.[side]??r?.score?.fulltime?.[side]??r?.score?.[side];
+  const completed=r=>{
+    const st=String(r?.statusShort||r?.fixture?.status?.short||r?.status?.short||r?.status||'').toUpperCase();
+    return ['FT','AET','PEN'].includes(st);
+  };
+  const trustworthyShape=r=>{
+    const t=kickoff(r),now=Date.now();
+    // Strict 14-day display window; no cache mutation or provider calls.
+    return r&&typeof r==='object'&&/^[1-9][0-9]*$/.test(fixtureId(r))&&
+      Number.isFinite(t)&&t<=now&&now-t<=14*86400000&&completed(r)&&
+      !!team(r,'home')&&!!team(r,'away')&&
+      [goal(r,'home'),goal(r,'away')].every(v=>v!==null&&v!==undefined&&/^[0-9]+$/.test(String(v)));
+  };
+  const distinct=rs=>{
+    const seen=new Set();
+    return rs.filter(trustworthyShape)
+      .sort((a,b)=>kickoff(b)-kickoff(a))
+      .filter(r=>{const id=fixtureId(r);if(seen.has(id))return false;seen.add(id);return true;});
+  };
   window.ksnMyKasiRenderScores=function(){
     const box=document.getElementById('ksnMyKasiScores');if(!box)return;
     box.replaceChildren();
@@ -10175,13 +10200,13 @@ window.loadExpectedScorers = async function() {
       const sport=clean(r.sport||'football');if(sport!=='football')return false;
       return names.includes(clean(team(r,'home')))||names.includes(clean(team(r,'away')));
     }).slice(0,30);
-    if(!found.length){p('No saved live or finished results found for your teams yet. Open Live Scores or Finished Games to populate the local feed.');return}
+    if(!found.length){p('No recent completed matches with sufficient cached fixture details. Check Teams & Players for verified team history.');return}
     const title=document.createElement('h4');title.textContent='My Kasi · Recent team scores';box.append(title);
     const list=document.createElement('ul');
     for(const r of found){
       const li=document.createElement('li');const home=team(r,'home'),away=team(r,'away');
-      const h=r.homeScore??r.goals?.home??r.score?.home??'–';const a=r.awayScore??r.goals?.away??r.score?.away??'–';
-      li.textContent=home+' '+h+' - '+a+' '+away+' · '+String(r.statusShort||r.status?.short||r.status||'Match');
+      const h=goal(r,'home'),a=goal(r,'away');
+      li.textContent=home+' '+h+' - '+a+' '+away+' · '+String(r.statusShort||r.fixture?.status?.short||r.status?.short||r.status||'FT')+' · '+new Date(kickoff(r)).toLocaleDateString();
       const highlight=r.highlightsUrl||r.highlightUrl||r.videoUrl||'';
       if(typeof highlight==='string'&&/^https:\/\/[^\s]+$/i.test(highlight)){
         const a=document.createElement('a');a.href=highlight;a.target='_blank';a.rel='noopener noreferrer';a.textContent=' · Watch highlights';li.append(a);
@@ -19030,6 +19055,121 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
     mountVoting();
   }
   window.addEventListener('hashchange',mountVoting);
+})();
+</script>
+
+<!-- V663 STEP 910C: CONSOLIDATED MY KASI UI; EXISTING API AND STORAGE PRESERVED -->
+<style id="ksn-v663-step910c-layout">
+#platform #mk909fCheckboxPicker{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;align-items:start}
+#platform #mk909fCheckboxPicker .ksn910c-disclosure{position:relative;min-width:0}
+#platform #mk909fCheckboxPicker .ksn910c-disclosure summary{border:1px solid #3b5266;border-radius:8px;background:#080b11;color:#eff7ff;padding:11px;cursor:pointer;list-style:revert}
+#platform #mk909fCheckboxPicker .ksn910c-disclosure[open] .ksn910c-options{max-height:270px;overflow:auto;padding:10px;border:1px solid #3b5266;border-radius:8px;background:#0b1723}
+#platform #mk909fCheckboxPicker .ksn910c-options input[type=search]{width:100%;margin-bottom:8px}
+#platform #mk909fCheckboxPicker .ksn910c-options label{font-weight:400!important}
+#platform #ksnV663SupporterBallot #ksnV663FixtureSelect,
+#platform #ksnV663SupporterBallot #ksnV663BallotMatch,
+#platform #ksnV663SupporterBallot #ksnV663BallotChoices,
+#platform #ksnV663SupporterBallot #ksnV663BallotStatus,
+#platform #ksnV663SupporterBallot #ksn907gPersonalDetails,
+#platform #ksnV663SupporterBallot #mk901FixtureStatus,
+#platform #ksnV663SupporterBallot .mk901-actions{display:none!important}
+#platform #ksnV663SupporterBallot .sports-filter-row:has(#ksnV663FixtureSelect){display:none!important}
+#platform #ksnMyKasiHomeVotes{width:100%;min-width:0;margin:18px 0 0;padding:14px}
+#platform #ksnMyKasiHomeVotes .mk-grid{grid-template-columns:1fr!important;gap:12px}
+#platform #ksnMyKasiHomeVotes .mk-match{min-width:0;overflow:hidden;padding:14px}
+#platform #ksnMyKasiHomeVotes .mk-match>.mk-clubs,#platform #ksnMyKasiHomeVotes .mk-match>.mk-league{display:none!important}
+#platform #ksnMyKasiHomeVotes .mk-match .ksn907g-details{margin:4px 0 10px;padding:8px}
+#platform #ksnMyKasiHomeVotes .mk-match .ksn907g-team{overflow-wrap:anywhere;font-size:12px}
+#platform #ksnMyKasiHomeVotes .mk-match .ksn907g-team img{max-width:42px;max-height:42px}
+#platform #ksnMyKasiHomeVotes .mk-options{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+#platform #ksnMyKasiHomeVotes .mk-options button{min-width:0;white-space:normal;overflow-wrap:anywhere;font-size:12px;padding:8px 4px}
+#platform #ksnMyKasiHomeVotes .mk-status{overflow-wrap:anywhere}
+#platform #ksnV663SupporterBallot .ksn910c-picker{margin:12px 0}
+#platform #ksnV663SupporterBallot .ksn910c-picker summary{cursor:pointer;border:1px solid #405a70;border-radius:8px;padding:12px;background:#0b1723}
+#platform #ksnV663SupporterBallot .ksn910c-checks{max-height:230px;overflow:auto;display:grid;gap:9px;padding:12px;background:#0c1926;border:1px solid #405a70}
+#platform #ksnV663SupporterBallot .ksn910c-checks label{display:flex;align-items:start;gap:9px;font-size:13px;overflow-wrap:anywhere}
+#platform #ksnV663SupporterBallot .ksn910c-cards{display:grid;gap:12px;margin-top:12px}
+#platform #ksnV663SupporterBallot .ksn910c-card{border:1px solid #35516a;border-radius:12px;padding:12px;background:#0c1a29;min-width:0}
+#platform #ksnV663SupporterBallot .ksn910c-teams{display:flex;align-items:center;justify-content:space-around;text-align:center;gap:8px}
+#platform #ksnV663SupporterBallot .ksn910c-side{display:grid;justify-items:center;gap:6px;min-width:0;overflow-wrap:anywhere;font-size:12px;font-weight:600}
+#platform #ksnV663SupporterBallot .ksn910c-side img{width:42px;height:42px;object-fit:contain}
+#platform #ksnV663SupporterBallot .ksn910c-buttons{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:10px 0}
+#platform #ksnV663SupporterBallot .ksn910c-buttons button{min-width:0;font-size:12px;padding:6px 2px}
+#platform #ksnV663SupporterBallot button[aria-pressed=true]{border-color:#22c55e;background:#124329;color:white}
+@media(max-width:760px){#platform #mk909fCheckboxPicker{grid-template-columns:1fr!important}}
+</style>
+<script id="ksn-v663-step910c-layout">
+(function(){'use strict';
+  const get=id=>document.getElementById(id);
+  const text=(tag,value)=>{const n=document.createElement(tag);if(value!==undefined)n.textContent=String(value);return n;};
+  function safeImage(value){if(typeof value!=='string')return '';try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password?u.href:'';}catch(_){return '';}}
+  function kickoff(row){const ms=Date.parse(String(row?.date||row?.kickoff||''));return Number.isFinite(ms)?ms:NaN;}
+  function when(ms){if(!Number.isFinite(ms))return 'Time to be confirmed';const d=new Date(ms);const f=new Intl.DateTimeFormat('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hourCycle:'h12'}).formatToParts(d);const v=k=>f.find(x=>x.type===k)?.value||'';return v('day')+'/'+v('month')+'/'+v('year')+' – '+v('hour')+':'+v('minute')+' '+v('dayPeriod').toUpperCase();}
+  const key='ksn:v663:my-kasi:personal-match-predictions';
+  function read(){try{const x=JSON.parse(localStorage.getItem(key)||'{}');return x&&typeof x==='object'&&!Array.isArray(x)?x:{};}catch(_){return {};}}
+  function write(x){try{localStorage.setItem(key,JSON.stringify(x));return true;}catch(_){return false;}}
+  function collapseSelection(){
+    const root=get('mk909fCheckboxPicker');if(!root||root.dataset.ksn910c)return;
+    const left=root.children[0],right=root.children[1];if(!left||!right)return;
+    for(const [part,title] of [[left,'Select leagues'],[right,'Select favourite teams']]){
+      const details=text('details'),summary=text('summary',title),content=text('div');
+      details.className='ksn910c-disclosure';content.className='ksn910c-options';
+      while(part.children.length>1)content.append(part.children[1]);
+      details.append(summary,content);part.append(details);
+      summary.addEventListener('click',()=>{if(!details.open)root.querySelectorAll('.ksn910c-disclosure').forEach(x=>{if(x!==details)x.open=false;});});
+    }
+    root.dataset.ksn910c='1';
+  }
+  function moveVote(){
+    const panel=get('ksnMyKasiHomeVotes'),ballot=get('ksnV663SupporterBallot');
+    if(panel&&ballot&&panel.parentElement!==ballot)ballot.append(panel);
+    if(panel){panel.querySelectorAll('.mk-match>.ksn907g-details').forEach(()=>{});}
+  }
+  function makePicker(){
+    const ballot=get('ksnV663SupporterBallot'),original=get('ksnV663FixtureSelect');
+    if(!ballot||!original||get('ksn910cFixturePicker'))return;
+    const heading=text('h4','Choose upcoming matches'),picker=text('details');picker.id='ksn910cFixturePicker';picker.className='ksn910c-picker';
+    const summary=text('summary','Select matches (0)'),checks=text('div');checks.className='ksn910c-checks';
+    picker.append(summary,checks);
+    const add=text('button','Add selected matches');add.type='button';add.disabled=true;
+    const note=text('p','Select one or more verified upcoming fixtures. No login required.');note.className='sub';
+    const cards=text('div');cards.className='ksn910c-cards';cards.id='ksn910cPredictionCards';
+    const status=text('p','');status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.className='sub';
+    const title=ballot.querySelector('h3');if(title)title.insertAdjacentElement('afterend',note);else ballot.prepend(note);
+    note.after(picker,add,status,cards);
+    const selected=new Set(),rowsById=new Map();
+    function eligibility(row){const id=String(row?.id||'');return /^[1-9][0-9]*$/.test(id)&&typeof row?.home==='string'&&typeof row?.away==='string'&&Number.isFinite(kickoff(row))&&kickoff(row)>Date.now()&&String(row?.sport||'football')==='football'&&!row?.isLive&&!row?.isFinished;}
+    function available(){const raw=Array.isArray(window.KSN_V663_SUPPORTER_FIXTURES)?window.KSN_V663_SUPPORTER_FIXTURES:[];const unique=new Map();for(const row of raw)if(eligibility(row))unique.set(String(row.id),row);return [...unique.values()];}
+    function updatePicker(){
+      const data=available();rowsById.clear();for(const row of data)rowsById.set(String(row.id),row);
+      checks.replaceChildren();for(const id of [...selected])if(!rowsById.has(id))selected.delete(id);
+      for(const row of data){const label=text('label'),input=text('input');input.type='checkbox';input.checked=selected.has(String(row.id));input.addEventListener('change',()=>{if(input.checked)selected.add(String(row.id));else selected.delete(String(row.id));updateSummary();});label.append(input,text('span',row.home+' vs '+row.away+' · '+when(kickoff(row))));checks.append(label);}
+      if(!data.length)checks.append(text('p','No verified upcoming fixtures available.'));
+      updateSummary();
+    }
+    function updateSummary(){summary.textContent='Select matches ('+selected.size+')';add.disabled=!selected.size;}
+    function side(parent,name,url){const node=text('div');node.className='ksn910c-side';const src=safeImage(url);if(src){const img=text('img');img.src=src;img.alt=name+' badge';img.loading='lazy';node.append(img);}node.append(text('span',name));parent.append(node);}
+    function draw(){
+      cards.replaceChildren();const saved=read();
+      const shown=[...rowsById.values()].filter(row=>selected.has(String(row.id)));
+      for(const row of shown){const ms=kickoff(row),id=String(row.id),card=text('article');card.className='ksn910c-card';
+        const league=String(row.leagueName||row.competition||row.league?.name||'Football');card.append(text('small',league));
+        const matchup=text('div');matchup.className='ksn910c-teams';side(matchup,row.home,row.homeLogo||row.homeBadge||row.homeFlag);matchup.append(text('strong','VS'));side(matchup,row.away,row.awayLogo||row.awayBadge||row.awayFlag);card.append(matchup);
+        const meta=text('p',when(ms));meta.style.textAlign='center';card.append(meta);
+        const controls=text('div');controls.className='ksn910c-buttons';const feedback=text('p');feedback.className='sub';feedback.setAttribute('aria-live','polite');
+        for(const [choice,label] of [['H','Home Win'],['D','Draw'],['A','Away Win']]){const btn=text('button',label);btn.type='button';btn.setAttribute('aria-pressed',String(saved[id]?.pick===choice));btn.disabled=Date.now()>=ms;btn.addEventListener('click',()=>{if(Date.now()>=ms)return;const data=read();data[id]={pick:choice,home:row.home,away:row.away,kickoff:new Date(ms).toISOString()};if(write(data)){feedback.textContent='Prediction saved: '+label;draw();}else feedback.textContent='Unable to save in browser.';});controls.append(btn);}
+        feedback.textContent=saved[id]?.pick?'Saved prediction: '+({H:'Home Win',D:'Draw',A:'Away Win'}[saved[id].pick]||''):'Choose your prediction.';
+        card.append(controls,feedback);cards.append(card);
+      }
+    }
+    add.addEventListener('click',()=>{draw();picker.open=false;status.textContent=selected.size+' fixture(s) displayed below.';});
+    const observer=new MutationObserver(()=>{updatePicker();});observer.observe(original,{childList:true});
+    updatePicker();
+    const t=setInterval(()=>{if(!document.contains(ballot)){clearInterval(t);return;}const length=available().length;if(length!==rowsById.size)updatePicker();},15000);
+  }
+  function boot(){collapseSelection();moveVote();makePicker();}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
+  window.addEventListener('hashchange',()=>{moveVote();collapseSelection();});
 })();
 </script>
 
