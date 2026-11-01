@@ -5435,6 +5435,8 @@ async def google_sitemap_xml():
         # V663 Step 914E: Exclude Cricket and Rugby from public sitemap.
         # Preserve Football, Tennis and every other valid URL.
         normalized_path = path.lower().rstrip("/") or "/"
+        if normalized_path == "/tennis" or normalized_path.startswith("/tennis/"):
+            continue
         if _ksn_v663_disabled_sport_path(normalized_path):
             continue
         if not path or not path.startswith("/") or path in seen or not row.get("indexable", True):
@@ -23702,13 +23704,13 @@ def _seo_legacy_aliases() -> dict:
 def _seo_registry_pages():
     now = datetime.now(timezone.utc).isoformat()
     rows = [
-        {"path":"/", "pageType":"home", "title":"KasiScore", "description":"Live scores, AI predictions, match intelligence, sports analysis and results."},
+        {"path":"/", "pageType":"home", "title":"Live Football Scores, Fixtures, Results & AI Predictions", "description":"Follow live football scores, fixtures, results, league standings and AI-powered match predictions from competitions around the world on KasiScore."},
         {"path":"/today", "pageType":"today", "title":"Today's Sports Intelligence", "description":"Today's live matches, fixtures, predictions, results and AI sports intelligence.", "indexable":False},
         {"path":"/weekend", "pageType":"weekend", "title":"Weekend Sports Intelligence", "description":"Weekend football, rugby and sports fixtures, predictions, live matches and AI analysis."},
         {"path":"/football", "pageType":"sport", "title":"Football Scores, Fixtures & Competitions", "description":"Follow football scores, fixtures, results, predictions, tables, teams and competitions from around the world."},
         {"path":"/rugby", "pageType":"sport", "title":"Rugby Scores, Fixtures & Competitions", "description":"Follow rugby fixtures, results, standings, teams and competitions across supported leagues and tournaments."},
         {"path":"/cricket", "pageType":"sport", "title":"Cricket Scores, Fixtures & Competitions", "description":"Follow cricket scores, fixtures, results, teams and competitions across supported leagues and tournaments."},
-        {"path":"/tennis", "pageType":"sport", "title":"Tennis Scores, Fixtures & Results", "description":"Tennis scores, fixtures, results and match intelligence across supported competitions."},
+        {"path":"/tennis", "pageType":"sport", "title":"Tennis Scores, Fixtures & Results", "description":"Tennis scores, fixtures, results and match intelligence across supported competitions.", "indexable":False},
         {"path":"/about", "pageType":"info", "title":"About", "description":"About KasiScore and its sports coverage."},
         {"path":"/contact", "pageType":"info", "title":"Contact KasiScore", "description":"Contact KasiScore for general and commercial enquiries."},
         {"path":"/privacy", "pageType":"info", "title":"Privacy Policy", "description":"KasiScore privacy information."},
@@ -23986,6 +23988,8 @@ async def seo_sitemap():
         path = r.get("path", "")
         if _ksn_v663_football_only_publication_active():
             normalized_path = str(path).lower().rstrip("/") or "/"
+            if normalized_path == "/tennis" or normalized_path.startswith("/tennis/"):
+                continue
             if _ksn_v663_disabled_sport_path(normalized_path):
                 continue
         if not path or path in seen or not r.get("indexable", True):
@@ -25474,7 +25478,7 @@ def _seo_graph_schema(path: str, title: str, desc: str) -> dict:
 
 def _ksn_seo_route_shell() -> str:
     """One lightweight KSN shell for non-home indexable SSR routes."""
-    return '<!doctype html><html lang="en-ZA"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#05080b"><link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" href="/favicon.png" sizes="96x96" type="image/png"><link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180"><link rel="manifest" href="/manifest.webmanifest"><title>Kasi Sports News</title><meta name="description" content="Live scores, fixtures, predictions, results and sports intelligence."><link rel="canonical" href="https://kasilivescore.com/"><style id="ksn-unified-seo-shell-css">:root{color-scheme:dark;--bg:#030506;--panel:#0d1114;--panel2:#11171b;--line:#26313a;--text:#f4f7f9;--muted:#aab4bc;--accent:#28c7ef}*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}body{min-height:100vh}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}.ksn-shell-header{position:sticky;top:0;z-index:50;background:rgba(3,5,6,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}.ksn-shell-head-inner{max-width:1180px;margin:auto;padding:12px 18px 8px;display:flex;align-items:center;gap:12px}.ksn-shell-logo{width:46px;height:46px;border-radius:50%;object-fit:contain}.ksn-shell-brand{font-weight:900;font-size:18px;line-height:1.1}.ksn-shell-sub{font-size:12px;color:var(--muted);margin-top:3px}.ksn-shell-nav{max-width:1180px;margin:auto;padding:0 18px 10px;display:flex;gap:7px;overflow-x:auto;scrollbar-width:none}.ksn-shell-nav::-webkit-scrollbar{display:none}.ksn-shell-nav a{flex:0 0 auto;color:var(--text);font-weight:800;font-size:13px;border:1px solid var(--line);border-radius:9px;padding:9px 12px;background:var(--panel)}.ksn-shell-nav a:hover{border-color:var(--accent);text-decoration:none}.ksn-shell-main{max-width:1180px;margin:18px auto;padding:0 18px 30px}.ksn-shell-footer{border-top:1px solid var(--line);padding:22px 18px 34px;color:var(--muted)}.ksn-shell-footer-inner{max-width:1180px;margin:auto;display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between}.ksn-shell-footer nav{display:flex;gap:12px;flex-wrap:wrap}@media(max-width:700px){.ksn-shell-head-inner{padding:10px 12px 7px}.ksn-shell-logo{width:40px;height:40px}.ksn-shell-nav{padding:0 12px 9px}.ksn-shell-nav a{font-size:12px;padding:8px 10px}.ksn-shell-main{margin-top:12px;padding:0 12px 24px}}</style></head><body><header class="ksn-shell-header"><div class="ksn-shell-head-inner"><a href="/" aria-label="Kasi Sports News home"><img class="ksn-shell-logo" src="/kasi-sports-news-logo.png" alt="Kasi Sports News"></a><div><div class="ksn-shell-brand">Kasi Sports News</div><div class="ksn-shell-sub">Football · Rugby · Cricket · News · Match Intelligence</div></div></div><nav class="ksn-shell-nav" aria-label="Main navigation"><a href="/">Home</a><a href="/?view=live">Live</a><a href="/?view=fixtures">Fixtures</a><a href="/?view=predictions">Predictions</a><a href="/?view=teams">Teams &amp; Players Data</a><a href="/?view=news">News</a><a href="/?view=search">Search</a><a href="/?view=admin">Admin</a></nav></header><main class="ksn-shell-main"><!--KASI_SSR_CONTENT--></main><footer class="ksn-shell-footer"><div class="ksn-shell-footer-inner"><span>&copy; Kasi Sports News</span><nav aria-label="Policies"><a href="/about">About</a><a href="/contact">Contact</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/cookies">Cookies</a></nav></div></footer></body></html>'
+    return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#05080b"><link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" href="/favicon.png" sizes="96x96" type="image/png"><link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180"><link rel="manifest" href="/manifest.webmanifest"><title>Kasi Sports News</title><meta name="description" content="Live scores, fixtures, predictions, results and sports intelligence."><link rel="canonical" href="https://kasilivescore.com/"><style id="ksn-unified-seo-shell-css">:root{color-scheme:dark;--bg:#030506;--panel:#0d1114;--panel2:#11171b;--line:#26313a;--text:#f4f7f9;--muted:#aab4bc;--accent:#28c7ef}*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}body{min-height:100vh}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}.ksn-shell-header{position:sticky;top:0;z-index:50;background:rgba(3,5,6,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}.ksn-shell-head-inner{max-width:1180px;margin:auto;padding:12px 18px 8px;display:flex;align-items:center;gap:12px}.ksn-shell-logo{width:46px;height:46px;border-radius:50%;object-fit:contain}.ksn-shell-brand{font-weight:900;font-size:18px;line-height:1.1}.ksn-shell-sub{font-size:12px;color:var(--muted);margin-top:3px}.ksn-shell-nav{max-width:1180px;margin:auto;padding:0 18px 10px;display:flex;gap:7px;overflow-x:auto;scrollbar-width:none}.ksn-shell-nav::-webkit-scrollbar{display:none}.ksn-shell-nav a{flex:0 0 auto;color:var(--text);font-weight:800;font-size:13px;border:1px solid var(--line);border-radius:9px;padding:9px 12px;background:var(--panel)}.ksn-shell-nav a:hover{border-color:var(--accent);text-decoration:none}.ksn-shell-main{max-width:1180px;margin:18px auto;padding:0 18px 30px}.ksn-shell-footer{border-top:1px solid var(--line);padding:22px 18px 34px;color:var(--muted)}.ksn-shell-footer-inner{max-width:1180px;margin:auto;display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between}.ksn-shell-footer nav{display:flex;gap:12px;flex-wrap:wrap}@media(max-width:700px){.ksn-shell-head-inner{padding:10px 12px 7px}.ksn-shell-logo{width:40px;height:40px}.ksn-shell-nav{padding:0 12px 9px}.ksn-shell-nav a{font-size:12px;padding:8px 10px}.ksn-shell-main{margin-top:12px;padding:0 12px 24px}}</style></head><body><header class="ksn-shell-header"><div class="ksn-shell-head-inner"><a href="/" aria-label="Kasi Sports News home"><img class="ksn-shell-logo" src="/kasi-sports-news-logo.png" alt="Kasi Sports News"></a><div><div class="ksn-shell-brand">Kasi Sports News</div><div class="ksn-shell-sub">Football · Rugby · Cricket · News · Match Intelligence</div></div></div><nav class="ksn-shell-nav" aria-label="Main navigation"><a href="/">Home</a><a href="/?view=live">Live</a><a href="/?view=fixtures">Fixtures</a><a href="/?view=predictions">Predictions</a><a href="/?view=teams">Teams &amp; Players Data</a><a href="/?view=news">News</a><a href="/?view=search">Search</a><a href="/?view=admin">Admin</a></nav></header><main class="ksn-shell-main"><!--KASI_SSR_CONTENT--></main><footer class="ksn-shell-footer"><div class="ksn-shell-footer-inner"><span>&copy; Kasi Sports News</span><nav aria-label="Policies"><a href="/about">About</a><a href="/contact">Contact</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/cookies">Cookies</a></nav></div></footer></body></html>'
 
 def _ksn575_competition_workspace(path: str) -> str:
     """Navigation for real canonical competition pages; no provider calls or archive mutation."""
@@ -25635,9 +25639,9 @@ async def _render_seo_document(path: str) -> str:
     html = html.replace('</head>', f'<title>{escape(final_title)}</title></head>', 1)
 
     # Description, canonical and robots: exactly one authoritative tag each.
-    html = re.sub(r"<meta\s+name=[\"\']description[\"\'][^>]*>\s*", '', html, flags=re.I)
+    html = re.sub('<meta\\b(?=[^>]*\\bname\\s*=\\s*["\']description["\'])[^>]*>\\s*', '', html, flags=re.I)
     html = re.sub(r"<link\b(?=[^>]*\brel\s*=\s*[\"\']canonical[\"\'])[^>]*>\s*", '', html, flags=re.I)
-    html = re.sub(r"<meta\s+name=[\"\']robots[\"\'][^>]*>\s*", '', html, flags=re.I)
+    html = re.sub('<meta\\b(?=[^>]*\\bname\\s*=\\s*["\']robots["\'])[^>]*>\\s*', '', html, flags=re.I)
     registry_row = next((r for r in _seo_registry_pages() if r.get("path") == path), None)
     page_indexable = True if registry_row is None else bool(registry_row.get("indexable", True))
 
@@ -25665,8 +25669,8 @@ async def _render_seo_document(path: str) -> str:
     html = html.replace('</head>', core_meta+'</head>', 1)
 
     # Open Graph/Twitter: remove every legacy instance, then inject one set.
-    html = re.sub(r"<meta\s+property=[\"\']og:(?:title|description|url|type|image)(?::[^\"\']+)?[\"\'][^>]*>\s*", '', html, flags=re.I)
-    html = re.sub(r"<meta\s+name=[\"\']twitter:(?:card|title|description|image)[\"\'][^>]*>\s*", '', html, flags=re.I)
+    html = re.sub('<meta\\b(?=[^>]*\\bproperty\\s*=\\s*["\']og:(?:title|description|url|type|image)(?::[^"\']+)?["\'])[^>]*>\\s*', '', html, flags=re.I)
+    html = re.sub('<meta\\b(?=[^>]*\\bname\\s*=\\s*["\']twitter:(?:card|title|description|image)["\'])[^>]*>\\s*', '', html, flags=re.I)
     final_social=(f'<meta property="og:title" content="{escape(final_title,quote=True)}">'
                   f'<meta property="og:description" content="{escape(final_desc,quote=True)}">'
                   f'<meta property="og:url" content="{escape(final_canonical,quote=True)}">'
@@ -27942,12 +27946,11 @@ async def ssr_cricket(path:str):
     if redirected: return redirected
     return HTMLResponse(await _render_seo_document(full),headers={"Cache-Control":"public, max-age=300, s-maxage=900, stale-while-revalidate=3600"})
 @app.get("/tennis",response_class=HTMLResponse)
-async def ssr_tennis_root(): return HTMLResponse(await _render_seo_document("/tennis"),headers={"Cache-Control":"public, max-age=300"})
+async def ssr_tennis_root():
+    return Response(status_code=410, headers={"Cache-Control":"no-store", "X-Robots-Tag":"noindex, nofollow"})
 @app.get("/tennis/{path:path}",response_class=HTMLResponse)
 async def ssr_tennis(path:str):
-    full=f"/tennis/{str(path or '').strip('/')}"
-    if not _seo_valid_sport_path(full): raise HTTPException(404,"Tennis page not found")
-    return HTMLResponse(await _render_seo_document(full),headers={"Cache-Control":"public, max-age=300"})
+    return Response(status_code=410, headers={"Cache-Control":"no-store", "X-Robots-Tag":"noindex, nofollow"})
 
 class GrowthEvent(BaseModel):
     event: str
