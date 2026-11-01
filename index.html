@@ -1202,7 +1202,7 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
 <noscript id="kasiscore--noscript"><div style="max-width:1100px;margin:20px auto;padding:18px;background:#242424;color:#eef6ff;border:1px solid #1d3a5b;border-radius:14px;font-family:Arial,sans-serif"><h1>Kasi Sports News</h1><p>Live scores, football fixtures, predictions, bookmaker odds intelligence, team and player analysis.</p><p><a href="/today">Today's Sports Intelligence</a> · <a href="/weekend">Weekend Intelligence</a> · <a href="/football/england/premier-league">Premier League</a> · <a href="/football/spain/la-liga">La Liga</a> · <a href="/football/germany/bundesliga">Bundesliga</a> · <a href="/football/italy/serie-a">Serie A</a> · <a href="/football/france/ligue-1">Ligue 1</a> · <a href="/football/south-africa/psl">South African PSL</a> · <a href="/football/europe/champions-league">Champions League</a></p></div></noscript>
 <div class="app">
 <header>
-<div class="brand"><div class="logo ksn-logo ksn-official-logo"><img alt="Kasi Sports News" decoding="async" fetchpriority="high" height="52" src="/kasi-sports-news-logo.png?v=663-new-brand-20261030" width="52"/></div><div><h1>Kasi <span style="color:var(--accent)">Sports News</span></h1><div class="sub">Football · Rugby · Cricket · News · AI Intelligence</div></div></div>
+<div class="brand"><div class="logo ksn-logo ksn-official-logo"><img alt="Kasi Sports News" decoding="async" fetchpriority="high" height="52" src="/kasi-sports-news-logo.png?v=663-new-brand-20261030" width="52"/></div><div><h1>Kasi <span style="color:var(--accent)">Sports News</span></h1><div class="sub">Football · Sports News · AI Match Intelligence</div></div></div>
 </header>
 <div class="toolbar">
 <input aria-label="Server URL" id="serverUrl" style="display:none" value=""/>
@@ -1878,7 +1878,7 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
 <section class="tab hidden" id="search">
 <div class="card section">
 <div class="home-section-head">
-<div><h2 style="margin:0">Global Sports Search</h2><div class="sub">Teams, players, competitions, fixtures, results and sports data across Football, Rugby and Cricket. News is never searched here.</div></div>
+<div><h2 style="margin:0">Global Sports Search</h2><div class="sub">Search football teams, players, leagues, fixtures and results from competitions worldwide.</div></div>
 </div>
 <div class="ks211-searchbar">
 <input autocomplete="off" id="ks245SearchInput" placeholder="Search a team or player..."/>
@@ -1891,8 +1891,8 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
 <div class="card"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap"><h2> Fixtures &amp; Upcoming</h2><div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap"><button onclick="downloadFixturesCSV()" type="button">Download CSV</button><button onclick="downloadFixturesPDF()" type="button">Download PDF</button><span class="badge ok" id="fixtureSourceBadge">All fixtures</span></div></div><div id="fixtureList"></div></div>
 <!-- Finished Games Section -->
 <div class="ks214-multisport-templates" data-area="fixtures">
-<div class="card section" data-sport="rugby"><div class="home-section-head"><div><h3>Rugby · Fixtures</h3><div class="sub">Connected sports-data feed.</div></div></div><div id="v246RugbyFixtures"><div class="empty">Loading rugby fixtures…</div></div></div>
-<div class="card section" data-sport="cricket"><div class="home-section-head"><div><h3>Cricket · Fixtures</h3><div class="sub">Connected sports-data feed.</div></div></div><div id="v246CricketFixtures"><div class="empty">Loading cricket fixtures…</div></div></div>
+<div class="card section" data-sport="rugby" hidden aria-hidden="true" style="display:none!important"><div id="v246RugbyFixtures"></div></div>
+<div class="card section" data-sport="cricket" hidden aria-hidden="true" style="display:none!important"><div id="v246CricketFixtures"></div></div>
 </div>
 </section>
 <section class="tab hidden" id="live">
@@ -1908,7 +1908,7 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
 <div id="liveList"></div>
 </div>
 <div class="ks214-multisport-templates" data-area="live">
-<div class="card section"><div class="sub">Live Matches combines Football, Rugby and Cricket. Basic scores load first; detailed match data opens on demand.</div></div>
+<div class="card section"><div class="sub">Follow live football scores worldwide. Open a match for verified statistics and detailed match intelligence.</div></div>
 </div>
 </section>
 <!-- Past Results — own tab -->
@@ -1956,8 +1956,8 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
 <div id="predictionList"></div>
 </div>
 <div class="ks214-multisport-templates" data-area="predictions">
-<div class="card section" data-sport="rugby"><div class="home-section-head"><div><h3>Rugby · Predictions</h3><div class="sub">Verified fixtures → Kasi rugby prediction engine.</div></div></div><div id="v246RugbyPredictions"><div class="empty">Loading rugby predictions…</div></div></div>
-<div class="card section" data-sport="cricket"><div class="home-section-head"><div><h3>Cricket · Predictions</h3><div class="sub">Normalized cricket feed with subscribed bookmaker odds where available.</div></div></div><div id="v246CricketPredictions"><div class="empty">Loading cricket predictions…</div></div></div>
+<div class="card section" data-sport="rugby" hidden aria-hidden="true" style="display:none!important"><div id="v246RugbyPredictions"></div></div>
+<div class="card section" data-sport="cricket" hidden aria-hidden="true" style="display:none!important"><div id="v246CricketPredictions"></div></div>
 </div>
 <!-- V663 STEP 487: Pending features stay visible as Coming Soon under Predictions. -->
 <style id="ksn-v663-step487-scoring-coming-soon">
@@ -3505,7 +3505,7 @@ if (typeof _origRefreshAll2 === 'function') {
 <div class="card" onclick="openCompetitionGroup('International')" style="cursor:pointer"><div class="l"> International</div><div class="n">World Cup · AFCON</div><div class="sub">Major national-team tournaments</div></div>
 </div>
 <div class="card section">
-<div class="sports-filter-row"><select id="competitionSportFilter" onchange="renderCompetitionRegistry()"><option value="">All sports</option><option value="football">Football</option><option value="rugby">Rugby</option><option value="cricket">Cricket</option></select><input id="competitionSearch" oninput="renderCompetitionRegistry()" placeholder="Search competition, country or region…"/><button onclick="loadCompetitionRegistry()">↻ Refresh</button></div>
+<div class="sports-filter-row"><select id="competitionSportFilter" onchange="renderCompetitionRegistry()"><option value="">All sports</option><option value="football">Football</option></select><input id="competitionSearch" oninput="renderCompetitionRegistry()" placeholder="Search competition, country or region…"/><button onclick="loadCompetitionRegistry()">↻ Refresh</button></div>
 <div class="sports-grid" id="competitionRegistry"></div>
 </div>
 </section>
@@ -3538,8 +3538,8 @@ if (typeof _origRefreshAll2 === 'function') {
 <h3> Platform Architecture</h3>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px">
 <div class="card"><b> FOOTBALL</b><div class="sub">PSL · EPL · UCL · Saudi Pro League · global competitions</div></div>
-<div class="card"><b> RUGBY</b><div class="sub">URC · Currie Cup · Rugby Championship · SA teams</div></div>
-<div class="card"><b> CRICKET</b><div class="sub">Global cricket competitions</div></div>
+<div class="card" hidden aria-hidden="true" style="display:none!important"><b> RUGBY</b><div class="sub">URC · Currie Cup · Rugby Championship · SA teams</div></div>
+<div class="card" hidden aria-hidden="true" style="display:none!important"><b> CRICKET</b><div class="sub">Global cricket competitions</div></div>
 <div class="card"><b> MATCH ENGINE</b><div class="sub">Pre-match · Live · Post-match · Learning</div></div>
 <div class="card"><b> CONTENT ENGINE</b><div class="sub">Content · Share · News · Match pages</div></div>
 </div>
@@ -3553,8 +3553,8 @@ if (typeof _origRefreshAll2 === 'function') {
 <div class="home-section-head"><div><h2 style="margin:0">Teams &amp; Players</h2><div class="sub">Global sports-data directory. News is not used here.</div></div></div>
 <div class="seg" style="margin-bottom:10px">
 <button class="active" onclick="v249LoadDirectory('football',this)">Football - Teams &amp; Players</button>
-<button onclick="v249LoadDirectory('rugby',this)">Rugby — Teams &amp; Players</button>
-<button onclick="v249LoadDirectory('cricket',this)">Cricket — Teams &amp; Players</button>
+<button hidden disabled aria-hidden="true" style="display:none!important" onclick="v249LoadDirectory('rugby',this)">Rugby — Teams &amp; Players</button>
+<button hidden disabled aria-hidden="true" style="display:none!important" onclick="v249LoadDirectory('cricket',this)">Cricket — Teams &amp; Players</button>
 </div>
 <div style="display:flex;gap:8px;margin:10px 0"><input aria-label="Search Football Teams and Players" id="v250DirectoryQuery" placeholder="Search teams or players worldwide…" style="flex:1"/><button onclick="v249LoadDirectory(window.v250DirectorySport||'football',document.querySelector('#v249TeamsPlayers .seg button.active'),document.getElementById('v250DirectoryQuery').value)">Search</button></div>
 <div id="v249DirectoryBody"><div class="empty">Loading Football teams and players…</div></div>
@@ -3669,7 +3669,7 @@ if (typeof _origRefreshAll2 === 'function') {
 </div></div>
 <div class="card section" style="border-color:var(--accent);background:linear-gradient(135deg,rgba(34,211,238,.06),var(--card-bg))">
 <div class="home-section-head">
-<div><h2 style="margin:0">Teams &amp; Players Data</h2><div class="sub">Football, rugby and cricket teams and players from supported countries and competitions.</div></div>
+<div><h2 style="margin:0">Teams &amp; Players Data</h2><div class="sub">Explore football teams, players and statistics from leagues worldwide.</div></div>
 <select id="ks213Sport" onchange="ks213SportChanged()">
 <option value="football">Football</option><option value="rugby">Rugby</option><option value="cricket">Cricket</option>
 </select>
@@ -3731,14 +3731,14 @@ if (typeof _origRefreshAll2 === 'function') {
 <div class="home-news-grid" id="homeNewsGrid"><div class="empty">Loading football news…</div></div>
 </div>
 <div class="card">
-<div class="sports-toolbar"><div><h2 style="margin:0"> Sports News</h2><div class="sub">Headline discovery for football, rugby and cricket.</div></div></div>
+<div class="sports-toolbar"><div><h2 style="margin:0"> Sports News</h2><div class="sub">Discover international sports headlines and verified football news.</div></div></div>
 <div class="sport-pills" id="newsPills"></div><div class="sports-filter-row"><input id="newsSearch" placeholder="Search Springboks, Arsenal, Proteas, transfers…"/><button onclick="loadSportsNews()">Search</button></div>
 <div class="news-list" id="sportsNewsList"></div>
 </div>
 </section>
 <section class="tab hidden" id="transfers">
 <div class="card">
-<div class="sports-toolbar"><div><h2 style="margin:0"> Transfer Centre</h2><div class="sub">Transfer activity across football, rugby and cricket.</div></div><div><select id="transferSport" onchange="loadTransfers()"><option value="football">Football</option><option value="rugby">Rugby</option><option value="cricket">Cricket</option></select> <button class="primary" onclick="loadTransfers()">Refresh</button></div></div>
+<div class="sports-toolbar"><div><h2 style="margin:0"> Transfer Centre</h2><div class="sub">Football transfers from leagues and clubs worldwide.</div></div><div><select id="transferSport" onchange="loadTransfers()"><option value="football">Football</option></select> <button class="primary" onclick="loadTransfers()">Refresh</button></div></div>
 <div class="sub" id="transferStatus" style="margin:8px 0"></div><div class="sports-score-list" id="transferList"></div>
 </div>
 </section>
@@ -10161,7 +10161,7 @@ window.loadExpectedScorers = async function() {
 <section class="tab hidden" id="intelligence_hub">
 <div class="card section">
 <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
-<div><h2 style="margin:0">Kasi Sports Intelligence</h2><div class="sub">Football, Rugby and Cricket only · teams, players, competitions and verified current statistics.</div></div>
+<div><h2 style="margin:0">Kasi Sports Intelligence</h2><div class="sub">Worldwide football · teams, players, competitions and verified current statistics.</div></div>
 <span class="badge">Football · Rugby · Cricket</span>
 </div>
 <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
@@ -12235,7 +12235,7 @@ img{max-width:100%}
  const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  let timer;
  const input=document.getElementById('jgEntitySearch');
- if(input){input.placeholder='Search football, rugby or cricket teams, players or competitions';input.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>{if(input.value.trim().length>=2)window.kasiscoreEntitySearch()},300)})}
+ if(input){input.placeholder='Search football teams, players or competitions';input.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>{if(input.value.trim().length>=2)window.kasiscoreEntitySearch()},300)})}
  window.kasiscoreEntitySearch=async function(){
    const q=document.getElementById('jgEntitySearch')?.value.trim(),type=document.getElementById('jgEntityType')?.value||'auto',el=document.getElementById('jgEntityResult');
    if(!el||!q||q.length<2){if(el)el.innerHTML='<div class="jg-empty">Enter at least 2 characters.</div>';return}
@@ -12686,7 +12686,7 @@ body.ks-admin-open #kasiscoreAdminWidget{display:block!important}
  async function loadMultiLive(){
    const el=document.getElementById('liveList');if(!el)return;
    try{const d=await J('/sports/live');const rows=d.games||[];
-     el.innerHTML=rows.length?groupedLive(rows):'<div class="empty">No Football, Rugby or Cricket games are live right now.</div>';
+     el.innerHTML=rows.length?groupedLive(rows):'<div class="empty">No football matches are live right now.</div>';
      const c=document.getElementById('liveTabCount');if(c)c.textContent=rows.length+' live';
    }catch(e){el.innerHTML=`<div class="empty">Live Unable to load data: ${E(e.message)}</div>`}
  }
@@ -15746,7 +15746,7 @@ function group(rows){const m=new Map();rows.forEach(x=>{const k=country(x)+'|'+l
 
 /* ── Live + Finished: grouped by competition with team badges ── */
 window.ksn432MatchList=function(rows,finished,saved){
-  if(!rows.length)return `<div class="empty">${finished?'No matching completed games were found.':'No Football, Rugby or Cricket matches are live right now.'}</div>`;
+  if(!rows.length)return `<div class="empty">${finished?'No matching completed games were found.':'No football matches are live right now.'}</div>`;
   return group(rows).map(g=>`<section class="k432-group"><div class="k432-ghead">${g.flag?`<img src="${E(g.flag)}" alt="" loading="lazy" onerror="this.remove()">`:''}<span>${E(g.league)}</span>${g.country?`<small>${E(g.country)}</small>`:''}</div>${g.rows.map(x=>{
     const h=sc(x,'home'),a=sc(x,'away'),st=finished?'FT':E(x?.minute?x.minute+"'":(x?.statusShort||x?.status?.short||x?.status||'LIVE')),id=fid(x);
     const sp=String(x?.sport||'football').toLowerCase();
@@ -16426,7 +16426,7 @@ const SIDE_GROUPS=[
  {title:'Big 5 Leagues',icon:'🏆',items:[['🇬🇧','Premier League'],['🇪🇸','La Liga'],['🇩🇪','Bundesliga'],['🇮🇹','Serie A'],['🇫🇷','Ligue 1']]},
  {title:'Top Competitions',icon:'🏆',items:[['🏆','UEFA Champions League'],['🏆','Europa League'],['🌍','Africa Cup of Nations'],['🇬🇧','English Championship'],['🇬🇧','FA Cup'],['🇬🇧','EFL Cup']]}
 ];
-const SPORTS=[['football','⚽','Football',()=>go('live','live')],['rugby_intel','🏉','Rugby',()=>go('rugby_intel')],['cricket_intel','🏏','Cricket',()=>go('cricket_intel')],['news','📰','News',()=>go('sportsnews')],['predictions','📊','Predictions',()=>go('predictions')],['mykasi','★','My Kasi',()=>go('platform')]];
+const SPORTS=[['football','⚽','Football',()=>go('live','live')],['news','📰','News',()=>go('sportsnews')],['predictions','📊','Predictions',()=>go('predictions')],['mykasi','★','My Kasi',()=>go('platform')]];
 let activeSport='football', lastRoute='';
 
 function navBtn(cls,ico,label,fn,key){
