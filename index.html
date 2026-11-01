@@ -1618,6 +1618,7 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
   }
   function card(match){
     const wrapper=text('article','','mk-match');
+    wrapper.dataset.fixtureId=match.id;
     wrapper.append(text('div',match.league,'mk-league'));
     const clubs=text('div','','mk-clubs');
     clubs.append(club(match.home),text('span','VS','mk-vs'),
@@ -1687,18 +1688,19 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
       button.setAttribute('aria-pressed','false');
       button.addEventListener('click',async()=>{
         if(!enabled||busy||!isOpen())return;
-        let token='';
-        try{token=localStorage.getItem('kasiscore_session')||'';}catch(_){}
-        if(!token){status.textContent='Sign in to KasiScore to vote.';return;}
+        // V663 Step 911G: public cookie-based supporter voting.
+        // No account or bearer token is required.
         busy=true;syncButtons();status.textContent='Recording vote…';
         try{
           const r=await fetch('/my-kasi/votes/'+encodeURIComponent(match.id),{
             method:'POST',cache:'no-store',
-            headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+            credentials:'same-origin',
+            headers:{'Content-Type':'application/json'},
             body:JSON.stringify({choice:key})
           });
           if(!r.ok){
-            if(r.status===401||r.status===403)throw new Error('Sign in to KasiScore to vote.');
+            if(r.status===428)throw new Error('Refresh voting results and try again.');
+            if(r.status===401||r.status===403)throw new Error('Voting request was rejected.');
             if(r.status===409)throw new Error('Voting has closed for this fixture.');
             if(r.status===429)throw new Error('Too many attempts. Try again later.');
             if(r.status===503)throw new Error('Voting is currently unavailable.');
@@ -1717,36 +1719,33 @@ GEO MIX TARGET: 50% Europe + 25% visitor continent + 5% Asia + 20% other. Within
     (async()=>{
       try{
         const r=await fetch('/my-kasi/votes/'+encodeURIComponent(match.id),{
-          cache:'no-store',headers:{Accept:'application/json'}
+          cache:'no-store',credentials:'same-origin',
+          headers:{Accept:'application/json'}
         });
         if(!r.ok)throw new Error('Vote totals unavailable');
         const data=await r.json();
         enabled=data.votingEnabled===true;
         if(enabled){
-          let savedToken='';
-          try{savedToken=localStorage.getItem('kasiscore_session')||'';}catch(_){}
-          if(savedToken){
-            try{
-              const mineResponse=await fetch(
-                '/my-kasi/votes/'+encodeURIComponent(match.id)+'/mine',
-                {headers:{Authorization:'Bearer '+savedToken},cache:'no-store'}
-              );
-              if(mineResponse.ok){
-                const mine=await mineResponse.json();
-                if(['H','D','A'].includes(mine.myChoice)){
-                  selected=mine.myChoice;
-                  options.querySelectorAll('button').forEach((button,i)=>{
-                    button.setAttribute('aria-pressed',String(selected===choices[i]?.[0]));
-                  });
-                }
-              }
-            }catch(_){/* Vote totals remain available if restoration fails. */}
+          try{
+            const mineResponse=await fetch(
+              '/my-kasi/votes/'+encodeURIComponent(match.id)+'/mine',
+              {credentials:'same-origin',cache:'no-store'}
+            );
+            if(mineResponse.ok){
+              const mine=await mineResponse.json();
+              selected=['H','D','A'].includes(mine.myChoice)
+                ?mine.myChoice:null;
+            }
+          }catch(_){
+            // Public totals remain available if restoration fails.
           }
         }
         showTotals(data);
         status.textContent=!enabled?'Voting is not enabled yet.':
           !isOpen()?'Voting is closed for this fixture.':
-          'Sign in to vote. You can change your vote before kickoff.';
+          selected
+            ?'Your vote is saved. You can change it before kickoff.'
+            :'Choose Home, Draw or Away. No login required.';
       }catch(_){enabled=false;status.textContent='Voting is currently unavailable.';}
       syncButtons();
     })();

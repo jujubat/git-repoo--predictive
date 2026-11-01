@@ -6580,17 +6580,91 @@ def _mk906_available_fixture(fixture_id):
     return None
 
 
+
+# V663 STEP 911F: Anonymous supporter voting.
+# Existing authenticated vote records remain intact.
+def _mk911_signing_key():
+    key = os.getenv("KSN_ANON_VOTE_SECRET", "").strip()
+    if len(key) < 32:
+        raise HTTPException(
+            status_code=503,
+            detail="Anonymous voting signing secret unavailable"
+        )
+    return key.encode("utf-8")
+
+
+def _mk911_cookie_identity(request):
+    value = request.cookies.get("ksn_anon_vote_v1", "")
+    parts = value.split(".")
+    if len(parts) != 2:
+        return None
+    visitor_id, signature = parts
+    if not re.fullmatch(r"[0-9a-f]{32}", visitor_id):
+        return None
+    expected = hmac.new(
+        _mk911_signing_key(), visitor_id.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    return visitor_id if hmac.compare_digest(
+        signature, expected
+    ) else None
+
+
+def _mk911_set_cookie(response, visitor_id, request):
+    signature = hmac.new(
+        _mk911_signing_key(), visitor_id.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    response.set_cookie(
+        "ksn_anon_vote_v1",
+        visitor_id + "." + signature,
+        max_age=31536000,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/my-kasi"
+    )
+    return response
+
+
+def _mk911_origin_check(request):
+    from urllib.parse import urlsplit
+    origin = request.headers.get("origin", "")
+    if not origin:
+        raise HTTPException(403, "Origin header required")
+    parsed = urlsplit(origin)
+    if parsed.scheme != "https" or (
+        parsed.netloc.lower() != request.headers.get("host", "").lower()
+    ):
+        raise HTTPException(403, "Cross-origin vote blocked")
+
+
+def _mk911_schema(c):
+    c.execute("""CREATE TABLE IF NOT EXISTS my_kasi_anonymous_votes(
+        fixture_id TEXT NOT NULL,
+        visitor_id TEXT NOT NULL,
+        choice TEXT NOT NULL CHECK(choice IN ('H','D','A')),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(fixture_id, visitor_id)
+    )""")
+    c.commit()
+
+
+def _mk911_visitor(request):
+    return _mk911_cookie_identity(request) or secrets.token_hex(16)
+
+
 def _mk906_db():
     c = _auth_db()
     try:
-        c.execute('''CREATE TABLE IF NOT EXISTS my_kasi_supporter_votes (
+        c.execute("""CREATE TABLE IF NOT EXISTS my_kasi_supporter_votes(
             fixture_id TEXT NOT NULL,
             user_id BIGINT NOT NULL,
             choice TEXT NOT NULL CHECK(choice IN ('H','D','A')),
             updated_at TEXT NOT NULL,
-            PRIMARY KEY (fixture_id, user_id)
-        )''')
-        c.commit()
+            PRIMARY KEY(fixture_id, user_id)
+        )""")
+        _mk911_schema(c)
         return c
     except Exception:
         c.close()
@@ -6598,100 +6672,150 @@ def _mk906_db():
 
 
 def _mk906_totals(c, fixture_id):
-    rows = c.execute('SELECT choice, COUNT(*) FROM my_kasi_supporter_votes WHERE fixture_id=? GROUP BY choice', (fixture_id,)).fetchall()
-    totals = {'H':0,'D':0,'A':0}
-    for row in rows:
-        if row[0] in totals:
-            totals[row[0]] = int(row[1])
-    total = sum(totals.values())
-    return {'total':total, 'counts':totals, 'percentages':{k:round(100*v/total,1) if total else 0 for k,v in totals.items()}}
+    counts = {"H": 0, "D": 0, "A": 0}
+    for table in (
+        "my_kasi_supporter_votes",
+        "my_kasi_anonymous_votes"
+    ):
+        rows = c.execute(
+            "SELECT choice,COUNT(*) FROM " + table +
+            " WHERE fixture_id=? GROUP BY choice",
+            (fixture_id,)
+        ).fetchall()
+        for choice, count in rows:
+            if choice in counts:
+                counts[choice] += int(count)
+    total = sum(counts.values())
+    return {
+        "total": total,
+        "counts": counts,
+        "percentages": {
+            k: round(v * 100 / total, 1) if total else 0
+            for k, v in counts.items()
+        }
+    }
 
 
 # V663 Step 907B: Authenticated read-back of the supporter's existing vote.
-@app.get('/my-kasi/votes/{fixture_id}/mine')
-def my_kasi_my_vote(fixture_id: str, authorization: Optional[str] = Header(default=None)):
+@app.get("/my-kasi/votes/{fixture_id}/mine")
+def my_kasi_my_vote(fixture_id: str, request: Request):
     from fastapi.responses import JSONResponse
-    if not re.fullmatch(r'[1-9][0-9]{0,17}', fixture_id):
-        raise HTTPException(status_code=400, detail='Invalid fixture ID')
-    user = get_current_user(authorization)
-    if user.get('status') != 'active':
-        raise HTTPException(status_code=403, detail='Account unavailable')
+    if not re.fullmatch(r"[1-9][0-9]{0,17}", fixture_id):
+        raise HTTPException(400, "Invalid fixture ID")
     if not _mk906_enabled():
         return JSONResponse(
-            {'votingEnabled': False, 'fixtureId': fixture_id, 'myChoice': None},
-            headers={'Cache-Control': 'private, no-store'}
+            {"votingEnabled": False, "fixtureId": fixture_id,
+             "myChoice": None},
+            headers={"Cache-Control": "private, no-store"}
         )
+    visitor = _mk911_visitor(request)
     c = _mk906_db()
     try:
         row = c.execute(
-            'SELECT choice FROM my_kasi_supporter_votes WHERE fixture_id=? AND user_id=?',
-            (fixture_id, int(user['id']))
+            "SELECT choice FROM my_kasi_anonymous_votes "
+            "WHERE fixture_id=? AND visitor_id=?",
+            (fixture_id, visitor)
         ).fetchone()
     finally:
         c.close()
-    choice = row[0] if row and row[0] in ('H', 'D', 'A') else None
-    return JSONResponse(
-        {'votingEnabled': True, 'fixtureId': fixture_id, 'myChoice': choice},
-        headers={'Cache-Control': 'private, no-store'}
+    response = JSONResponse(
+        {"votingEnabled": True, "fixtureId": fixture_id,
+         "myChoice": row[0] if row else None},
+        headers={"Cache-Control": "private, no-store"}
+    )
+    return _mk911_set_cookie(response, visitor, request)
+
+
+@app.get("/my-kasi/votes/{fixture_id}")
+def my_kasi_vote_totals(fixture_id: str, request: Request):
+    from fastapi.responses import JSONResponse
+    if not re.fullmatch(r"[1-9][0-9]{0,17}", fixture_id):
+        raise HTTPException(400, "Invalid fixture ID")
+    if not _mk906_enabled():
+        return JSONResponse(
+            {"votingEnabled": False, "fixtureId": fixture_id},
+            headers={"Cache-Control": "no-store"}
+        )
+    try:
+        fixture = _mk906_available_fixture(fixture_id)
+    except Exception:
+        raise HTTPException(503, "Fixture validation unavailable")
+    if fixture is None:
+        raise HTTPException(404, "Voting fixture unavailable")
+    c = _mk906_db()
+    try:
+        result = _mk906_totals(c, fixture_id)
+    finally:
+        c.close()
+    response = JSONResponse(
+        {"votingEnabled": True, "fixtureId": fixture_id, **result},
+        headers={"Cache-Control": "no-store"}
+    )
+    return _mk911_set_cookie(
+        response, _mk911_visitor(request), request
     )
 
 
-@app.get('/my-kasi/votes/{fixture_id}')
-def my_kasi_vote_totals(fixture_id: str):
-    from fastapi.responses import JSONResponse
-    if not re.fullmatch(r'[1-9][0-9]{0,17}', fixture_id):
-        raise HTTPException(status_code=400, detail='Invalid fixture ID')
-    if not _mk906_enabled():
-        return JSONResponse({'votingEnabled':False,'fixtureId':fixture_id}, headers={'Cache-Control':'no-store'})
-    try:
-        with_fixture = _mk906_available_fixture(fixture_id)
-    except Exception:
-        raise HTTPException(status_code=503,detail='Fixture validation unavailable')
-    if with_fixture is None:
-        raise HTTPException(status_code=404,detail='Voting fixture unavailable')
-    c = _mk906_db()
-    try:
-        result = _mk906_totals(c,fixture_id)
-    finally:
-        c.close()
-    return JSONResponse({'votingEnabled':True,'fixtureId':fixture_id,**result}, headers={'Cache-Control':'no-store, max-age=0'})
-
-
-@app.post('/my-kasi/votes/{fixture_id}')
-async def my_kasi_submit_vote(fixture_id: str, request: Request, authorization: Optional[str] = Header(default=None)):
+@app.post("/my-kasi/votes/{fixture_id}")
+async def my_kasi_submit_vote(fixture_id: str, request: Request):
     from fastapi.responses import JSONResponse
     if not _mk906_enabled():
-        raise HTTPException(status_code=503,detail='Supporter voting is not enabled')
-    if not re.fullmatch(r'[1-9][0-9]{0,17}',fixture_id):
-        raise HTTPException(status_code=400,detail='Invalid fixture ID')
-    user = get_current_user(authorization)
-    if user.get('status') != 'active':
-        raise HTTPException(status_code=403,detail='Account unavailable')
-    _require_auth_rate(request,'my-kasi-vote',str(user['id']),limit=20,window=300)
+        raise HTTPException(503, "Supporter voting is disabled")
+    if not re.fullmatch(r"[1-9][0-9]{0,17}", fixture_id):
+        raise HTTPException(400, "Invalid fixture ID")
+
+    _mk911_origin_check(request)
+    visitor = _mk911_cookie_identity(request)
+    if not visitor:
+        raise HTTPException(428, "Load voting results before voting")
+
+    _require_auth_rate(
+        request, "my-kasi-anonymous-vote", visitor,
+        limit=12, window=300
+    )
+
     try:
         body = await request.json()
     except Exception:
-        raise HTTPException(status_code=400,detail='Invalid JSON')
-    if not isinstance(body,dict) or set(body) != {'choice'} or body.get('choice') not in ('H','D','A'):
-        raise HTTPException(status_code=422,detail='Choice must be H, D or A')
+        raise HTTPException(400, "Invalid JSON")
+    if not isinstance(body, dict) or (
+        set(body) != {"choice"} or
+        body.get("choice") not in ("H", "D", "A")
+    ):
+        raise HTTPException(422, "Invalid voting choice")
+
     try:
-        valid = await asyncio.to_thread(_mk906_available_fixture,fixture_id)
+        fixture = await asyncio.to_thread(
+            _mk906_available_fixture, fixture_id
+        )
     except Exception:
-        raise HTTPException(status_code=503,detail='Fixture validation unavailable')
-    if valid is None:
-        raise HTTPException(status_code=409,detail='Fixture is not open for voting')
+        raise HTTPException(503, "Fixture validation unavailable")
+    if fixture is None:
+        raise HTTPException(409, "Fixture voting has closed")
+
     c = _mk906_db()
     try:
-        # Upsert is atomic and uses the composite primary key to prevent duplicates.
-        c.execute('''INSERT INTO my_kasi_supporter_votes(fixture_id,user_id,choice,updated_at)
-            VALUES(?,?,?,?)
-            ON CONFLICT(fixture_id,user_id) DO UPDATE SET choice=excluded.choice,updated_at=excluded.updated_at''',
-            (fixture_id,int(user['id']),body['choice'],datetime.now(timezone.utc).isoformat()))
+        c.execute(
+            """INSERT INTO my_kasi_anonymous_votes(
+                fixture_id,visitor_id,choice,updated_at
+            ) VALUES(?,?,?,?)
+            ON CONFLICT(fixture_id,visitor_id)
+            DO UPDATE SET choice=excluded.choice,
+                          updated_at=excluded.updated_at""",
+            (fixture_id, visitor, body["choice"],
+             datetime.now(timezone.utc).isoformat())
+        )
         c.commit()
-        result = _mk906_totals(c,fixture_id)
+        result = _mk906_totals(c, fixture_id)
     finally:
         c.close()
-    return JSONResponse({'ok':True,'votingEnabled':True,'fixtureId':fixture_id,'myChoice':body['choice'],**result},headers={'Cache-Control':'no-store, max-age=0'})
+
+    return JSONResponse(
+        {"ok": True, "votingEnabled": True,
+         "fixtureId": fixture_id,
+         "myChoice": body["choice"], **result},
+        headers={"Cache-Control": "no-store"}
+    )
 
 @app.get("/fixtures")
 async def fixtures(
