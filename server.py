@@ -21341,12 +21341,16 @@ async def shared_bootstrap_v407():
     """Disk-only shared last-known-good data, with an isolated failure response."""
     from fastapi.responses import JSONResponse
     try:
-        body = await asyncio.to_thread(_v434_build_bootstrap)
+        body = await _v434_cached_bootstrap_body()
+        complete = _v434_bootstrap_complete(body)
         return JSONResponse(
             body,
             headers={
-                "Cache-Control": "public, max-age=30, s-maxage=120, stale-while-revalidate=900, stale-if-error=86400",
-                "X-KSN-Shared-Cache": "BOOTSTRAP-LKG",
+                "Cache-Control": (
+                    "public, max-age=30, s-maxage=120, stale-while-revalidate=900, stale-if-error=86400"
+                    if complete else "no-store"
+                ),
+                "X-KSN-Shared-Cache": "BOOTSTRAP-LKG" if complete else "PARTIAL",
             },
         )
     except Exception:
@@ -21371,6 +21375,60 @@ _V434_INLINE_TTL=10.0
 _V434_INLINE_CACHE:dict={"t":0.0,"json":""}
 _V434_INLINE_LOCK=asyncio.Lock()
 
+# V663 Step 916D: in-process, mode-isolated bootstrap payload cache.
+# This caches only the compact response, never the source snapshots.
+_V434_BODY_CACHE:dict={"t":0.0,"mode":None,"body":None}
+_V434_BODY_LOCK=asyncio.Lock()
+
+_V434_REQUIRED_WIDGETS = frozenset(("tip", "news", "highlights", "live", "finished", "footballFixtures", "predictions"))
+
+def _v434_bootstrap_complete(body)->bool:
+    return (
+        isinstance(body, dict)
+        and isinstance(body.get("widgets"), dict)
+        and _V434_REQUIRED_WIDGETS.issubset(body["widgets"])
+        and all(
+            isinstance(body["widgets"].get(name), dict)
+            and bool(body["widgets"][name].get("payload"))
+            for name in _V434_REQUIRED_WIDGETS
+        )
+    )
+
+async def _v434_cached_bootstrap_body()->dict:
+    mode = "football-only" if _ksn_v663_staging_football_only() else "unrestricted"
+    cache = _V434_BODY_CACHE
+
+    def valid(now):
+        body = cache.get("body")
+        return (
+            cache.get("mode") == mode
+            and _v434_bootstrap_complete(body)
+            and (now-cache["t"]) < _V434_INLINE_TTL
+        )
+
+    now = time.monotonic()
+    if valid(now):
+        return cache["body"]
+
+    async with _V434_BODY_LOCK:
+        now = time.monotonic()
+        if valid(now):
+            return cache["body"]
+
+        try:
+            body = await asyncio.to_thread(_v434_build_bootstrap)
+        except Exception:
+            # Preserve caller-specific degraded/error handling.
+            raise
+
+        if _v434_bootstrap_complete(body):
+            cache["body"] = body
+            cache["mode"] = mode
+            cache["t"] = time.monotonic()
+
+        return body
+
+
 async def _v434_inline_bootstrap_json()->str:
     """Serialized, script-safe bootstrap JSON, memoized for a few seconds so traffic spikes
     don't each hit SQLite. Returns '' when there is nothing worth inlining."""
@@ -21384,7 +21442,7 @@ async def _v434_inline_bootstrap_json()->str:
         if c.get("mode")==mode and c["json"] and time.time()-c["t"]<_V434_INLINE_TTL:
             return c["json"]
         try:
-            body=await asyncio.to_thread(_v434_build_bootstrap)
+            body=await _v434_cached_bootstrap_body()
             raw=json.dumps(body,ensure_ascii=False,separators=(",",":")) if body.get("widgets") else ""
             # Make the JSON safe inside an inline <script>: no </script>, <!--, or JS line terminators.
             raw=raw.replace("<","\\u003c").replace(">","\\u003e").replace("&","\\u0026").replace("\u2028","\\u2028").replace("\u2029","\\u2029")
