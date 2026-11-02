@@ -18723,12 +18723,50 @@ a{color:#80bdff}
 
 
 /* V663 STEP 924AW-4: H2H verified team navigation */
+/* V663 924BG-2: finished Match Centre layout upgrade */
+.ksn-coach-profile{display:flex;align-items:center;gap:12px;margin:12px 0;padding:10px 12px;border:1px solid #2a3941;border-radius:12px;background:#142128}
+.ksn-coach-photo,.ksn-coach-placeholder{width:48px;height:48px;border-radius:50%;object-fit:cover;flex-shrink:0;border:2px solid #567586}
+.ksn-coach-placeholder{display:grid;place-items:center;font-size:15px;font-weight:700;color:#e4edf4;background:#263a45}
+.ksn-h2h-summary{padding:22px 16px!important;border:1px solid #2b3940;border-radius:12px;margin:10px 0 16px;background:#152127;text-align:center}
+.ksn-h2h-history-row{display:grid!important;grid-template-columns:minmax(85px,1fr) minmax(0,3fr);gap:12px;padding:18px 14px!important;border-bottom:1px solid #2d3a42;align-items:center}
+.ksn-h2h-history-row:nth-child(even){background:#19282f}
+.ksn-h2h-history-row .ksn-h2h-result{justify-content:center;gap:14px!important;font-weight:600}
+.ksn-fixture-matchup{display:grid!important;grid-template-columns:minmax(0,1fr) minmax(80px,.7fr) minmax(0,1fr);gap:12px;align-items:center}
+.ksn-fixture-side{min-width:0;display:flex;gap:8px;align-items:center}
+.ksn-fixture-side.ksn-fixture-home{justify-content:flex-start;text-align:left}
+.ksn-fixture-side.ksn-fixture-away{justify-content:flex-end;text-align:right}
+.ksn-commentary-event .ksn-event-symbol{display:inline-flex;justify-content:center;align-items:center;vertical-align:middle}
+.ksn-event-yellow .ksn-event-symbol,.ksn-event-red .ksn-event-symbol{font-size:0!important;border-radius:2px!important;width:13px!important;height:19px!important;min-width:13px!important;box-shadow:1px 2px 0 #081015}
+.ksn-event-yellow .ksn-event-symbol{background:#facc15!important;border:1px solid #eab308}
+.ksn-event-red .ksn-event-symbol{background:#ef4444!important;border:1px solid #dc2626}
+@media(max-width:620px){.ksn-fixture-matchup{grid-template-columns:minmax(0,1fr) 70px minmax(0,1fr);gap:5px}.ksn-h2h-history-row{grid-template-columns:1fr;gap:6px}}
 .ksn-h2h-teams{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .ksn-h2h-summary{padding:8px 0 12px}
 .ksn-h2h-summary p{margin:5px 0}
 .ksn-h2h-result{display:flex;gap:5px;flex-wrap:wrap;align-items:center}
 
 
+/* V663 STEP 924BG-4: finished H2H, fixture and event details */
+.ksn-bg4-h2h-heading{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:14px;padding:18px 10px}
+.ksn-bg4-h2h-club{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;font-weight:700}
+.ksn-bg4-h2h-badge{width:54px;height:54px;object-fit:contain}
+.ksn-bg4-h2h-versus{font-size:12px;font-weight:700;letter-spacing:.07em;color:#9fb3c9;text-transform:uppercase}
+.ksn-bg4-h2h-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0 14px}
+.ksn-bg4-h2h-stat{display:flex;flex-direction:column;align-items:center;gap:5px;padding:16px 5px;background:#182a39;border:1px solid #35445a;border-radius:10px}
+.ksn-bg4-h2h-stat strong{font-size:28px;font-variant-numeric:tabular-nums;color:#fff}
+.ksn-bg4-h2h-stat small{color:#b6c9da;text-align:center}
+.ksn-bg4-h2h-match{padding:13px 10px;border-bottom:1px solid #35445a}
+.ksn-bg4-h2h-match:nth-child(even){background:#192936}
+.ksn-bg4-h2h-matchup{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:8px;align-items:center;margin-top:7px}
+.ksn-bg4-h2h-side{display:flex;gap:7px;align-items:center;min-width:0;overflow-wrap:anywhere}
+.ksn-bg4-h2h-side:last-child{justify-content:flex-end;text-align:right}
+.ksn-bg4-h2h-matchup .ksn-bg4-h2h-badge{width:28px;height:28px;flex-shrink:0}
+.ksn-bg4-h2h-score{font-size:19px;color:#f1f7fc;white-space:nowrap}
+.ksn-bg4-winner a,.ksn-bg4-winner span{color:#4ade80!important;font-weight:700}
+.ksn-bg4-player-change{display:flex;align-items:center;gap:9px}
+.ksn-bg4-event-photo{width:35px;height:35px;object-fit:cover;flex:0 0 35px;border-radius:50%;background:#263a45}
+.ksn-bg4-assist-boot{display:inline-block;margin-right:8px;font-size:16px;vertical-align:middle}
+@media(max-width:620px){.ksn-bg4-h2h-heading{gap:6px}.ksn-bg4-h2h-badge{width:40px;height:40px}.ksn-bg4-h2h-matchup{gap:4px}.ksn-bg4-h2h-score{font-size:16px}.ksn-bg4-h2h-matchup .ksn-bg4-h2h-badge{width:22px;height:22px}}
 /* V663 STEP 924AZ-2: club badges and team identities */
 #home,#away{
  display:flex;
@@ -19116,7 +19154,7 @@ const ksnHome=el('home'),ksnAway=el('away');
   function matchRound(rawValue){
    const raw=String(rawValue??'').trim();
    const found=/^Regular Season\\s*-\\s*([1-9][0-9]*)$/i.exec(raw);
-   if(found)return {label:'Game Week',value:'GW-'+Number(found[1])};
+   if(found)return {label:'Game Week',value:String(Number(found[1]))};
    return {label:'Round',value:raw||'Unavailable'};
   }
   const savedRound=matchRound(m.round_name);
@@ -19202,10 +19240,17 @@ const ksnHome=el('home'),ksnAway=el('away');
    const fixture=data.fixture||{};
    const league=data.league||{};
 
-   const round=matchRound(league.round||m.round_name);
-   if(round.label===savedRound.label){
-    matchField(round.label,round.value);
-   }
+// V663 STEP 924BG-6B: prefer the verified enhanced league round.
+    const round=matchRound(league.round||m.round_name);
+    if(round.label==='Game Week'){
+     for(const row of [...panels.match.querySelectorAll('.row')]){
+      const label=row.firstElementChild?.textContent?.trim();
+      if(label==='Round'||label==='Game Week')row.remove();
+     }
+     matchField('Game Week',round.value);
+    }else if(round.label===savedRound.label){
+     matchField(round.label,round.value);
+    }
 
    matchField('Venue',fixture.venue?.name||m.venue);
    matchField('Referee',fixture.referee||m.referee);
@@ -19344,10 +19389,34 @@ if(lineups.length){
    formation.className='muted';
    card.append(formation);
 
-   if(t.coach?.name){
-    const coach=text('p','Coach: '+t.coach.name);
-    card.append(coach);
-   }
+       if(t.coach?.name){
+     // V663 924BG-2: verified coach image, with initials fallback.
+     const coach=document.createElement('div');
+     coach.className='ksn-coach-profile';
+     const portrait=imageUrl(t.coach.photo||t.coach.image);
+     if(portrait){
+      const img=document.createElement('img');
+      img.className='ksn-coach-photo';
+      img.src=portrait;
+      img.alt=t.coach.name;
+      img.loading='lazy';
+      img.onerror=()=>{
+       const placeholder=document.createElement('span');
+       placeholder.className='ksn-coach-placeholder';
+       placeholder.textContent=String(t.coach.name).trim().split(/\s+/).slice(0,2).map(s=>s[0]||'').join('').toUpperCase();
+       img.replaceWith(placeholder);
+      };
+      coach.append(img);
+     }else{
+      const placeholder=document.createElement('span');
+      placeholder.className='ksn-coach-placeholder';
+      placeholder.textContent=String(t.coach.name).trim().split(/\s+/).slice(0,2).map(s=>s[0]||'').join('').toUpperCase();
+      coach.append(placeholder);
+     }
+     const label=text('span','Coach: '+t.coach.name);
+     coach.append(label);
+     card.append(coach);
+    }
 
    let starting=Array.isArray(t.startXI)?t.startXI:[];
    let substitutes=Array.isArray(t.substitutes)
@@ -19566,7 +19635,39 @@ header.append(col);
     }
 
    // V663 STEP 924AW-3: clickable commentary teams
-   const events=Array.isArray(enhanced.events)?enhanced.events:[];
+    // V663 STEP 924BG-4: verified player portraits from this fixture only.
+    const playersById=new Map();
+    const playersBySideAndName=new Map();
+    const validPlayerPhoto=value=>{
+     if(typeof value!=='string')return '';
+     try{
+      const u=new URL(value);
+      return u.protocol==='https:'&&['media.api-sports.io','media.api-football.com'].includes(u.hostname)?u.href:'';
+     }catch{return ''}
+    };
+    for(const t of (Array.isArray(enhanced.teams)?enhanced.teams:[])){
+     const sideId=String(t?.team?.id||'');
+     for(const entry of (Array.isArray(t?.players)?t.players:[])){
+      const player=entry?.player||entry||{};
+      const photo=validPlayerPhoto(player.photo||player.image);
+      const pid=String(player.id||'');
+      const name=String(player.name||'').trim().toLowerCase();
+      if(photo&&/^[1-9][0-9]{0,11}$/.test(pid))playersById.set(pid,photo);
+      if(photo&&name)playersBySideAndName.set(sideId+'|'+name,photo);
+     }
+    }
+    function commentaryPortrait(person,sideId){
+     const pid=String(person?.id||'');
+     const name=String(person?.name||'').trim().toLowerCase();
+     const src=(/^[1-9][0-9]{0,11}$/.test(pid)?playersById.get(pid):'')||
+        playersBySideAndName.get(String(sideId||'')+'|'+name);
+     if(!src)return null;
+     const img=document.createElement('img');img.className='ksn-bg4-event-photo';
+     img.src=src;img.alt='';img.loading='lazy';
+     img.onerror=()=>img.remove();
+     return img;
+    }
+    const events=Array.isArray(enhanced.events)?enhanced.events:[];
    if(events.length){
     const timeline=document.createElement('div');
     timeline.className='ksn-commentary-timeline';
@@ -19630,7 +19731,9 @@ header.append(col);
          'p',
          String.fromCharCode(0x2191)+' ON: '+incoming
         );
-        on.className='ksn-player-coming-on';
+        on.className='ksn-player-coming-on ksn-bg4-player-change';
+        const photo=commentaryPortrait(e.assist,teamId);
+        if(photo)on.prepend(photo);
         event.append(on);
        }
 
@@ -19639,7 +19742,9 @@ header.append(col);
          'p',
          String.fromCharCode(0x2193)+' OFF: '+outgoing
         );
-        off.className='ksn-player-going-off';
+        off.className='ksn-player-going-off ksn-bg4-player-change';
+        const photo=commentaryPortrait(e.player,teamId);
+        if(photo)off.prepend(photo);
         event.append(off);
        }
 
@@ -19654,9 +19759,16 @@ header.append(col);
         e.assist?.name?'Assist: '+e.assist.name:''
        ].filter(Boolean).join(' | ');
 
-       event.append(
-        text('p',detail||'Event recorded')
-       );
+        const description=text('p',detail||'Event recorded');
+        if(kind==='goal'&&e.assist?.name){
+         const boot=document.createElement('span');
+         boot.className='ksn-bg4-assist-boot';
+         boot.textContent=String.fromCodePoint(0x1F45F);
+         boot.setAttribute('aria-label','Assist');
+         boot.title='Assist by '+String(e.assist.name);
+         description.prepend(boot);
+        }
+        event.append(description);
       }
      timeline.append(event);
     });
@@ -19829,13 +19941,29 @@ function renderGroup(parent,title,rows,empty){
    const verifiedId=String(id||'');
    const homeId=String(m.home_id||'');
    const awayId=String(m.away_id||'');
-   const badge=verifiedId===homeId
-      ?m.home_badge
-      :verifiedId===awayId
-        ?m.away_badge
-        :'';
+    // V663 STEP 924BG-4: verified club logos from the enhanced table only.
+    const standingRows=Array.isArray(enhanced?.standings)?enhanced.standings:[];
+    const standingLogo=standingRows.find(r=>String(r?.team?.id||'')===verifiedId)?.team?.logo||'';
+    const badge=verifiedId===homeId
+       ?(m.home_badge||standingLogo)
+       :verifiedId===awayId
+         ?(m.away_badge||standingLogo)
+         :standingLogo;
 
-   box.append(ksnBadge(badge,name));
+// V663 STEP 924BG-6B: verified numeric-ID badge fallback.
+    if(badge){
+     box.append(ksnBadge(badge,name));
+    }else if(/^[1-9][0-9]{0,11}$/.test(verifiedId)){
+     const image=document.createElement('img');
+     image.className='ksn-club-badge';
+     image.src='/sports/football/team-badge/'+encodeURIComponent(verifiedId);
+     image.alt=name+' club badge';
+     image.loading='lazy';
+     image.onerror=()=>image.replaceWith(ksnBadge('',name));
+     box.append(image);
+    }else{
+     box.append(ksnBadge('',name));
+    }
 
    const link=ksnTeamLink(name,id);
    link.classList.add('ksn-fixture-team-name');
@@ -19969,17 +20097,64 @@ function h2hText(value){
  p.textContent=String(value);
  return p;
 }
-function h2hTeamsHeading(home,away){
- const heading=document.createElement('h3');
- heading.className='ksn-h2h-teams';
- heading.append(
-  h2hVerifiedLink(home),
-  document.createTextNode(' vs '),
-  h2hVerifiedLink(away)
- );
- h2hPanel.append(heading);
+// V663 STEP 924BG-4: H2H club identity and semantic summary.
+function h2hBadge(name){
+ const root=document.documentElement.dataset;
+ const id=String(name)===String(root.ksnArchiveHomeName||'')
+   ?String(root.ksnArchiveHomeId||''):
+   String(name)===String(root.ksnArchiveAwayName||'')
+    ?String(root.ksnArchiveAwayId||''):'';
+ if(!/^[1-9][0-9]{0,11}$/.test(id))return document.createTextNode('');
+ const img=document.createElement('img');
+ img.className='ksn-bg4-h2h-badge';
+ img.src='/sports/football/team-badge/'+encodeURIComponent(id);
+ img.alt=''; img.loading='lazy';
+ img.onerror=()=>img.replaceWith(document.createTextNode(''));
+ return img;
 }
-
+function h2hTeamsHeading(home,away){
+ const heading=document.createElement('div');
+ heading.className='ksn-bg4-h2h-heading';
+ const left=document.createElement('div');
+ const right=document.createElement('div');
+ left.className='ksn-bg4-h2h-club';right.className='ksn-bg4-h2h-club';
+ left.append(h2hBadge(home),h2hVerifiedLink(home));
+ right.append(h2hBadge(away),h2hVerifiedLink(away));
+ const vs=document.createElement('span');vs.textContent='Head to Head';
+ vs.className='ksn-bg4-h2h-versus';
+ heading.append(left,vs,right);h2hPanel.append(heading);
+}
+function h2hSummary(homeWins,draws,awayWins,played){
+ const items=[['Home wins',homeWins],['Draws',draws],['Away wins',awayWins]];
+ if(!items.every(x=>Number.isInteger(Number(x[1]))&&Number(x[1])>=0))return;
+ const wrap=document.createElement('section');wrap.className='ksn-bg4-h2h-summary';
+ for(const [name,count] of items){
+  const block=document.createElement('div');block.className='ksn-bg4-h2h-stat';
+  const num=document.createElement('strong');num.textContent=String(count);
+  const label=document.createElement('small');label.textContent=name;
+  block.append(num,label);wrap.append(block);
+ }
+ h2hPanel.append(wrap);
+ if(Number.isInteger(Number(played))&&Number(played)>0){
+  const note=add('p',String(played)+' verified completed meetings');note.className='muted';
+ }
+}
+function h2hMeeting(date,league,home,hs,as,away){
+ if(!Number.isFinite(Number(hs))||!Number.isFinite(Number(as)))return;
+ const row=document.createElement('article');row.className='ksn-bg4-h2h-match';
+ const dateEl=document.createElement('small');dateEl.className='muted';
+ dateEl.textContent=[String(date||'').slice(0,10),league||''].filter(Boolean).join(' · ');
+ const grid=document.createElement('div');grid.className='ksn-bg4-h2h-matchup';
+ const left=document.createElement('div');left.className='ksn-bg4-h2h-side';
+ left.append(h2hBadge(home),h2hVerifiedLink(home));
+ const right=document.createElement('div');right.className='ksn-bg4-h2h-side';
+ right.append(h2hBadge(away),h2hVerifiedLink(away));
+ const score=document.createElement('strong');score.className='ksn-bg4-h2h-score';
+ score.textContent=String(hs)+' – '+String(as);
+ if(Number(hs)>Number(as))left.classList.add('ksn-bg4-winner');
+ if(Number(as)>Number(hs))right.classList.add('ksn-bg4-winner');
+ grid.append(left,score,right);row.append(dateEl,grid);h2hPanel.append(row);
+}
 
 // V663 STEP 924BA-1B: verified H2H recovery
 async function ksnRecoverHistoricalH2H(){
@@ -20071,35 +20246,21 @@ async function ksnRecoverHistoricalH2H(){
 
   if(!matches.length)return false;
 
-  const source=document.createElement('p');
-  source.className='muted';
-  source.textContent='Last '+matches.length+
-    ' verified previous meetings (API-Football)';
-  h2hPanel.append(source);
-
-  for(const m of matches){
-   const row=document.createElement('div');
-   row.className='ksn-h2h-history-row';
-
-   const details=document.createElement('small');
-   details.className='muted';
-   details.textContent=[m.date,m.league]
-     .filter(Boolean).join(' \u00b7 ');
-
-   const result=document.createElement('div');
-   result.className='ksn-h2h-result';
-   result.append(
-    h2hVerifiedLink(m.hn),
-    document.createTextNode(
-     ' '+m.hs+' \u2013 '+m.as+' '
-    ),
-    h2hVerifiedLink(m.an)
-   );
-
-   row.append(details,result);
-   h2hPanel.append(row);
-  }
-  return true;
+     let homeWins=0,awayWins=0,draws=0;
+   const normName=v=>String(v||'').trim().toLowerCase().replace(/\s+/g,' ');
+   for(const item of matches){
+    if(item.hs===item.as)draws++;
+    else if((item.hs>item.as&&normName(item.hn)===normName(home))||
+            (item.as>item.hs&&normName(item.an)===normName(home)))homeWins++;
+    else awayWins++;
+   }
+   h2hSummary(homeWins,draws,awayWins,matches.length);
+   const sample=add('p','Last '+matches.length+' verified previous meetings (API-Football)');
+   sample.className='muted';
+   for(const item of matches){
+    h2hMeeting(item.date,item.league,item.hn,item.hs,item.as,item.an);
+   }
+   return true;
  }catch(error){
   return false;
  }finally{
@@ -20155,50 +20316,11 @@ const resolvedArchiveKey =
     return;
    }
 
-  const summary=document.createElement('div');
-   summary.className='ksn-h2h-summary';
-   summary.append(h2hText(
-    String(data.played)+' recorded meetings'
-   ));
-   const homeStat=document.createElement('p');
-   homeStat.append(
-    h2hVerifiedLink(data.homeTeam||'Home'),
-    document.createTextNode(': '+data.homeWins+' wins')
-   );
-   const awayStat=document.createElement('p');
-   awayStat.append(
-    h2hVerifiedLink(data.awayTeam||'Away'),
-    document.createTextNode(': '+data.awayWins+' wins')
-   );
-   summary.append(homeStat);
-   summary.append(h2hText('Draws: '+data.draws));
-   summary.append(awayStat);
-   h2hPanel.append(summary);
-
+     h2hSummary(data.homeWins,data.draws,data.awayWins,data.played);
    data.meetings.forEach(m=>{
-   const row=document.createElement('div');
-   row.className='row';
-
-   add('span',[
-    String(m.date||'').slice(0,10),
-    m.league||''
-   ].filter(Boolean).join(' · '),row);
-
-   const result=document.createElement('span');
-    result.className='ksn-h2h-result';
-    result.append(
-     h2hVerifiedLink(m.homeTeam||'Home'),
-     document.createTextNode(
-      ' '+String(m.homeScore)+String.fromCharCode(32,8211,32)+String(m.awayScore)+' '
-     ),
-     h2hVerifiedLink(m.awayTeam||'Away')
-    );
-    row.append(result);
-
-   h2hPanel.append(row);
-  });
-
-  add('p','Results reflect only verified games stored in the KasiScore archive.');
+    h2hMeeting(m.date,m.league,m.homeTeam||'Home',m.homeScore,m.awayScore,m.awayTeam||'Away');
+   });
+   add('p','Results reflect only verified games stored in the KasiScore archive.');
   loaded=true;
 
  }catch(error){
