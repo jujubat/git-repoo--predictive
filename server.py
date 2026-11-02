@@ -7217,6 +7217,40 @@ def _enhanced_match_db_get(sport:str, match_id):
     if _ksn_v663_staging_football_only():
         return None
 
+    # V663 STEP 924L: completed PostgreSQL snapshot is durable.
+    if str(sport).lower() == "football":
+        try:
+            saved = _dashboard_snapshot_get(
+                "match:football:" + str(match_id)
+            )
+            bundle = (saved or {}).get("data") if isinstance(saved, dict) else None
+            if isinstance(bundle, dict) and bundle.get("completed") is True:
+                match = bundle.get("match") or {}
+                fixture = match.get("fixture") or {}
+                status = str(
+                    (fixture.get("status") or {}).get("short") or ""
+                ).upper()
+                teams = match.get("teams") or {}
+                home = (teams.get("home") or {}).get("id")
+                away = (teams.get("away") or {}).get("id")
+                if (
+                    str(bundle.get("matchId")) == str(match_id)
+                    and str(fixture.get("id")) == str(match_id)
+                    and status in ("FT", "AET", "PEN")
+                    and home is not None and away is not None
+                    and str(home) != str(away)
+                ):
+                    return {
+                        **bundle,
+                        "cached": True,
+                        "cacheLayer": "postgres-completed-match",
+                    }
+        except Exception as exc:
+            log.warning(
+                "V663 completed PostgreSQL cache read failed: %s",
+                type(exc).__name__
+            )
+
     if not SPORTS_DB_ENABLED:return None
     try:
         with _sports_db() as db:
@@ -18431,7 +18465,7 @@ a{color:#80bdff}
 'use strict';
 const names=[
  ['match','Match'],['lineups','Lineups'],['stats','Stats'],
- ['trends','Trends'],['news','News'],['h2h','Head to Head'],
+ ['trends','Fixture'],['news','Standing'],['h2h','Head to Head'],
  ['commentary','Commentary']
 ];
 const el=id=>document.getElementById(id);
@@ -18466,7 +18500,22 @@ try{
  el('away').textContent=m.away_name||'Away team unavailable';
  el('score').textContent=String(m.home_score??'—')+' – '+String(m.away_score??'—');
  el('status').textContent=m.status||'FT';
- el('meta').textContent=[m.country,m.competition,m.season,m.date].filter(Boolean).join(' · ');
+ // V663 STEP 924Q: kickoff presentation.
+ function kickoff(value){
+  if(!value)return 'Time unavailable';
+  let raw=String(value).trim().replace(' ','T');
+  if(!/(Z|[+-][0-9]{2}:[0-9]{2})$/i.test(raw))raw+='Z';
+  const date=new Date(raw);
+  if(Number.isNaN(date.getTime()))return 'Time unavailable';
+  return new Intl.DateTimeFormat('en-ZA',{
+   timeZone:'Africa/Johannesburg',
+   day:'2-digit',month:'short',year:'numeric',
+   hour:'2-digit',minute:'2-digit',hour12:false
+  }).format(date)+' SAST';
+ }
+ el('meta').textContent=[
+  m.country,m.competition,kickoff(m.date)
+ ].filter(Boolean).join(' ? ');
  line(panels.match,'Home',m.home_name);
  line(panels.match,'Away',m.away_name);
  line(panels.match,'Final score',el('score').textContent);
@@ -18485,8 +18534,8 @@ try{
  const unavailable={
   lineups:'Historical lineup data was not preserved in this archive record.',
   stats:'Detailed final-match statistics are not available in this archive record.',
-  trends:'Verified match momentum data is unavailable.',
-  news:'Fixture-specific news has not been linked to this archived record.',
+  trends:'Previous five and next five verified fixtures are not yet available in this view.',
+  news:'Verified competition standings are not yet available in this view.',
   h2h:'Verified previous meetings have not yet been integrated.',
   commentary:'Detailed recorded match events are unavailable.'
  };
@@ -18528,13 +18577,27 @@ try{
     if(response.ok){
      const candidate=await response.json();
      const fixture=candidate.match?.fixture||{};
+     // V663 STEP 924C: verify fixture and lineup team identities.
      const teams=candidate.match?.teams||{};
-     const sameFixture=String(fixture.id||candidate.matchId||'')
-      ===fixtureId;
+     const rows=Array.isArray(candidate.teams)?candidate.teams:[];
+     const matchHome=String(teams.home?.id||'');
+     const matchAway=String(teams.away?.id||'');
+     const rowHome=String(rows[0]?.team?.id||'');
+     const rowAway=String(rows[1]?.team?.id||'');
+
+     const sameFixture=String(
+      fixture.id||candidate.matchId||''
+     )===fixtureId;
+
      const sameTeams=(
-      String(teams.home?.id||'')===String(m.home_id||'')
-      &&String(teams.away?.id||'')===String(m.away_id||'')
+      matchHome===String(m.home_id||'')
+      &&matchAway===String(m.away_id||'')
+     )||(
+      rows.length===2
+      &&rowHome===String(m.home_id||'')
+      &&rowAway===String(m.away_id||'')
      );
+
      if(sameFixture&&sameTeams)enhanced=candidate;
     }
    }catch(_){
@@ -18555,7 +18618,7 @@ try{
    matchField('Venue',fixture.venue?.name||m.venue);
    matchField('Referee',fixture.referee||m.referee);
    matchField('City',fixture.venue?.city);
-   matchField('Kickoff',fixture.date);
+   matchField('Kickoff',kickoff(fixture.date||m.date));
 
    const lineups=Array.isArray(enhanced.teams)?enhanced.teams:[];
    if(lineups.length){
@@ -18571,7 +18634,10 @@ try{
      const entries=starting.length||subs.length
       ?[...starting.map(x=>['Starting XI',x]),
         ...subs.map(x=>['Substitute',x])]
-      :(t.players||[]).map(x=>['Player',x]);
+      :(t.players||[]).map(x=>[
+      x.starter===true?'Starting XI':
+      x.starter===false?'Substitute':'Squad',x
+     ]);
 
      entries.forEach(([role,item])=>{
       const p=item.player||item;
@@ -18602,6 +18668,66 @@ try{
     });
    }else missing('stats');
 
+    // V663 STEP 924Q: verified competition standings.
+    const standingRows=[];
+    function collectStanding(value){
+     if(Array.isArray(value)){
+      value.forEach(collectStanding);
+     }else if(value&&typeof value==='object'){
+      if(value.team&&value.rank!=null){
+       standingRows.push(value);
+      }else if(value.league?.standings){
+       collectStanding(value.league.standings);
+      }else if(value.standings){
+       collectStanding(value.standings);
+      }
+     }
+    }
+    collectStanding(enhanced.standings||[]);
+
+    const validRows=standingRows.filter(row=>
+     row.team?.id!=null&&Number.isFinite(Number(row.rank))
+    );
+
+    if(validRows.length){
+     panels.news.append(text('h3',
+      (league.name||m.competition||'Competition')+' ? Standing'));
+     const wrapper=document.createElement('div');
+     wrapper.style.overflowX='auto';
+     const table=document.createElement('table');
+     table.style.cssText='width:100%;border-collapse:collapse;font-size:13px';
+     const header=document.createElement('tr');
+
+     ['#','Team','P','W','D','L','GD','Pts'].forEach(label=>{
+      const th=text('th',label);
+      th.style.cssText='text-align:left;padding:8px;border-bottom:1px solid #35445a';
+      header.append(th);
+     });
+     table.append(header);
+
+     validRows.sort((a,b)=>Number(a.rank)-Number(b.rank));
+
+     validRows.forEach(entry=>{
+      const team=entry.team||{},all=entry.all||{};
+      const row=document.createElement('tr');
+      if([m.home_id,m.away_id].some(id=>
+       String(id)===String(team.id))){
+       row.style.background='#263c51';
+       row.style.fontWeight='700';
+      }
+      [entry.rank,team.name,all.played,all.win,all.draw,
+       all.lose,entry.goalsDiff,entry.points].forEach(value=>{
+       const td=text('td',value??'?');
+       td.style.cssText='padding:8px;border-bottom:1px solid #28384c';
+       row.append(td);
+      });
+      table.append(row);
+     });
+
+     wrapper.append(table);
+     panels.news.append(wrapper);
+    }
+
    const events=Array.isArray(enhanced.events)?enhanced.events:[];
    if(events.length){
     events.forEach(e=>{
@@ -18620,7 +18746,172 @@ try{
   }
 
   // Preserve the dedicated existing Head to Head integration.
-  ['trends','news'].forEach(missing);
+  // V663 STEP 924Z: verified archive and snapshot fixtures.
+   async function loadFixtureHistory(){
+    const panel=panels.trends;
+    panel.replaceChildren();
+
+    const teams=[
+     {id:String(m.home_id||''),name:String(m.home_name||'Home')},
+     {id:String(m.away_id||''),name:String(m.away_name||'Away')}
+    ];
+    const selectedId=String(fixtureId);
+    const selectedDate=new Date(String(m.date||'').replace(' ','T'));
+    const selectedTime=selectedDate.getTime();
+
+    if(!teams.every(t=>/^[1-9][0-9]{0,11}$/.test(t.id))
+       ||teams[0].id===teams[1].id
+       ||Number.isNaN(selectedTime)){
+     missing('trends');
+     return;
+    }
+
+    const finished=new Set(['FT','AET','PEN']);
+    const scheduled=new Set(['NS','TBD','SCHEDULED']);
+
+    async function fetchJson(url){
+     const controller=new AbortController();
+     const timeout=setTimeout(()=>controller.abort(),12000);
+     try{
+      const response=await fetch(url,{
+       cache:'no-store',
+       headers:{Accept:'application/json'},
+       signal:controller.signal
+      });
+      if(!response.ok)throw Error('HTTP '+response.status);
+      return await response.json();
+     }finally{
+      clearTimeout(timeout);
+     }
+    }
+
+    function parseDate(value){
+     if(!value)return NaN;
+     return Date.parse(String(value).trim().replace(' ','T'));
+    }
+
+    function completedRows(data,team){
+     const rows=Array.isArray(data?.matches)?data.matches:[];
+     const unique=new Map();
+     for(const r of rows){
+      const id=String(r.providerFixtureId||r.id||'');
+      const homeId=String(r.homeId||'');
+      const awayId=String(r.awayId||'');
+      const epoch=parseDate(r.date);
+      const status=String(r.status||'').toUpperCase();
+      if(!/^[1-9][0-9]{0,11}$/.test(id)
+         ||id===selectedId
+         ||(homeId!==team.id&&awayId!==team.id)
+         ||!finished.has(status)
+         ||!(epoch<selectedTime)
+         ||r.homeScore==null||r.awayScore==null
+         ||String(r.archiveKey)!=='football:'+id){
+       continue;
+      }
+      if(!unique.has(id)){
+       unique.set(id,{
+        id,epoch,date:r.date,status,
+        home:String(r.home||'Home'),
+        away:String(r.away||'Away'),
+        homeScore:r.homeScore,
+        awayScore:r.awayScore
+       });
+      }
+     }
+     return [...unique.values()]
+      .sort((a,b)=>b.epoch-a.epoch)
+      .slice(0,5);
+    }
+
+    function upcomingRows(data,team){
+     const rows=Array.isArray(data?.matches)?data.matches:[];
+     const unique=new Map();
+     for(const r of rows){
+      const id=String(r.fixtureId||'');
+      const homeId=String(r.homeId??r.homeTeamId??'');
+      const awayId=String(r.awayId??r.awayTeamId??'');
+      const epoch=parseDate(r.kickoff||r.date);
+      const status=String(r.status||'').toUpperCase();
+      if(!/^[1-9][0-9]{0,11}$/.test(id)
+         ||id===selectedId
+         ||(homeId!==team.id&&awayId!==team.id)
+         ||!homeId||!awayId
+         ||!scheduled.has(status)
+         ||!(epoch>selectedTime)
+         ||!(epoch>Date.now())){
+       continue;
+      }
+      if(!unique.has(id)){
+       unique.set(id,{
+        id,epoch,date:r.kickoff||r.date,status,
+        home:String(r.home||'Home'),
+        away:String(r.away||'Away')
+       });
+      }
+     }
+     return [...unique.values()]
+      .sort((a,b)=>a.epoch-b.epoch)
+      .slice(0,5);
+    }
+
+    function renderGroup(parent,title,rows,empty){
+     parent.append(text('h4',title));
+     if(!rows.length){
+      const p=text('p',empty);
+      p.className='muted';
+      parent.append(p);
+      return;
+     }
+     for(const fixture of rows){
+      const row=document.createElement('div');
+      row.className='row';
+      const left=document.createElement('div');
+      const link=document.createElement('a');
+      link.href='/matches/'+encodeURIComponent(fixture.id)+'/stats';
+      link.textContent=fixture.home+' vs '+fixture.away;
+      left.append(link);
+      const when=text('div',kickoff(fixture.date));
+      when.className='muted';
+      left.append(when);
+      row.append(left);
+      row.append(text('strong',
+       fixture.homeScore!=null&&fixture.awayScore!=null
+        ?String(fixture.homeScore)+' ? '+String(fixture.awayScore)
+        :fixture.status));
+      parent.append(row);
+     }
+    }
+
+    const upcomingPromise=fetchJson('/my-kasi/fixtures')
+     .catch(()=>({matches:[]}));
+
+    await Promise.all(teams.map(async team=>{
+     const section=document.createElement('section');
+     section.append(text('h3',team.name));
+     panel.append(section);
+
+     const qs=new URLSearchParams({
+      sport:'football',
+      team:team.name,
+      archive_only:'true',
+      include_recent:'false',
+      limit:'100'
+     });
+     const [archive,upcoming]=await Promise.all([
+      fetchJson('/results/search?'+qs).catch(()=>({matches:[]})),
+      upcomingPromise
+     ]);
+
+     const previous=completedRows(archive,team);
+     const next=upcomingRows(upcoming,team);
+
+     renderGroup(section,'Last 5 Matches',previous,
+      'No verified previous matches available.');
+     renderGroup(section,'Next 5 Matches',next,
+      'No verified upcoming fixtures available.');
+    }));
+   }
+   loadFixtureHistory(); if(!panels.news.childElementCount)missing('news');
 }catch(e){
  el('error').textContent=e.message;
  el('meta').textContent='Historical match unavailable';
@@ -19507,10 +19798,85 @@ async def _football_match_details_build(fid:int):
              "updatedAt":datetime.now(timezone.utc).isoformat()}
     status=str(((f.get("fixture") or {}).get("status") or {}).get("short") or "").upper()
     completed=status in {"FT","AET","PEN"}
-    if payload["partialAvailable"]:
-        _dashboard_snapshot_put(f"match:football:{fid}",{"data":payload})
-        # Completed match bundles are permanent: events/cards, line-ups, players, stats and intelligence survive provider/cache expiry.
-        if completed:_enhanced_match_db_put("football",fid,payload,True)
+    # V663 STEP 924L: preserve completed PostgreSQL data across releases.
+    key = f"match:football:{fid}"
+    previous_wrapper = _dashboard_snapshot_get(key)
+    previous = (
+        previous_wrapper.get("data")
+        if isinstance(previous_wrapper, dict) else None
+    )
+    if not isinstance(previous, dict):
+        previous = {}
+
+    previous_match = previous.get("match") or {}
+    previous_fixture = previous_match.get("fixture") or {}
+    previous_status = str(
+        (previous_fixture.get("status") or {}).get("short") or ""
+    ).upper()
+    previous_teams = previous_match.get("teams") or {}
+    previous_valid = (
+        previous.get("completed") is True
+        and str(previous.get("matchId")) == str(fid)
+        and str(previous_fixture.get("id")) == str(fid)
+        and previous_status in ("FT", "AET", "PEN")
+        and (previous_teams.get("home") or {}).get("id") is not None
+        and (previous_teams.get("away") or {}).get("id") is not None
+    )
+
+    current_teams = (f.get("teams") or {}) if isinstance(f, dict) else {}
+    current_valid = (
+        completed
+        and str((f.get("fixture") or {}).get("id")) == str(fid)
+        and (current_teams.get("home") or {}).get("id") is not None
+        and (current_teams.get("away") or {}).get("id") is not None
+        and str((current_teams.get("home") or {}).get("id"))
+            != str((current_teams.get("away") or {}).get("id"))
+    )
+
+    if current_valid:
+        if previous_valid:
+            old_home = str(
+                (previous_teams.get("home") or {}).get("id")
+            )
+            old_away = str(
+                (previous_teams.get("away") or {}).get("id")
+            )
+            new_home = str(
+                (current_teams.get("home") or {}).get("id")
+            )
+            new_away = str(
+                (current_teams.get("away") or {}).get("id")
+            )
+            if old_home == new_home and old_away == new_away:
+                for field in (
+                    "statistics", "teams", "events",
+                    "standings", "players"
+                ):
+                    existing = previous.get(field)
+                    incoming = payload.get(field)
+                    if (
+                        isinstance(existing, list)
+                        and existing
+                        and (not isinstance(incoming, list)
+                             or not incoming)
+                    ):
+                        payload[field] = existing
+
+        payload["completed"] = True
+        _dashboard_snapshot_put(key, {"data": payload})
+        _enhanced_match_db_put("football", fid, payload, True)
+
+    elif previous_valid:
+        # Never downgrade completed data to a partial provider result.
+        return {
+            **previous,
+            "cached": True,
+            "cacheLayer": "postgres-completed-match",
+        }
+
+    elif payload["partialAvailable"]:
+        _dashboard_snapshot_put(key, {"data": payload})
+
     return payload
 
 async def _football_match_details_refresh(fid:int):
@@ -26704,6 +27070,175 @@ async function ksnMatchIntelEnrich(match, original) {{
       }}))
     }};
   }}
+
+  // V663 STEP 924AQ: verified live panels.
+  // Reuse data already retrieved by ksnMatchIntelEnrich.
+  const fixturePanel=document.getElementById('fixture');
+  const h2hPanel=document.getElementById('h2h');
+  const fixtureCutoff=Date.parse(String(match.fixture?.date||''));
+  const validId=v=>/^[1-9][0-9]{{0,11}}$/.test(String(v??''));
+  const finishCodes=new Set(['FT','AET','PEN']);
+  const scheduledCodes=new Set(['NS','TBD','SCHEDULED']);
+  const timeOf=v=>Date.parse(String(v||'').replace(' ','T'));
+  const makeNode=(tag,value)=>{{
+    const n=document.createElement(tag);
+    n.textContent=String(value??'');
+    return n;
+  }};
+
+  function verifiedFixture(row,teamId,kind){{
+    if(!row||typeof row!=='object')return null;
+    const id=String(row.providerFixtureId||row.id||row.fixture?.id||'');
+    const homeId=String(row.homeId||row.home_id||row.teams?.home?.id||'');
+    const awayId=String(row.awayId||row.away_id||row.teams?.away?.id||'');
+    const date=row.date||row.fixture?.date||row.kickoff||'';
+    const dateMs=timeOf(date);
+    const status=String(
+      row.status?.short||row.fixture?.status?.short||
+      row.statusShort||row.status||''
+    ).toUpperCase();
+    const home=String(
+      typeof row.home==='string'?row.home:
+      row.teams?.home?.name||row.home_name||''
+    );
+    const away=String(
+      typeof row.away==='string'?row.away:
+      row.teams?.away?.name||row.away_name||''
+    );
+    if(!validId(id)||!validId(homeId)||!validId(awayId)||
+       homeId===awayId||
+       (homeId!==teamId&&awayId!==teamId)||
+       !home||!away||
+       !Number.isFinite(dateMs)||
+       id===matchKey)return null;
+
+    if(kind==='past'){{
+      const hg=row.homeScore??row.home_score??row.goals?.home;
+      const ag=row.awayScore??row.away_score??row.goals?.away;
+      if(!finishCodes.has(status)||
+         hg==null||ag==null||
+         !Number.isFinite(Number(hg))||
+         !Number.isFinite(Number(ag))||
+         !(dateMs<fixtureCutoff))return null;
+      return {{id,dateMs,date,home,away,
+        result:String(hg)+' - '+String(ag)}};
+    }}
+
+    if(!scheduledCodes.has(status)||
+       !(dateMs>fixtureCutoff)||
+       !(dateMs>Date.now()))return null;
+    return {{id,dateMs,date,home,away,result:'Scheduled'}};
+  }}
+
+  function addVerifiedGroup(section,title,items,empty){{
+    section.append(makeNode('h4',title));
+    if(!items.length){{
+      const p=makeNode('p',empty);
+      p.className='muted';
+      section.append(p);
+      return;
+    }}
+    for(const item of items){{
+      const box=document.createElement('div');
+      box.className='event';
+      const content=document.createElement('div');
+      const link=document.createElement('a');
+      link.href='/matches/'+encodeURIComponent(item.id)+'/stats';
+      link.textContent=item.home+' vs '+item.away;
+      content.append(link);
+      const date=makeNode('div',
+        Number.isFinite(item.dateMs)
+          ?new Date(item.dateMs).toLocaleString('en-ZA',
+             {{timeZone:'Africa/Johannesburg',
+              dateStyle:'medium',timeStyle:'short'}})
+          :'Date unavailable');
+      date.className='tiny muted';
+      content.append(date);
+      box.append(content,makeNode('strong',item.result));
+      section.append(box);
+    }}
+  }}
+
+  if(fixturePanel &&
+     Number.isFinite(fixtureCutoff) &&
+     validId(homeId)&&validId(awayId)&&
+     String(homeId)!==String(awayId)){{
+    fixturePanel.replaceChildren();
+    for(const [side,teamId,teamName,profile,archive] of [
+      ['home',String(homeId),String(teams.home?.name||'Home'),
+       homeProfile,homeArchive],
+      ['away',String(awayId),String(teams.away?.name||'Away'),
+       awayProfile,awayArchive]
+    ]){{
+      const section=document.createElement('section');
+      section.className='card';
+      section.append(makeNode('h3',teamName));
+
+      const archiveRows=Array.isArray(archive?.matches)
+        ?archive.matches:[];
+      const profilePast=Array.isArray(profile?.past10)
+        ?profile.past10:[];
+      const profileFuture=Array.isArray(profile?.future)
+        ?profile.future:[];
+
+      const uniquePast=new Map();
+      for(const row of [...archiveRows,...profilePast]){{
+        const item=verifiedFixture(row,teamId,'past');
+        if(item&&!uniquePast.has(item.id))uniquePast.set(item.id,item);
+      }}
+      const uniqueNext=new Map();
+      for(const row of profileFuture){{
+        const item=verifiedFixture(row,teamId,'next');
+        if(item&&!uniqueNext.has(item.id))uniqueNext.set(item.id,item);
+      }}
+
+      addVerifiedGroup(section,'Last 5 Matches',
+        [...uniquePast.values()]
+          .sort((a,b)=>b.dateMs-a.dateMs).slice(0,5),
+        'No verified previous matches available.');
+      addVerifiedGroup(section,'Next 5 Matches',
+        [...uniqueNext.values()]
+          .sort((a,b)=>a.dateMs-b.dateMs).slice(0,5),
+        'No verified upcoming fixtures available.');
+      fixturePanel.append(section);
+    }}
+  }}
+
+  if(h2hPanel){{
+    h2hPanel.replaceChildren();
+    const card=document.createElement('div');
+    card.className='card';
+    card.append(makeNode('h2','Head to Head'));
+
+    // Only use the same verified archive H2H dataset
+    // already accepted by the intelligence renderer.
+    const h2=converted.h2h||{{}};
+    const meetings=Array.isArray(h2.meetings)?h2.meetings:[];
+    if(meetings.length){{
+      card.append(makeNode('p',
+        'Previous meetings: '+meetings.length+
+        ' | Home wins: '+String(h2.homeWins??'Unavailable')+
+        ' | Draws: '+String(h2.draws??'Unavailable')+
+        ' | Away wins: '+String(h2.awayWins??'Unavailable')));
+      for(const meeting of meetings.slice(0,10)){{
+        const item=document.createElement('div');
+        item.className='event';
+        item.append(makeNode('strong',
+          String(meeting.home||'')+' '+
+          String(meeting.score||'')+' '+
+          String(meeting.away||'')));
+        item.append(makeNode('div',String(meeting.date||'')));
+        card.append(item);
+      }}
+    }}else{{
+      const p=makeNode('p',
+        'No verified previous meetings available.');
+      p.className='muted';
+      card.append(p);
+    }}
+    h2hPanel.append(card);
+  }}
+
   // Preserve standings and all original match tabs.
   panel.innerHTML=intelligence(converted);
 }}
@@ -26731,15 +27266,16 @@ function standingsTable(rows,homeId,awayId){{if(!Array.isArray(rows)||!rows.leng
 function wireTabs(){{
  const tabs=[...document.querySelectorAll('.tabs button')];
  const panels=[...document.querySelectorAll('.panel')];
- const aliases={{predictions:'odds',prediction:'odds',statistics:'stats',overview:'overview',timeline:'timeline',standings:'standings',lineups:'lineups',players:'players',intel:'intel',odds:'odds',stats:'stats'}};
+ // V663 STEP 924AN-1: unified live navigation
+ const aliases={{match:'overview',overview:'overview',lineups:'lineups',stats:'stats',statistics:'stats',fixture:'fixture',fixtures:'fixture',standing:'standings',standings:'standings',h2h:'h2h',headtohead:'h2h',commentary:'timeline',timeline:'timeline',players:'players',intel:'intel',predictions:'odds',prediction:'odds',odds:'odds'}};
  function activate(){{
    const raw=decodeURIComponent(location.hash.replace(/^#/,'')).toLowerCase();
-   const target=aliases[raw]||'stats';
+   const target=aliases[raw]||'overview';
    tabs.forEach(b=>b.classList.toggle('active',b.dataset.p===target));
    panels.forEach(p=>p.classList.toggle('active',p.id===target));
  }}
  tabs.forEach(b=>b.onclick=()=>{{
-   const name=b.dataset.p==='odds'?'predictions':b.dataset.p;
+   const canonical={{overview:'match',timeline:'commentary',standings:'standing',odds:'predictions'}};const name=canonical[b.dataset.p]||b.dataset.p;
    if(location.hash!=='#'+name)history.replaceState(null,'','#'+name);
    activate();
  }});
@@ -26762,7 +27298,8 @@ function ksnMatchStatus(fx){{
  if(['SUSP','SUSPENDED'].includes(code))return label||'Suspended';
  return label||'Match status unavailable';
 }}
-async function load(force=false){{try{{const qs=new URLSearchParams();if(LEAGUE)qs.set('league',LEAGUE);if(force)qs.set('refresh','1');const tipMode=new URLSearchParams(location.search).get('tip')==='1';const d=tipMode?{{match:{{}}}}:await J('/sports/'+encodeURIComponent(SPORT)+'/match/'+encodeURIComponent(ID)+(qs.toString()?'?'+qs.toString():'')),m=d.match||{{}};if(SPORT!=='football'){{page.innerHTML=`<div class="card"><h1>${{E(m.home||m.homeTeam||'Home')}} vs ${{E(m.away||m.awayTeam||'Away')}}</h1><div class="score">${{E(m.homeScore??'—')}} - ${{E(m.awayScore??'—')}}</div><p class="muted">${{E(m.league||SPORT)}} · ${{E(m.status||'')}}</p></div><div class="card"><h2>Sport-specific match data</h2><pre style="white-space:pre-wrap">${{E(JSON.stringify(d.statistics?.sportSpecific||d.statistics||{{}},null,2))}}</pre></div>`;return}}const matchStatus=String(m.fixture?.status?.short||m.status?.short||m.fixture?.status?.long||m.status||'').toUpperCase();const isPreMatch=['NS','TBD','SCHEDULED','NOT STARTED','POSTPONED'].some(x=>matchStatus===x||matchStatus.includes(x));if(isPreMatch||!m.teams?.home?.name||!m.teams?.away?.name){{try{{const q=await J('/tip-stats/'+encodeURIComponent(ID),16000),h=q.home||{{}},a=q.away||{{}},o=q.odds||{{}},hh=q.headToHead||[],ht=matchTeamTheme(h.id,h.name),at=matchTeamTheme(a.id,a.name);page.innerHTML=`<div class="card hero"><div class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px">${{h.badge?`<img src="${{E(h.badge)}}">`:''}}<div class="team-name">${{E(h.name||'Home')}}</div></div><div><div class="status">TIP OF THE DAY · PRE-MATCH STATS</div><div class="score">vs</div><div class="tiny muted">Live match statistics will populate when available.</div></div><div class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px">${{a.badge?`<img src="${{E(a.badge)}}">`:''}}<div class="team-name">${{E(a.name||'Away')}}</div></div></div><div class="grid3"><div class="metric"><span class="tiny muted">Home wins · last 5</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}}/${{E(h.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">Away wins · last 5</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}}/${{E(a.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">H2H matches</span><b>${{E(hh.length)}}</b></div></div><div class="card"><h2>1X2 Odds</h2><p>${{E(h.name||'Home')}}: <b>${{E(o.home??'—')}}</b> · Draw: <b>${{E(o.draw??'—')}}</b> · ${{E(a.name||'Away')}}: <b>${{E(o.away??'—')}}</b></p><p class="tiny muted">${{E(o.bookmaker||'No bookmaker odds currently returned')}}</p></div><div class="grid2"><div class="card" style="${{teamCardStyle(ht)}}"><h2>${{E(h.name||'Home')}} · Last 5</h2>${{(h.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div><div class="card" style="${{teamCardStyle(at)}}"><h2>${{E(a.name||'Away')}} · Last 5</h2>${{(a.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div></div><div class="card"><h2>Head to Head</h2>${{hh.map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No H2H returned.</div>'}}</div><div class="card"><h2>Pre-match Statistics</h2><div class="grid3"><div class="metric"><span class="tiny muted">${{E(h.name||'Home')}} recent wins</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">${{E(a.name||'Away')}} recent wins</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">H2H sample</span><b>${{E(hh.length)}}</b></div></div><p class="tiny muted">These are pre-match indicators from available recent-form, H2H and bookmaker data. Live match statistics populate after kickoff when the provider returns them.</p></div><div class="card"><h2>Standings</h2>${{standingsTable(d.standings,m.teams?.home?.id,m.teams?.away?.id)}}</div>`;if(h.id&&a.id){{
+async function load(force=false){{try{{const qs=new URLSearchParams();if(LEAGUE)qs.set('league',LEAGUE);if(force)qs.set('refresh','1');const tipMode=new URLSearchParams(location.search).get('tip')==='1';const d=tipMode?{{match:{{}}}}:await J('/sports/'+encodeURIComponent(SPORT)+'/match/'+encodeURIComponent(ID)+(qs.toString()?'?'+qs.toString():'')),m=d.match||{{}};if(SPORT!=='football'){{page.innerHTML=`<div class="card"><h1>${{E(m.home||m.homeTeam||'Home')}} vs ${{E(m.away||m.awayTeam||'Away')}}</h1><div class="score">${{E(m.homeScore??'—')}} - ${{E(m.awayScore??'—')}}</div><p class="muted">${{E(m.league||SPORT)}} · ${{E(m.status||'')}}</p></div><div class="card"><h2>Sport-specific match data</h2><pre style="white-space:pre-wrap">${{E(JSON.stringify(d.statistics?.sportSpecific||d.statistics||{{}},null,2))}}</pre></div>`;return}}const matchStatus=String(m.fixture?.status?.short||m.status?.short||m.fixture?.status?.long||m.status||'').toUpperCase();// V663 STEP 924AS-1: status-aware live polling
+window.__ksnLiveMatchStatus=matchStatus;const isPreMatch=['NS','TBD','SCHEDULED','NOT STARTED','POSTPONED'].some(x=>matchStatus===x||matchStatus.includes(x));if(isPreMatch||!m.teams?.home?.name||!m.teams?.away?.name){{try{{const q=await J('/tip-stats/'+encodeURIComponent(ID),16000),h=q.home||{{}},a=q.away||{{}},o=q.odds||{{}},hh=q.headToHead||[],ht=matchTeamTheme(h.id,h.name),at=matchTeamTheme(a.id,a.name);page.innerHTML=`<div class="card hero"><div class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px">${{h.badge?`<img src="${{E(h.badge)}}">`:''}}<div class="team-name">${{E(h.name||'Home')}}</div></div><div><div class="status">TIP OF THE DAY · PRE-MATCH STATS</div><div class="score">vs</div><div class="tiny muted">Live match statistics will populate when available.</div></div><div class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px">${{a.badge?`<img src="${{E(a.badge)}}">`:''}}<div class="team-name">${{E(a.name||'Away')}}</div></div></div><div class="grid3"><div class="metric"><span class="tiny muted">Home wins · last 5</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}}/${{E(h.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">Away wins · last 5</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}}/${{E(a.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">H2H matches</span><b>${{E(hh.length)}}</b></div></div><div class="card"><h2>1X2 Odds</h2><p>${{E(h.name||'Home')}}: <b>${{E(o.home??'—')}}</b> · Draw: <b>${{E(o.draw??'—')}}</b> · ${{E(a.name||'Away')}}: <b>${{E(o.away??'—')}}</b></p><p class="tiny muted">${{E(o.bookmaker||'No bookmaker odds currently returned')}}</p></div><div class="grid2"><div class="card" style="${{teamCardStyle(ht)}}"><h2>${{E(h.name||'Home')}} · Last 5</h2>${{(h.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div><div class="card" style="${{teamCardStyle(at)}}"><h2>${{E(a.name||'Away')}} · Last 5</h2>${{(a.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div></div><div class="card"><h2>Head to Head</h2>${{hh.map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No H2H returned.</div>'}}</div><div class="card"><h2>Pre-match Statistics</h2><div class="grid3"><div class="metric"><span class="tiny muted">${{E(h.name||'Home')}} recent wins</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">${{E(a.name||'Away')}} recent wins</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">H2H sample</span><b>${{E(hh.length)}}</b></div></div><p class="tiny muted">These are pre-match indicators from available recent-form, H2H and bookmaker data. Live match statistics populate after kickoff when the provider returns them.</p></div><div class="card"><h2>Standings</h2>${{standingsTable(d.standings,m.teams?.home?.id,m.teams?.away?.id)}}</div>`;if(h.id&&a.id){{
   page.insertAdjacentHTML('beforeend',
     '<section class="panel active" id="intel">'+
     '<div class="card"><h2>Match Intelligence</h2>'+
@@ -26777,7 +27314,30 @@ async function load(force=false){{try{{const qs=new URLSearchParams();if(LEAGUE)
   }};
   void ksnMatchIntelEnrich(pendingMatch,d);
 }}return}}catch(_){{}}}}
-const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs"><button class="active" data-p="overview">Overview</button><button data-p="timeline">Timeline</button><button data-p="stats">Statistics</button><button data-p="standings">Standings</button><button data-p="lineups">Lineups</button><button data-p="players">Player Stats</button><button data-p="intel">Match Intelligence</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14))}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{lineups(lu)}}</div></section><section class="panel" id="players"><div class="card"><h2>Player Match Data</h2><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></section><section class="panel" id="intel">${{intelligence(ksnNormalizeMatchIntel(d.insights,m,d.standings))}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();void ksnMatchIntelEnrich(m,d);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}load();
+const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head to Head</button><button data-p="timeline">Commentary</button></div><div class="tabs" aria-label="Additional match details"><button data-p="players">Player Stats</button><button data-p="intel">Match Intelligence</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14))}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{lineups(lu)}}</div></section><section class="panel" id="fixture"><div class="card"><h2>Fixture</h2><p class="muted">Verified team fixtures are not yet available in this live view.</p></div></section><section class="panel" id="h2h"><div class="card"><h2>Head to Head</h2><p class="muted">Verified previous meetings are not yet available in this live view.</p></div></section><section class="panel" id="players"><div class="card"><h2>Player Match Data</h2><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></section><section class="panel" id="intel">${{intelligence(ksnNormalizeMatchIntel(d.insights,m,d.standings))}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();void ksnMatchIntelEnrich(m,d);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
+load();
+if(SPORT==='football' &&
+   new URLSearchParams(location.search).get('tip')!=='1'){{
+ const liveCodes=new Set(['1H','2H','HT','ET','BT','P','LIVE','INT']);
+ const finalCodes=new Set(['FT','AET','PEN']);
+ let busy=false;
+ const timer=setInterval(async ()=>{{
+   const status=String(window.__ksnLiveMatchStatus||'').toUpperCase();
+   if(finalCodes.has(status)){{
+     clearInterval(timer);
+     return;
+   }}
+   if(!liveCodes.has(status)||document.hidden||busy)return;
+   busy=true;
+   try{{
+     await load(false);
+   }}catch(_){{
+   }}finally{{
+     busy=false;
+   }}
+ }},90000);
+}}
+
 </script></body></html>""")
 
 def _standalone_sports_page(kind:str, entity_id:str, sport:str="football", league:str="") -> str:
@@ -26890,7 +27450,7 @@ async function match(){{
      return entries||unavailable('Verified statistics are unavailable.');
    }};
    const tabNames=[['match','Match'],['lineups','Lineups'],['stats','Stats'],
-     ['trends','Trends'],['news','News'],['h2h','Head to Head'],['commentary','Commentary']];
+     ['trends','Fixture'],['news','Standing'],['h2h','Head to Head'],['commentary','Commentary']];
    page.innerHTML=`<div id="ksn-v663-unified-live-match" style="max-width:1050px;margin:auto">
      <header style="display:flex;justify-content:space-between;align-items:center;gap:12px">
        <strong>KasiScore ?? Match Centre</strong><a href="/#live">Back to Results</a>
@@ -26908,8 +27468,8 @@ async function match(){{
      <section class="card" data-kmatch-panel="match"><h2>Match</h2>${{details}}<h3>Events</h3><div id="ksn-live-events">${{eventHtml(events)}}</div></section>
      <section class="card" data-kmatch-panel="lineups"><h2>Lineups</h2>${{lineups||unavailable('Verified lineups are unavailable.')}}</section>
      <section class="card" data-kmatch-panel="stats"><h2>Match Statistics</h2><div id="ksn-live-stats">${{statisticsHtml(stats)}}</div></section>
-     <section class="card" data-kmatch-panel="trends"><h2>Trends</h2>${{unavailable('Verified match momentum data is unavailable.')}}</section>
-     <section class="card" data-kmatch-panel="news"><h2>News</h2>${{unavailable('Fixture-specific verified news is not linked to this match.')}}</section>
+     <section class="card" data-kmatch-panel="trends"><h2>Trends</h2>${{unavailable('Previous five and next five verified fixtures are not yet available in this view.')}}</section>
+     <section class="card" data-kmatch-panel="news"><h2>News</h2>${{unavailable('Verified competition standings are not yet available in this view.')}}</section>
      <section class="card" data-kmatch-panel="h2h"><h2>Head to Head</h2>${{unavailable('Verified head-to-head meetings are not integrated into this live view.')}}</section>
      <section class="card" data-kmatch-panel="commentary"><h2>Commentary</h2><div id="ksn-live-commentary">${{eventHtml(events)}}</div></section>
      <p class="muted">Source: ${{E(d.source||'Verified match data')}}. Missing details are not estimated.</p>
@@ -28044,15 +28604,15 @@ async def canonical_match_stats_page(fixture_id:str):
         )
         title_marker = "<title>Historical Match Centre | KasiScore</title>"
         head_marker = "</head>"
-        header_marker = (
-            '<header><strong>KasiScore ? Match Centre</strong>'
-            '<a href="/#live">Back to Results</a></header>'
-        )
+        # V663 STEP 924AC: one visible SEO heading.
+        # V663 STEP 924AF: exact template header marker.
+        header_marker = '<strong>KasiScore · Match Centre</strong>'
 
         if not all((
             document.count(key_marker) >= 1,
             document.count(title_marker) == 1,
             document.count(head_marker) == 1,
+            document.count(header_marker) == 1,
             document.count("<main>") == 1,
         )):
             # Never serve an incorrectly indexed or incomplete document.
@@ -28069,30 +28629,22 @@ async def canonical_match_stats_page(fixture_id:str):
 
         title = (
             f"{archive_record['home']} "
-            f"{archive_record['home_score']}?"
+            f"{archive_record['home_score']}–"
             f"{archive_record['away_score']} "
             f"{archive_record['away']} | "
             f"{archive_record['league']} | KasiScore"
         )
 
-        # A visible, unique SSR heading supports search engines and users.
-        summary = (
-            '<section id="ksn-v657-ssr-result" '
-            'aria-label="Verified match result">'
-            f'<h1 style="font-size:18px;margin:18px 0 6px">'
-            f'{e(archive_record["home"])} '
-            f'{e(archive_record["home_score"])}?'
-            f'{e(archive_record["away_score"])} '
-            f'{e(archive_record["away"])}</h1>'
-            f'<p class="meta">{e(archive_record["league"])} ? '
-            f'{e(archive_record["kickoff"])} ? '
-            f'{e(archive_record["status"])}</p>'
-            '<nav aria-label="Match teams">'
-            f'<a href="/teams/{e(archive_record["home_id"])}">'
-            f'{e(archive_record["home"])}</a> ? '
-            f'<a href="/teams/{e(archive_record["away_id"])}">'
-            f'{e(archive_record["away"])}</a>'
-            '</nav></section>'
+        # Keep the verified team identity in the single visible H1.
+        # The Match Centre's scoreboard remains the only visible score.
+        heading = (
+            f'{e(archive_record["home"])} vs '
+            f'{e(archive_record["away"])} | Match Centre'
+        )
+        seo_h1 = (
+            '<h1 id="ksn-canonical-match-h1" '
+            'style="font-size:inherit;font-weight:700;margin:0">'
+            + heading + '</h1>'
         )
 
         document = document.replace(
@@ -28113,8 +28665,8 @@ async def canonical_match_stats_page(fixture_id:str):
             1,
         )
         document = document.replace(
-            "<main>",
-            "<main>" + summary,
+            header_marker,
+            seo_h1,
             1,
         )
 
