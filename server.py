@@ -6889,6 +6889,95 @@ def _mk906_totals(c, fixture_id):
 
 
 # V663 Step 907B: Authenticated read-back of the supporter's existing vote.
+# V663 STEP 926A: read-only, provider-free next-five fixture contract for Match Centre.
+@app.get("/results/upcoming-by-teams")
+async def ksn_v663_upcoming_by_teams(home_id: str = Query(""), away_id: str = Query("")):
+    """Return independently verified next five per selected football team from existing LKG.
+
+    Does not change My Kasi's deliberately limited two-fixture contract.
+    Never asks external providers, writes DB/cache, or guesses missing identities.
+    """
+    from datetime import datetime, timezone
+    from fastapi.responses import JSONResponse
+
+    valid = lambda v: bool(re.fullmatch(r"[1-9][0-9]{0,11}", str(v or "")))
+    if not valid(home_id) or not valid(away_id) or home_id == away_id:
+        raise HTTPException(status_code=400, detail="Verified team IDs required")
+
+    key = "fixtures:football:ALL:upcoming:last_good"
+    try:
+        record = await asyncio.to_thread(_dashboard_snapshot_get, key)
+        payload = record.get("data") if isinstance(record, dict) else None
+        rows = payload.get("matches") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) and isinstance(payload, dict):
+            rows = payload.get("games")
+        if not isinstance(rows, list):
+            rows = []
+    except Exception as exc:
+        log.warning("Finished match upcoming snapshot read failed: %s", type(exc).__name__)
+        rows = []
+
+    now = datetime.now(timezone.utc)
+    accepted = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        fixture = row.get("fixture") if isinstance(row.get("fixture"), dict) else {}
+        teams = row.get("teams") if isinstance(row.get("teams"), dict) else {}
+        home = teams.get("home") or row.get("homeTeam") or row.get("home")
+        away = teams.get("away") or row.get("awayTeam") or row.get("away")
+        home = home if isinstance(home, dict) else {"name":home if isinstance(home,str) else ""}
+        away = away if isinstance(away, dict) else {"name":away if isinstance(away,str) else ""}
+
+        hid = str(home.get("id") or row.get("homeId") or row.get("homeTeamId") or "")
+        aid = str(away.get("id") or row.get("awayId") or row.get("awayTeamId") or "")
+        if not valid(hid) or not valid(aid) or hid == aid:
+            continue
+        if hid not in (home_id, away_id) and aid not in (home_id, away_id):
+            continue
+
+        fid = fixture.get("id") or row.get("_afootFixtureId") or row.get("fixtureId")
+        if not valid(fid):
+            continue
+        fid = str(fid)
+        raw_date = fixture.get("date") or row.get("fixtureDate") or row.get("date") or row.get("datetime") or row.get("kickoff")
+        try:
+            kickoff = datetime.fromisoformat(str(raw_date).strip().replace("Z", "+00:00").replace(" ", "T"))
+            if kickoff.tzinfo is None:
+                continue
+            kickoff = kickoff.astimezone(timezone.utc)
+        except (ValueError, OverflowError, TypeError):
+            continue
+        if kickoff <= now:
+            continue
+
+        status_data = fixture.get("status")
+        status = status_data.get("short") if isinstance(status_data, dict) else status_data
+        status = str(status or row.get("statusShort") or row.get("status") or "").upper().strip()
+        if status not in {"NS", "TBD", "SCHEDULED", "NOT STARTED", "UPCOMING"}:
+            continue
+        if row.get("isLive") is True or row.get("isFinished") is True:
+            continue
+        if row.get("homeScore") is not None or row.get("awayScore") is not None:
+            continue
+        if not str(home.get("name") or "").strip() or not str(away.get("name") or "").strip():
+            continue
+        accepted[fid] = {
+            "fixtureId":fid,"homeId":hid,"awayId":aid,
+            "home":str(home["name"]).strip(),"away":str(away["name"]).strip(),
+            "kickoff":kickoff.isoformat(),"status":status,
+        }
+
+    by_time = sorted(accepted.values(), key=lambda r:(r["kickoff"],r["fixtureId"]))
+    home_matches = [r for r in by_time if home_id in (r["homeId"],r["awayId"])][:5]
+    away_matches = [r for r in by_time if away_id in (r["homeId"],r["awayId"])][:5]
+    result = {r["fixtureId"]:r for r in home_matches+away_matches}
+    return JSONResponse(
+        {"source":"existing-football-snapshot","matches":list(result.values()),
+         "homeCount":len(home_matches),"awayCount":len(away_matches),"providerCalls":0},
+        headers={"Cache-Control":"no-store, max-age=0","CDN-Cache-Control":"no-store"},
+    )
+
 @app.get("/my-kasi/votes/{fixture_id}/mine")
 def my_kasi_my_vote(fixture_id: str, request: Request):
     from fastapi.responses import JSONResponse
@@ -18427,7 +18516,7 @@ async def ksn_v659_archive_h2h(archive_key: str):
             "SELECT ksn_key,kickoff,competition,home_id,away_id,"
             "home_name,away_name,home_score,away_score,status "
             "FROM ksn_results_archive "
-            "WHERE sport='football' AND kickoff<" + ph +
+            "WHERE sport='football' AND kickoff<=" + ph +
             " AND ("
             "(home_id=" + ph + " AND away_id=" + ph + ") OR "
             "(home_id=" + ph + " AND away_id=" + ph + ")"
@@ -18438,8 +18527,7 @@ async def ksn_v659_archive_h2h(archive_key: str):
         finished = {"FT", "AET", "PEN", "FINISHED", "FULL TIME", "FINAL"}
         for row in cur.fetchall():
             key, date, league, hid, aid, hn, an, hs, aws, status = row
-            if str(key) == archive_key:
-                continue
+            # The selected fixture is counted when verified finished.
             if str(status or "").upper() not in finished:
                 continue
 
@@ -18995,6 +19083,13 @@ a{color:#80bdff}
 .ksn925H-next-five>h3{margin:0 0 12px}.ksn925H-team-fixtures{padding:12px 0;border-top:1px solid #304654}
 .ksn925H-team-fixtures h4{margin:4px 0 12px}.ksn925H-team-fixtures a{color:#84b8ef}
 
+/* V663 STEP 926A: finished Match Centre typography only. */
+#panels .panel{font-size:15px;line-height:1.65}
+#panels .panel :is(h2,h3){font-size:17px;line-height:1.35}
+#panels .panel h4{font-size:16px;line-height:1.4}
+#panels .panel :is(p,small,.muted,.ksn-fixture-footer,.ksn-bg4-h2h-versus,.ksn-bg4-h2h-stat small){font-size:15px}
+#panels .panel .ksn-bg4-h2h-stat strong{font-size:23px}
+#panels .panel .ksn-bg4-h2h-score{font-size:18px}
 </style>
 </head>
 <body>
@@ -19155,8 +19250,9 @@ function ksnMyKasiFollowLink(name,id){
  url.searchParams.set('view','platform');
  url.searchParams.set('follow_team',team);
  url.searchParams.set('follow_id',numericId);
- link.href=url.pathname+url.search;
- link.textContent='Follow in My Kasi';
+  url.hash='platform';
+  link.href=url.pathname+url.search+url.hash;
+  link.textContent='Follow in My Kasi';
  link.className='ksn-follow-action';
  link.setAttribute('aria-label','Follow '+team+' in My Kasi');
  return link;
@@ -20133,8 +20229,8 @@ function renderGroup(parent,title,rows,empty){
  }
 }
 
-const upcomingPromise=fetchJson('/my-kasi/fixtures')
-     .catch(()=>({matches:[]}));
+const upcomingPromise=fetchJson('/results/upcoming-by-teams?'+new URLSearchParams({home_id:teams[0].id,away_id:teams[1].id}))
+      .catch(()=>({matches:[]}));
 
     await Promise.all(teams.map(async team=>{
      const section=document.createElement('section');
@@ -20379,7 +20475,7 @@ async function ksnRecoverHistoricalH2H(){
     else awayWins++;
    }
    h2hSummary(homeWins,draws,awayWins,matches.length);
-   const sample=add('p','Previous Meetings');
+   const sample=add('p','Verified Completed Meetings');
    sample.className='muted';
    for(const item of matches){
     h2hMeeting(item.date,item.league,item.hn,item.hs,item.as,item.an);
@@ -20444,7 +20540,7 @@ const resolvedArchiveKey =
    data.meetings.forEach(m=>{
     h2hMeeting(m.date,m.league,m.homeTeam||'Home',m.homeScore,m.awayScore,m.awayTeam||'Away');
    });
-   add('p','Results reflect only verified games stored in the KasiScore archive.');
+    add('p','Includes this finished match where stored, plus other verified meetings in the KasiScore archive.');
   loaded=true;
 
  }catch(error){
