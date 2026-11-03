@@ -8665,6 +8665,130 @@ async def fixture_insights(fixture_id: int, lite: int = Query(0, ge=0, le=1)):
     }
 
 # ---------------------------------------------------------------------------
+# V663 STEP 937F: opt-in bounded live-match history (NOT part of 90-second polling).
+# In-memory TTL, no application DB writes. Provider helper may have its own cache.
+_ksn937_history_cache = {}
+
+@app.get("/fixtures/{fixture_id}/history-verified")
+async def ksn937_verified_match_history(fixture_id: int):
+    if not (1 <= fixture_id <= 999999999999):
+        raise HTTPException(status_code=400, detail="Invalid fixture ID")
+    import time as _time
+    now_s = _time.monotonic()
+    key = str(fixture_id)
+    entry = _ksn937_history_cache.get(key)
+    if entry and entry[0] > now_s:
+        return entry[1]
+
+    async def fetch(path, params):
+        try:
+            raw = await asyncio.wait_for(_afoot_get(path, params), timeout=7.0)
+            return raw.get("response") or [] if isinstance(raw, dict) else []
+        except Exception:
+            return []
+
+    info = await fetch("/fixtures", {"id": fixture_id})
+    fixture = info[0] if info and isinstance(info[0], dict) else {}
+    teams = fixture.get("teams") or {}
+    hid = (teams.get("home") or {}).get("id")
+    aid = (teams.get("away") or {}).get("id")
+    try:
+        hid, aid = int(hid), int(aid)
+        if hid <= 0 or aid <= 0 or hid == aid: raise ValueError()
+    except (TypeError, ValueError):
+        return {"form": {}, "next5": {}, "h2h": {}, "source": "unavailable"}
+
+    queries = [
+        ("/fixtures", {"team": hid, "last": 10}),
+        ("/fixtures", {"team": aid, "last": 10}),
+        ("/fixtures", {"team": hid, "next": 5}),
+        ("/fixtures", {"team": aid, "next": 5}),
+        ("/fixtures/headtohead", {"h2h": f"{hid}-{aid}", "last": 10}),
+    ]
+    past_h, past_a, next_h, next_a, meetings = await asyncio.gather(
+        *(fetch(route, params) for route, params in queries))
+    completed = {"FT", "AET", "PEN"}
+    upcoming = {"NS", "TBD"}
+    now = datetime.now(timezone.utc)
+
+    def valid_date(value):
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
+
+    def normalize(items, kind, limit):
+        out, seen = [], set()
+        for raw in items if isinstance(items, list) else []:
+            if not isinstance(raw, dict): continue
+            fx, tm = raw.get("fixture") or {}, raw.get("teams") or {}
+            fid = fx.get("id")
+            try: fid = int(fid)
+            except (TypeError, ValueError): continue
+            if fid == fixture_id or fid in seen: continue
+            seen.add(fid)
+            home, away = tm.get("home") or {}, tm.get("away") or {}
+            hname, aname = home.get("name"), away.get("name")
+            when, status = valid_date(fx.get("date")), str((fx.get("status") or {}).get("short") or "").upper()
+            if not hname or not aname or when is None: continue
+            row = {"fixtureId": fid, "date": fx.get("date"),
+                   "home": hname, "away": aname, "status": status}
+            if kind == "past":
+                goals = raw.get("goals") or {}
+                try:
+                    hg, ag = int(goals["home"]), int(goals["away"])
+                    if hg < 0 or ag < 0: continue
+                except (TypeError, ValueError, KeyError): continue
+                if when > now or status not in completed: continue
+                row["score"] = f"{hg}-{ag}"  # always home-away, never team-relative
+            else:
+                if when <= now or status not in upcoming: continue
+                row["score"] = None
+            out.append((when, row))
+        out.sort(key=lambda item: item[0], reverse=(kind == "past"))
+        return [item[1] for item in out[:limit]]
+
+    historical_h = normalize(past_h, "past", 5)
+    historical_a = normalize(past_a, "past", 5)
+    upcoming_h = normalize(next_h, "next", 5)
+    upcoming_a = normalize(next_a, "next", 5)
+    hist_meetings = normalize(meetings, "past", 10)
+    hw = draws = aw = 0
+    for row in hist_meetings:
+        try:
+            hg, ag = map(int, row["score"].split("-"))
+        except (ValueError, KeyError): continue
+        original = next((m for m in meetings if str((m.get("fixture") or {}).get("id")) == str(row["fixtureId"])), {})
+        row_hid = (original.get("teams") or {}).get("home") or {}
+        try: actual_home_id = int(row_hid.get("id"))
+        except (TypeError, ValueError): continue
+        if hg == ag: draws += 1
+        elif (hg > ag) == (actual_home_id == hid): hw += 1
+        else: aw += 1
+    # A summary is valid only when every historical meeting was classified.
+    count = hw + draws + aw
+    if count != len(hist_meetings):
+        hist_meetings = []
+        count = hw = draws = aw = 0
+
+    result = {
+        "form": {
+            "home": {"team": teams.get("home"), "last10": historical_h},
+            "away": {"team": teams.get("away"), "last10": historical_a},
+        },
+        "next5": {"home": upcoming_h, "away": upcoming_a},
+        "h2h": {"played": count, "homeWins": hw, "draws": draws,
+                "awayWins": aw, "meetings": hist_meetings},
+        "source": "verified-provider-history",
+    }
+    # Preserve only a bounded set of entries; no durable persistence.
+    if len(_ksn937_history_cache) >= 256:
+        _ksn937_history_cache.clear()
+    _ksn937_history_cache[key] = (now_s + (1800 if any(
+        (historical_h, historical_a, upcoming_h, upcoming_a, hist_meetings)) else 180), result)
+    return result
+
 # LIVE — IMPORTANT: NOW RUNS _prediction()
 # ---------------------------------------------------------------------------
 
@@ -28502,6 +28626,13 @@ main{{max-width:1050px}}
 .ksn936-player-name{{background:#0c291fcc;padding:3px 5px;border-radius:6px;font-size:11px;max-width:100%;overflow-wrap:anywhere}}
 .ksn936-rating-badge{{position:absolute;right:-14px;top:-8px;z-index:2;background:#facc15;color:#1d1d1d;border:1px solid #fff0a5;border-radius:8px;font-size:11px;font-weight:800;padding:3px 5px;text-shadow:none}}
 @media(max-width:620px){{.ksn936-pitch{{min-height:490px}}.ksn936-player{{width:67px}}.ksn936-portrait img,.ksn936-photo-fallback{{width:36px;height:36px}}.ksn936-player-name{{font-size:9px}}.ksn936-rating-badge{{font-size:10px;right:-12px}}.tabs button{{padding:10px}}}}
+
+/* V663 STEP 937H: single-row finished-match style for live navigation. */
+.ksn937UnifiedNav{{display:flex!important;flex-wrap:nowrap!important;overflow-x:auto!important;overflow-y:hidden!important;gap:3px;scrollbar-width:thin;-webkit-overflow-scrolling:touch;border-bottom:1px solid #35475b}}
+.ksn937UnifiedNav button{{flex:0 0 auto!important;white-space:nowrap!important;min-width:max-content;box-sizing:border-box}}
+.ksn937UnifiedNav button.active{{border:1px solid #7898b8!important;border-bottom:2px solid #6bb4ff!important;border-radius:0!important}}
+.ksn937Integrated{{margin-top:14px}}
+.ksn937Integrated>summary{{cursor:pointer;font-weight:600;padding:8px 2px}}
 </style></head><body><main><div class="top"><a class="back" href="/" onclick="event.preventDefault();return kasiBackHome();">← Back to Home</a><div class="ksn-head"><img src="/kasi-sports-news-logo.png" alt="KasiScore"><b>KasiScore | Match Centre</b></div></div><div id="page"><div class="card">Loading match data…</div></div></main><script>
 const ID={eid},SPORT={sp},LEAGUE={lg},page=document.getElementById('page');function ksnMatchAd(){{if(document.getElementById('ksnMatchCentreAd'))return;const cards=page.querySelectorAll('.card');if(cards.length<2)return;const box=document.createElement('div');box.id='ksnMatchCentreAd';box.className='ksn-ad';box.innerHTML='<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-5442799591686279" data-ad-slot="3030391892" data-ad-format="auto" data-full-width-responsive="true"></ins>';cards[0].insertAdjacentElement('afterend',box);try{{(window.adsbygoogle=window.adsbygoogle||[]).push({{}})}}catch(_){{}};const ins=box.querySelector('ins');new MutationObserver((m,o)=>{{if(ins.getAttribute('data-ad-status')==='unfilled'){{box.remove();o.disconnect()}}else if(ins.getAttribute('data-ad-status')==='filled')o.disconnect()}}).observe(ins,{{attributes:true,attributeFilter:['data-ad-status']}});}}new MutationObserver(()=>ksnMatchAd()).observe(page,{{childList:true,subtree:true}});function kasiBackHome(){{try{{if(history.length>1){{history.back();return false}}}}catch(_){{}}location.replace('/');return false;}}const E=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
 const ksnValidCalendarDate=s=>{{
@@ -29046,9 +29177,9 @@ function ksn936FixtureHistory(insights,match){{
   const name=teams[side]?.name||form[side]?.team?.name||
    (side==='home'?'Home team':'Away team');
   sections.push(`<div class="card">
-   <h3>${{E(name)}} ? Last 5</h3>
+   <h3>${{E(name)}} &middot; Last 5</h3>
    ${{render(form[side]?.last10,'past')}}
-   <h3>${{E(name)}} ? Next 5</h3>
+   <h3>${{E(name)}} &middot; Next 5</h3>
    ${{render(upcoming[side],'next')}}
   </div>`);
  }}
@@ -29098,6 +29229,54 @@ function ksn936HeadToHead(insights,match){{
  </div>`;
 }}
 
+// Step 937F: fetch verified history only on Fixture/H2H selection.
+function ksn937BindHistory(m){{
+ const key=String(ID);
+ const store=window.__ksn937HistoryStore||(window.__ksn937HistoryStore={{}});
+ const render=()=>{{
+  const entry=store[key];
+  if(!entry||!entry.data)return;
+  const fp=document.getElementById('fixture');
+  const hp=document.getElementById('h2h');
+  if(fp)fp.innerHTML=ksn936FixtureHistory(entry.data,m);
+  if(hp)hp.innerHTML=ksn936HeadToHead(entry.data,m);
+ }};
+ const loadHistory=async()=>{{
+  const entry=store[key];
+  if(entry&&entry.expires>Date.now()){{
+   if(entry.data)render();
+   if(entry.pending)return entry.pending;
+   return;
+  }}
+  const pending=(async()=>{{
+   const abort=new AbortController();
+   const timeout=setTimeout(()=>abort.abort(),15000);
+   try{{
+    const response=await fetch('/fixtures/'+encodeURIComponent(ID)+'/history-verified',
+     {{method:'GET',headers:{{Accept:'application/json'}},signal:abort.signal}});
+    if(!response.ok)throw Error('history HTTP '+response.status);
+    const data=await response.json();
+    if(!data||typeof data!=='object')throw Error('invalid history data');
+    const hasData=!!(data.form?.home?.last10?.length||data.form?.away?.last10?.length||
+     data.next5?.home?.length||data.next5?.away?.length||data.h2h?.meetings?.length);
+    store[key]={{data,expires:Date.now()+(hasData?1800000:180000)}};
+    render();
+   }}catch(_){{
+    store[key]={{expires:Date.now()+60000}};
+   }}finally{{clearTimeout(timeout);}}
+  }})();
+  store[key]={{expires:Date.now()+16000,pending}};
+  return pending;
+ }};
+ for(const name of ['fixture','h2h']){{
+  const btn=document.querySelector('.tabs button[data-p="'+name+'"]');
+  if(btn)btn.addEventListener('click',()=>{{void loadHistory();}});
+ }}
+ if(['#fixture','#h2h','#headtohead'].includes(location.hash.toLowerCase()))
+  void loadHistory();
+ else render();
+}}
+
 function intelligence(i){{i=i||{{}};const f=i.form||{{}},fh=f.home||{{}},fa=f.away||{{}},st=i.standings||{{}},h2=i.h2h||{{}},n=i.next5||{{}},ts=i.teamStatistics||{{}},inj=i.injuries||{{}};
  const formRows=x=>(x||[]).map(r=>`<div class="event"><div class="minute">${{E(r.result||'—')}}</div><div><b>${{E(r.home||'')}} ${{E(r.score||'')}} ${{E(r.away||'')}}</b><div class="tiny muted">${{intelDate(r.date)}}${{(r.scorers||[]).length?' · Scorers: '+E((r.scorers||[]).join(', ')):''}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>';
  const nextRows=x=>(x||[]).map(r=>`<div class="event"><div class="minute">NEXT</div><div><b>${{E(r.home||'')}} vs ${{E(r.away||'')}}</b><div class="tiny muted">${{intelDate(r.date)}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>';
@@ -29124,7 +29303,7 @@ function wireTabs(){{
  const aliases={{match:'overview',overview:'overview',lineups:'lineups',stats:'stats',statistics:'stats',fixture:'fixture',fixtures:'fixture',standing:'standings',standings:'standings',h2h:'h2h',headtohead:'h2h',commentary:'timeline',timeline:'timeline',players:'players',intel:'intel',predictions:'odds',prediction:'odds',odds:'odds'}};
  function activate(){{
    const raw=decodeURIComponent(location.hash.replace(/^#/,'')).toLowerCase();
-   const target=aliases[raw]||'overview';
+   const requested=aliases[raw]||'overview';const target=tabs.some(b=>b.dataset.p===requested)?requested:'overview';
    tabs.forEach(b=>b.classList.toggle('active',b.dataset.p===target));
    panels.forEach(p=>p.classList.toggle('active',p.id===target));
  }}
@@ -29168,7 +29347,7 @@ window.__ksnLiveMatchStatus=matchStatus;const isPreMatch=['NS','TBD','SCHEDULED'
   }};
   void ksnMatchIntelEnrich(pendingMatch,d);
 }}return}}catch(_){{}}}}
-const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head to Head</button><button data-p="timeline">Commentary</button></div><div class="tabs" aria-label="Additional match details"><button data-p="players">Player Stats</button><button data-p="intel">Match Intelligence</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14))}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn936LiveLineups(lu,pl)}}</div></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="players"><div class="card"><h2>Player Match Data</h2><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></section><section class="panel" id="intel">${{intelligence(ksnNormalizeMatchIntel(d.insights,m,d.standings))}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();void ksnMatchIntelEnrich(m,d);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
+const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs ksn937UnifiedNav" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head To Head</button><button data-p="timeline">Commentary</button>${{["1H","2H","HT","ET","BT","P","LIVE","INT"].includes(matchStatus)?`<button data-p="odds">Odds / Prediction</button>`:""}}</div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14))}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st)}}</div><details class="card ksn937Integrated"><summary>Match Intelligence</summary><div id="intel">${{intelligence(ksnNormalizeMatchIntel(d.insights,m,d.standings))}}</div></details></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn936LiveLineups(lu,pl)}}</div><details class="card ksn937Integrated"><summary>Player Stats</summary><div id="players"><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></details></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();ksn937BindHistory(m);void ksnMatchIntelEnrich(m,d);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
 load();
 if(SPORT==='football' &&
    new URLSearchParams(location.search).get('tip')!=='1'){{
