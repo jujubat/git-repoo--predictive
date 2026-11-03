@@ -18777,6 +18777,36 @@ a{color:#80bdff}
  background:#26384c;
  color:#90a5bb;
 }
+
+/* V663 Step 933: yellow player rating badges */
+.ksn933-portrait{
+ position:relative;
+ display:flex;
+ align-items:center;
+ justify-content:center;
+ width:42px;
+ height:42px;
+ flex:0 0 42px;
+}
+.ksn933-rating-badge{
+ position:absolute;
+ left:50%;
+ bottom:-7px;
+ transform:translateX(-50%);
+ min-width:29px;
+ padding:2px 5px;
+ border-radius:999px;
+ background:#f2b116;
+ color:#17202b;
+ font-size:11px;
+ font-weight:800;
+ line-height:1.2;
+ text-align:center;
+ white-space:nowrap;
+ z-index:2;
+ box-shadow:0 1px 4px rgba(0,0,0,.3);
+}
+
 .ksn-player-details{min-width:0;overflow-wrap:anywhere}
 .ksn-player-country{
  display:flex;align-items:center;gap:5px;
@@ -19502,10 +19532,40 @@ if(lineups.length){
   }catch{return ''}
  };
 
+
+ // V663 Step 933: verified fixture-level player ratings.
+ const ksn933Ratings=new Map();
+
+ for(const team of (Array.isArray(enhanced.players)?enhanced.players:[])){
+  for(const entry of (Array.isArray(team?.players)?team.players:[])){
+   const pid=String(entry?.player?.id||'');
+   const raw=entry?.statistics?.[0]?.games?.rating;
+
+   if(raw===null||raw===undefined||String(raw).trim()===''){
+    continue;
+   }
+
+   const value=Number(raw);
+
+   // Zero is not shown because the upstream feed can use
+   // zero for an unrated player.
+   if(!/^[1-9][0-9]{0,11}$/.test(pid) ||
+      !Number.isFinite(value) ||
+      value<=0 ||
+      value>10){
+    continue;
+   }
+
+   ksn933Ratings.set(pid,value.toFixed(1));
+  }
+ }
+
  function playerRow(item){
   const p=item?.player||item||{};
   const row=document.createElement('div');
   row.className='ksn-lineup-player';
+  const portrait=document.createElement('span');
+  portrait.className='ksn933-portrait';
 
   const photo=imageUrl(p.photo||p.image);
   if(validId(p.id)&&photo){
@@ -19518,14 +19578,29 @@ if(lineups.length){
    img.onerror=()=>{
     img.replaceWith(document.createTextNode(String.fromCharCode(9679)));
    };
-   row.append(img);
+   portrait.append(img);
   }else{
    const fallback=document.createElement('span');
    fallback.className='ksn-player-placeholder';
    fallback.textContent=String.fromCharCode(9679);
    fallback.setAttribute('aria-hidden','true');
-   row.append(fallback);
+   portrait.append(fallback);
   }
+
+  const rating=ksn933Ratings.get(String(p.id||''));
+
+  if(rating!==undefined){
+   const badge=document.createElement('span');
+   badge.className='ksn933-rating-badge';
+   badge.textContent=rating;
+   badge.setAttribute(
+    'aria-label',
+    'Player rating '+rating+' out of 10'
+   );
+   portrait.append(badge);
+  }
+
+  row.append(portrait);
 
   const details=document.createElement('div');
   details.className='ksn-player-details';
