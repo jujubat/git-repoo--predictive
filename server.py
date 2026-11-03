@@ -19098,6 +19098,36 @@ a{color:#80bdff}
 .ksn925-pitch:after{content:'';pointer-events:none;position:absolute;inset:16px;border:2px solid #a0cdb8;border-radius:2px}
 .ksn925-pitch-player{position:absolute;z-index:1;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;text-align:center;width:95px;color:white;text-shadow:0 1px 3px #08160e}
 .ksn925-player-photo,.ksn925-photo-fallback{width:46px;height:46px;border-radius:50%;border:2px solid #c7e6d4;object-fit:cover;background:#294c58;display:grid;place-items:center;font-weight:800}
+
+/* V663 Step 934: ratings on formation portraits */
+.ksn934-pitch-portrait{
+ position:relative;
+ display:flex;
+ align-items:center;
+ justify-content:center;
+ width:46px;
+ height:46px;
+ flex:0 0 46px;
+ margin-bottom:6px;
+}
+.ksn934-pitch-portrait .ksn933-rating-badge{
+ bottom:-6px;
+ min-width:25px;
+ padding:1px 4px;
+ font-size:10px;
+ text-shadow:none;
+}
+@media(max-width:620px){
+ .ksn934-pitch-portrait{
+  width:36px;
+  height:36px;
+  flex-basis:36px;
+ }
+ .ksn934-pitch-portrait .ksn933-rating-badge{
+  font-size:9px;
+  min-width:23px;
+ }
+}
 .ksn925-pitch-player small{background:#0c291fcc;padding:3px 5px;border-radius:6px;font-size:11px;max-width:100%;overflow-wrap:anywhere}
 .ksn925-sub-row{display:flex;gap:12px;padding:9px 0;border-top:1px solid #304654}
 @media(max-width:620px){.ksn925-pitch{min-height:490px}.ksn925-pitch-player{width:67px}.ksn925-player-photo,.ksn925-photo-fallback{width:36px;height:36px}.ksn925-pitch-player small{font-size:9px}.ksn925-form-line{flex-direction:column;align-items:flex-start}}
@@ -19417,6 +19447,34 @@ const ksnHome=el('home'),ksnAway=el('away');
 
    const lineups=Array.isArray(enhanced.teams)?enhanced.teams:[];
 
+ // V663 Step 933: verified fixture-level player ratings.
+ const ksn933Ratings=new Map();
+
+ for(const team of (Array.isArray(enhanced.players)?enhanced.players:[])){
+  for(const entry of (Array.isArray(team?.players)?team.players:[])){
+   const pid=String(entry?.player?.id||'');
+   const raw=entry?.statistics?.[0]?.games?.rating;
+
+   if(raw===null||raw===undefined||String(raw).trim()===''){
+    continue;
+   }
+
+   const value=Number(raw);
+
+   // Zero is not shown because the upstream feed can use
+   // zero for an unrated player.
+   if(!/^[1-9][0-9]{0,11}$/.test(pid) ||
+      !Number.isFinite(value) ||
+      value<=0 ||
+      value>10){
+    continue;
+   }
+
+   ksn933Ratings.set(pid,value.toFixed(1));
+  }
+ }
+
+
 // ksn925-enhancements: finished Match Centre UI; no new network requests.
 function ksn925Upgrade(enhanced,m){
  const make=(tag,cls,value)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(value!==undefined)n.textContent=String(value);return n};
@@ -19464,15 +19522,23 @@ function ksn925Upgrade(enhanced,m){
            const el=make('div','ksn925-pitch-player');
            el.style.left=((entry.col)/(Math.max(...parsed.filter(e=>e.row===entry.row).map(e=>e.col))+1)*100)+'%';
            el.style.top=((entry.row-.5)/(maxRow+.35)*100)+'%';
-           const src=(()=>{
+           const portrait=make('span','ksn934-pitch-portrait');
+            const src=(()=>{
            const value=p.photo||p.image;
            if(typeof value!=='string')return '';
            try{const u=new URL(value);return u.protocol==='https:'&&['media.api-sports.io','media.api-football.com'].includes(u.hostname)?u.href:''}
            catch{return ''}
          })();
-           if(src){const img=make('img','ksn925-player-photo');img.src=src;img.alt=p.name||'Player';img.loading='lazy';img.onerror=()=>img.replaceWith(make('span','ksn925-photo-fallback',String(p.name||'?').trim().slice(0,1).toUpperCase()));el.append(img)}
-           else el.append(make('span','ksn925-photo-fallback',String(p.name||'?').trim().slice(0,1).toUpperCase()));
-           el.append(make('small','',String(p.number||'')+' '+String(p.name||'Player')));
+           if(src){const img=make('img','ksn925-player-photo');img.src=src;img.alt=p.name||'Player';img.loading='lazy';img.onerror=()=>img.replaceWith(make('span','ksn925-photo-fallback',String(p.name||'?').trim().slice(0,1).toUpperCase()));portrait.append(img)}
+           else portrait.append(make('span','ksn925-photo-fallback',String(p.name||'?').trim().slice(0,1).toUpperCase()));
+           const rating=ksn933Ratings.get(String(p.id||''));
+            if(rating!==undefined){
+             const badge=make('span','ksn933-rating-badge',rating);
+             badge.setAttribute('aria-label','Player rating '+rating+' out of 10');
+             portrait.append(badge);
+            }
+            el.append(portrait);
+            el.append(make('small','',String(p.number||'')+' '+String(p.name||'Player')));
            field.append(el);
          }
          pitch.append(field);
@@ -19532,33 +19598,6 @@ if(lineups.length){
   }catch{return ''}
  };
 
-
- // V663 Step 933: verified fixture-level player ratings.
- const ksn933Ratings=new Map();
-
- for(const team of (Array.isArray(enhanced.players)?enhanced.players:[])){
-  for(const entry of (Array.isArray(team?.players)?team.players:[])){
-   const pid=String(entry?.player?.id||'');
-   const raw=entry?.statistics?.[0]?.games?.rating;
-
-   if(raw===null||raw===undefined||String(raw).trim()===''){
-    continue;
-   }
-
-   const value=Number(raw);
-
-   // Zero is not shown because the upstream feed can use
-   // zero for an unrated player.
-   if(!/^[1-9][0-9]{0,11}$/.test(pid) ||
-      !Number.isFinite(value) ||
-      value<=0 ||
-      value>10){
-    continue;
-   }
-
-   ksn933Ratings.set(pid,value.toFixed(1));
-  }
- }
 
  function playerRow(item){
   const p=item?.player||item||{};
