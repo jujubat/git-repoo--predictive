@@ -30100,8 +30100,8 @@ def _ksn_v657_archived_match_seo(fixture_id):
             "home_id, home_name, away_id, away_name, "
             "home_score, away_score, status "
             "FROM ksn_results_archive "
-            f"WHERE sport='football' AND provider_id={ph} LIMIT 2",
-            (str(int(fixture_id)),)
+            f"WHERE sport='football' AND provider_id={ph} AND ksn_key={ph} LIMIT 2",
+            (str(int(fixture_id)), "football:" + str(int(fixture_id)))
         )
         rows = cur.fetchall()
 
