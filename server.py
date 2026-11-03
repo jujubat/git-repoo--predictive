@@ -18963,6 +18963,38 @@ a{color:#80bdff}
 .ksn-standing-form-L{
  background:#7f1d1d;color:#fca5a5
 }
+
+/* ksn925-enhancements: group forms and pictorial formation under their own tabs */
+.ksn925-recent-form,.ksn925-pitch-section,.ksn925-substitutions,.ksn925-missing{background:#14252e;border:1px solid #304654;border-radius:12px;padding:12px;margin:14px 0}
+.ksn925-recent-form h3,.ksn925-pitch-section h4,.ksn925-substitutions h4,.ksn925-missing h4{margin:0 0 12px}
+.ksn925-form-line{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid #304654}
+.ksn925-form-badges{display:flex;gap:7px;flex-wrap:wrap}
+.ksn925-form-badges span:not(.muted){display:inline-grid;place-items:center;width:29px;height:29px;border-radius:6px;font-weight:800;color:white}
+.ksn925-form-W{background:#187b48}.ksn925-form-D{background:#bd801f}.ksn925-form-L{background:#b83f45}
+.ksn-lineup-grid:has(.ksn925-pitch-section){grid-template-columns:minmax(0,1fr)!important}
+.ksn925-team-switch{display:flex;gap:10px;margin:12px 0 18px;flex-wrap:wrap}
+.ksn925-team-button{background:#23394a;border:1px solid #4b6679;border-radius:9px;padding:9px 17px;color:#fff;cursor:pointer}
+.ksn925-team-button[aria-pressed=true]{background:#266bb1;border-color:#62a5e7}
+.ksn-lineup-card[hidden]{display:none!important}
+.ksn925-pitch{position:relative;min-height:560px;border-radius:12px;overflow:hidden;background:repeating-linear-gradient(0deg,#176642 0px,#176642 75px,#1c704b 75px,#1c704b 150px);border:2px solid #90bba4}
+.ksn925-pitch:after{content:'';pointer-events:none;position:absolute;inset:16px;border:2px solid #a0cdb8;border-radius:2px}
+.ksn925-pitch-player{position:absolute;z-index:1;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;text-align:center;width:95px;color:white;text-shadow:0 1px 3px #08160e}
+.ksn925-player-photo,.ksn925-photo-fallback{width:46px;height:46px;border-radius:50%;border:2px solid #c7e6d4;object-fit:cover;background:#294c58;display:grid;place-items:center;font-weight:800}
+.ksn925-pitch-player small{background:#0c291fcc;padding:3px 5px;border-radius:6px;font-size:11px;max-width:100%;overflow-wrap:anywhere}
+.ksn925-sub-row{display:flex;gap:12px;padding:9px 0;border-top:1px solid #304654}
+@media(max-width:620px){.ksn925-pitch{min-height:490px}.ksn925-pitch-player{width:67px}.ksn925-player-photo,.ksn925-photo-fallback{width:36px;height:36px}.ksn925-pitch-player small{font-size:9px}.ksn925-form-line{flex-direction:column;align-items:flex-start}}
+
+
+/* ksn925-card-portraits: verified card-recipient portraits */
+.ksn925-card-player-photo,.ksn925-card-photo-fallback{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;margin:0 12px 8px 0;border-radius:50%;border:2px solid #4d6271;object-fit:cover;background:#203644;flex:0 0 auto;float:left}
+.ksn925-card-photo-fallback{font-size:20px}
+
+
+/* V663 925H: verified upcoming fixtures grouped inside H2H */
+.ksn925H-next-five{margin-top:18px;padding:16px;border:1px solid #304654;background:#14252e;border-radius:12px}
+.ksn925H-next-five>h3{margin:0 0 12px}.ksn925H-team-fixtures{padding:12px 0;border-top:1px solid #304654}
+.ksn925H-team-fixtures h4{margin:4px 0 12px}.ksn925H-team-fixtures a{color:#84b8ef}
+
 </style>
 </head>
 <body>
@@ -19258,6 +19290,89 @@ const ksnHome=el('home'),ksnAway=el('away');
    matchField('Kickoff',kickoff(fixture.date||m.date));
 
    const lineups=Array.isArray(enhanced.teams)?enhanced.teams:[];
+
+// ksn925-enhancements: finished Match Centre UI; no new network requests.
+function ksn925Upgrade(enhanced,m){
+ const make=(tag,cls,value)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(value!==undefined)n.textContent=String(value);return n};
+ const teamData=Array.isArray(enhanced.teams)?enhanced.teams:[];
+ const standings=Array.isArray(enhanced.standings)?enhanced.standings:[];
+ const byId=id=>teamData.find(t=>String(t?.team?.id||'')===String(id))||null;
+ const sides=[{id:m.home_id,name:m.home,side:'home'},{id:m.away_id,name:m.away,side:'away'}];
+ const formFor=(id)=>{
+   const entry=standings.find(e=>String(e?.team?.id||'')===String(id));
+   const value=String(entry?.form||'').toUpperCase().replace(/[^WDL]/g,'');
+   return value.slice(-5).split('').filter(c=>c==='W'||c==='D'||c==='L');
+ };
+ const lineupPanel=panels.lineups;
+ if(!lineupPanel)return;
+ let trials=0;
+ const lineupTimer=setInterval(()=>{
+   const cards=[...lineupPanel.querySelectorAll('.ksn-lineup-card')];
+   if(cards.length!==2){if(++trials>=25)clearInterval(lineupTimer);return;}
+   clearInterval(lineupTimer);
+   if(lineupPanel.querySelector('.ksn925-team-switch'))return;
+   const control=make('div','ksn925-team-switch');
+   const select=(i)=>{cards.forEach((c,j)=>c.hidden=i!==j);[...control.children].forEach((b,j)=>b.setAttribute('aria-pressed',String(i===j)));};
+   cards.forEach((card,i)=>{
+     const side=sides[i];const t=byId(side.id)||teamData[i];
+     const button=make('button','ksn925-team-button',side.name||side.side);
+     button.type='button';button.addEventListener('click',()=>select(i));control.append(button);
+     if(!t)return;
+     const players=Array.isArray(t.startXI)&&t.startXI.length?t.startXI:
+       (Array.isArray(t.players)?t.players.filter(p=>p.starter===true):[]);
+     const pitch=make('section','ksn925-pitch-section');
+     pitch.append(make('h4','', 'Starting Formation · '+String(t.formation||'Not available')));
+     if(!players.length){pitch.append(make('p','muted','Verified starting positions unavailable'));}
+     else {
+       const field=make('div','ksn925-pitch');
+       const parsed=players.map(item=>{
+         const p=item?.player||item;
+         const parts=String(p.grid||item.grid||'').split(':').map(Number);
+         return {p,row:parts[0],col:parts[1]};
+       });
+       const valid=parsed.every(e=>Number.isInteger(e.row)&&e.row>=1&&e.row<=7&&Number.isInteger(e.col)&&e.col>=1&&e.col<=7);
+       if(valid){
+         const maxRow=Math.max(...parsed.map(e=>e.row));
+         for(const entry of parsed){
+           const p=entry.p;
+           const el=make('div','ksn925-pitch-player');
+           el.style.left=((entry.col)/(Math.max(...parsed.filter(e=>e.row===entry.row).map(e=>e.col))+1)*100)+'%';
+           el.style.top=((entry.row-.5)/(maxRow+.35)*100)+'%';
+           const src=(()=>{
+           const value=p.photo||p.image;
+           if(typeof value!=='string')return '';
+           try{const u=new URL(value);return u.protocol==='https:'&&['media.api-sports.io','media.api-football.com'].includes(u.hostname)?u.href:''}
+           catch{return ''}
+         })();
+           if(src){const img=make('img','ksn925-player-photo');img.src=src;img.alt=p.name||'Player';img.loading='lazy';img.onerror=()=>img.replaceWith(make('span','ksn925-photo-fallback',String(p.name||'?').trim().slice(0,1).toUpperCase()));el.append(img)}
+           else el.append(make('span','ksn925-photo-fallback',String(p.name||'?').trim().slice(0,1).toUpperCase()));
+           el.append(make('small','',String(p.number||'')+' '+String(p.name||'Player')));
+           field.append(el);
+         }
+         pitch.append(field);
+       }else pitch.append(make('p','muted','Formation positions unavailable for this match'));
+     }
+     const heading=card.querySelector('h3');
+     if(heading)heading.insertAdjacentElement('afterend',pitch);else card.prepend(pitch);
+     const subs=make('section','ksn925-substitutions');
+     subs.append(make('h4','', 'Substitutions'));
+     const evs=(Array.isArray(enhanced.events)?enhanced.events:[]).filter(e=>{
+       const type=String(e.type||'').toLowerCase();
+       return (type.includes('subst')||String(e.detail||'').toLowerCase().includes('substitut')) &&
+         String(e.team?.id||'')===String(side.id);
+     });
+     if(evs.length){for(const e of evs){const row=make('div','ksn925-sub-row');row.append(make('strong','',String(e.time?.elapsed||'—')+"'"));row.append(make('span','',String(e.assist?.name||'Incoming player unavailable')+' ↔ '+String(e.player?.name||'Outgoing player unavailable')));subs.append(row)}}
+     else subs.append(make('p','muted','No verified substitutions available'));
+     card.append(subs);
+     const missing=make('section','ksn925-missing');missing.append(make('h4','', 'Missing Players'));
+     missing.append(make('p','muted','Verified unavailable-player information not provided for this match'));
+     card.append(missing);
+   });
+   lineupPanel.prepend(control);select(0);
+ },300);
+}
+setTimeout(()=>ksn925Upgrade(enhanced,m),0);
+
 
 // V663 STEP 924AW-2: two-column historical lineups
 panels.lineups.replaceChildren();
@@ -19768,6 +19883,12 @@ header.append(col);
          boot.title='Assist by '+String(e.assist.name);
          description.prepend(boot);
         }
+        // ksn925-card-portraits: add verified portraits for disciplinary events only.
+        if((event.classList.contains('ksn-event-yellow')||event.classList.contains('ksn-event-red'))&&!event.querySelector('.ksn925-card-player-photo,.ksn925-card-photo-fallback')){
+         const portrait=commentaryPortrait(e.player,teamId);
+         if(portrait){portrait.classList.add('ksn925-card-player-photo');event.prepend(portrait);}
+         else{const fallback=document.createElement('span');fallback.className='ksn925-card-photo-fallback';fallback.textContent='👤';event.prepend(fallback);}
+        }
         event.append(description);
       }
      timeline.append(event);
@@ -20042,6 +20163,9 @@ const upcomingPromise=fetchJson('/my-kasi/fixtures')
     }));
    }
    loadFixtureHistory(); if(!panels.news.childElementCount)missing('news');
+
+
+
 }catch(e){
  el('error').textContent=e.message;
  el('meta').textContent='Historical match unavailable';
@@ -20255,7 +20379,7 @@ async function ksnRecoverHistoricalH2H(){
     else awayWins++;
    }
    h2hSummary(homeWins,draws,awayWins,matches.length);
-   const sample=add('p','Last '+matches.length+' verified previous meetings (API-Football)');
+   const sample=add('p','Previous Meetings');
    sample.className='muted';
    for(const item of matches){
     h2hMeeting(item.date,item.league,item.hn,item.hs,item.as,item.an);
