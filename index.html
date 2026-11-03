@@ -14291,7 +14291,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 <script id="ksn-v394-nav-click-rescue-js">
 (function(){
  'use strict';
- const PUBLIC=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search']);
+ const PUBLIC=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search','platform']);
  function direct(tab,btn){
    if(!PUBLIC.has(tab))return false;
    document.body.classList.remove('ks-admin-open');
@@ -15115,7 +15115,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 <script id="ksn-v395-final-navigation-owner">
 (()=>{'use strict';
  const VERSION='v395';
- const PUBLIC=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search']);
+ const PUBLIC=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search','platform']);
  // A normal Chrome profile can retain large pre-v393 DOM snapshots in localStorage while
  // Incognito/mobile start clean. Remove only those obsolete HTML snapshot keys once; do not
  // touch authentication, preferences, or current application data.
@@ -15204,7 +15204,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 </script>
 <script id="ksn-v416-final-widget-isolation-owner">
 (()=>{'use strict';
- const PUBLIC=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search']);
+ const PUBLIC=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search','platform']);
  const state=window.__KSN_WIDGET_OWNER_V416__={route:'overview',generation:0,sub:Object.create(null)};
  const bump=(scope)=>{state.generation++;state.sub[scope]=(state.sub[scope]||0)+1;return {route:state.route,generation:state.generation,sub:state.sub[scope]}};
  const valid=(scope,t)=>!!t&&state.route===t.route&&state.generation===t.generation&&state.sub[scope]===t.sub;
@@ -15560,7 +15560,7 @@ body[data-ksn-final-page="live"] section#live{display:none!important}
 </style>
 <script id="ksn-v430-final-page-root-owner">
 (()=>{'use strict';
- const PUBLIC=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search']);
+ const PUBLIC=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search','platform']);
  const $=id=>document.getElementById(id);
  let generation=0;
  function markNav(route){
@@ -16365,7 +16365,7 @@ html body #ks537Sidebar .nav-item:not(.active),html body .card,html body div.car
 if(window.__KSN538__)return;window.__KSN538__=true;
 const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const $=id=>document.getElementById(id);
-const ROUTE_OK=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search']);
+const ROUTE_OK=new Set(['overview','live','fixtures','predictions','sportshub','sportsnews','search','platform']);
 const iso=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 const dayAt=n=>{const d=new Date();d.setHours(12,0,0,0);d.setDate(d.getDate()+n);return d};
 const LEAGUE_FILTER={name:'',country:'',id:0};
