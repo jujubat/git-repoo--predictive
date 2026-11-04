@@ -28656,9 +28656,22 @@ main{{max-width:1050px}}
 .ksn939-team-logo{{width:25px;height:25px;object-fit:contain;flex-shrink:0}}
 .ksn939-event-label{{font-weight:700;white-space:nowrap}}
 .ksn939-commentary-table a{{text-decoration:underline;text-underline-offset:2px}}
+/* Use the existing Match Centre colour tokens; no global theme changes. */
+.ksn939-commentary-table thead th{{background:var(--card2);color:var(--muted)}}
+.ksn939-commentary-table th,.ksn939-commentary-table td{{border-bottom:1px solid var(--line)}}
+.ksn939-commentary-table tbody tr.ksn939-event-goal td:first-child{{box-shadow:inset 3px 0 0 var(--green)}}
+.ksn939-commentary-table tbody tr.ksn939-event-red td:first-child{{box-shadow:inset 3px 0 0 var(--red)}}
+.ksn939-commentary-table tbody tr.ksn939-event-yellow td:first-child{{box-shadow:inset 3px 0 0 var(--yellow)}}
+.ksn939-person{{display:inline-flex;align-items:center;gap:6px;min-width:0}}
+.ksn939-person-photo{{width:30px;height:30px;object-fit:cover;border-radius:50%;background:var(--card2);flex-shrink:0}}
+.ksn939-sub-players{{display:grid;gap:5px}}
+.ksn939-sub-players>div{{display:flex;gap:7px;align-items:center}}
+.ksn939-out,.ksn939-in{{font-size:10px;font-weight:900;min-width:27px;color:var(--muted)}}
+.ksn939-in{{color:#70d99c}}
+.ksn939-out{{color:#f4a6a6}}
 @media(max-width:620px){{.ksn939-commentary-table{{font-size:12px}}.ksn939-commentary-table td,.ksn939-commentary-table th{{padding:9px 7px}}}}
 </style></head><body><main><div class="top"><a class="back" href="/" onclick="event.preventDefault();return kasiBackHome();">← Back to Home</a><div class="ksn-head"><img src="/kasi-sports-news-logo.png" alt="KasiScore"><b>KasiScore | Match Centre</b></div></div><div id="page"><div class="card">Loading match data…</div></div></main><script>
-const ID={eid},SPORT={sp},LEAGUE={lg},page=document.getElementById('page');function ksnMatchAd(){{if(document.getElementById('ksnMatchCentreAd'))return;const cards=page.querySelectorAll('.card');if(cards.length<2)return;const box=document.createElement('div');box.id='ksnMatchCentreAd';box.className='ksn-ad';box.innerHTML='<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-5442799591686279" data-ad-slot="3030391892" data-ad-format="auto" data-full-width-responsive="true"></ins>';cards[0].insertAdjacentElement('afterend',box);try{{(window.adsbygoogle=window.adsbygoogle||[]).push({{}})}}catch(_){{}};const ins=box.querySelector('ins');new MutationObserver((m,o)=>{{if(ins.getAttribute('data-ad-status')==='unfilled'){{box.remove();o.disconnect()}}else if(ins.getAttribute('data-ad-status')==='filled')o.disconnect()}}).observe(ins,{{attributes:true,attributeFilter:['data-ad-status']}});}}new MutationObserver(()=>ksnMatchAd()).observe(page,{{childList:true,subtree:true}});function kasiBackHome(){{try{{if(history.length>1){{history.back();return false}}}}catch(_){{}}location.replace('/');return false;}}const E=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
+const ID={eid},SPORT={sp},LEAGUE={lg},page=document.getElementById('page');function ksnMatchAd(){{if(document.getElementById('ksnMatchCentreAd'))return;const cards=page.querySelectorAll('.card');if(cards.length<2)return;const box=document.createElement('div');box.id='ksnMatchCentreAd';box.className='ksn-ad';box.innerHTML='<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-5442799591686279" data-ad-slot="3030391892" data-ad-format="auto" data-full-width-responsive="true"></ins>';page.append(box);try{{(window.adsbygoogle=window.adsbygoogle||[]).push({{}})}}catch(_){{}};const ins=box.querySelector('ins');new MutationObserver((m,o)=>{{if(ins.getAttribute('data-ad-status')==='unfilled'){{box.remove();o.disconnect()}}else if(ins.getAttribute('data-ad-status')==='filled')o.disconnect()}}).observe(ins,{{attributes:true,attributeFilter:['data-ad-status']}});}}new MutationObserver(()=>ksnMatchAd()).observe(page,{{childList:true,subtree:true}});function kasiBackHome(){{try{{if(history.length>1){{history.back();return false}}}}catch(_){{}}location.replace('/');return false;}}const E=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
 const ksnValidCalendarDate=s=>{{
  const m=String(s).match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})T(\\d{{2}}):(\\d{{2}})(?::(\\d{{2}})(?:\\.\\d{{1,3}})?)?(Z|([+-])(\\d{{2}}):(\\d{{2}}))$/i);
  if(!m)return false;
@@ -28693,34 +28706,57 @@ function matchTeamTheme(id,name){{
 }}
 function teamCardStyle(t){{return `border-color:${{t.primary}};box-shadow:inset 5px 0 0 ${{t.primary}};background:linear-gradient(135deg,${{t.primary}}2b,rgba(8,10,12,.97) 48%)`}}
 function statRows(rows,homeId,awayId){{const ordered=Array.isArray(rows)?rows:[];const find=id=>ordered.find(r=>id!=null&&String(r?.team?.id)===String(id));const home=find(homeId)||ordered[0]||{{}};const away=find(awayId)||ordered.find(r=>r!==home)||{{}};const a=home.statistics||[],b=away.statistics||[],m=new Map(b.map(x=>[x.type,x.value]));return a.length?a.map(x=>{{const bv=m.get(x.type),an=N(x.value),bn=N(bv),pct=an!=null&&bn!=null&&an+bn>0?Math.round(an/(an+bn)*100):50;return `<div class="stat"><b>${{E(x.value??'—')}}</b><div><span class="muted">${{E(x.type)}}</span><div class="bar"><i style="width:${{pct}}%"></i></div></div><b>${{E(bv??'—')}}</b></div>`}}).join(''):'<div class="empty">No detailed statistics returned.</div>'}}
-function scorerLines(ev,id){{return ev.filter(x=>String(x.type).toLowerCase()==='goal'&&String(x.team?.id)===String(id)).map(x=>`${{E(x.player?.name||'Goal')}} ${{E(x.time?.elapsed??'')}}′${{x.assist?.name?' · '+E(x.assist.name)+' assist':''}}`).join('<br>')}}
-/* V663 STEP 939B: verified football incident table; no invented commentary. */
-function timeline(ev){{
+function scorerLines(ev,id){{
+ const goals=(Array.isArray(ev)?ev:[]).filter(x=>String(x.type||'').toLowerCase()==='goal'&&String(x.team?.id)===String(id));
+ return goals.sort((a,b)=>(Number(a.time?.elapsed)||0)-(Number(b.time?.elapsed)||0)||(Number(a.time?.extra)||0)-(Number(b.time?.extra)||0)).map(x=>{{
+  const minute=E(x.time?.elapsed??'—')+(Number(x.time?.extra)>0?'+'+E(x.time.extra):'')+'′';
+  const kind=String(x.detail||'').toLowerCase().includes('penalty')?' (penalty)':'';
+  return `${{E(x.player?.name||'Goal')}} ${{minute}}${{kind}}${{x.assist?.name?' · '+E(x.assist.name)+' assist':''}}`;
+ }}).join('<br>');
+}}
+/* V663 STEP 939M: verified incident mapping; use player imagery only when supplied. */
+function timeline(ev,playerRows=[],lineupTeams=[]){{
  if(!Array.isArray(ev)||!ev.length)return '<div class="empty">No verified match events available.</div>';
  const rows=[...ev].sort((a,b)=>(Number(a.time?.elapsed)||0)-(Number(b.time?.elapsed)||0)||(Number(a.time?.extra)||0)-(Number(b.time?.extra)||0));
- const logo=t=>t?.logo?`<img src="${{E(t.logo)}}" alt="" loading="lazy" class="ksn939-team-logo">`:'';
+ const photos=new Map();
+ for(const t of (Array.isArray(playerRows)?playerRows:[]))for(const x of (Array.isArray(t?.players)?t.players:[])){{
+  const p=x?.player||{{}};if(p.id&&p.photo)photos.set(String(p.id),p.photo);
+ }}
+ for(const t of (Array.isArray(lineupTeams)?lineupTeams:[]))for(const p of (Array.isArray(t?.players)?t.players:[])){{
+  if(p?.id&&p?.photo&&!photos.has(String(p.id)))photos.set(String(p.id),p.photo);
+ }}
+ const teamLogo=t=>t?.logo?`<img src="${{E(t.logo)}}" alt="" loading="lazy" class="ksn939-team-logo">`:'';
  const minute=e=>`${{E(e.time?.elapsed??'—')}}${{Number(e.time?.extra)>0?'+'+E(e.time.extra):''}}′`;
- const iconFor=e=>{{const kind=String(e.type||'').toLowerCase();return kind==='goal'?'⚽':kind==='subst'?'↔':kind==='card'?'▣':'•';}};
+ const type=e=>String(e.type||'').toLowerCase();
+ const isSub=e=>['subst','substitution'].includes(type(e));
+ const isCard=e=>type(e)==='card';
+ const isGoal=e=>type(e)==='goal';
+ const label=e=>isSub(e)?'Substitution':isGoal(e)?'Goal':isCard(e)?(String(e.detail||'').toLowerCase().includes('red')?'Red card':'Yellow card'):E(e.type||'Event');
+ const icon=e=>isSub(e)?'↔':isGoal(e)?'⚽':isCard(e)?'▣':'•';
+ const status=e=>isGoal(e)?'goal':isSub(e)?'substitution':isCard(e)?(String(e.detail||'').toLowerCase().includes('red')?'red':'yellow'):'other';
+ const person=(p)=>{{
+  const id=p?.id, name=p?.name||'';
+  if(!name)return '<span class="muted">—</span>';
+  const photo=id?photos.get(String(id)):null;
+  const img=photo?`<img class="ksn939-person-photo" src="${{E(photo)}}" alt="" loading="lazy">`:'';
+  const text=id?`<a href="${{playerUrl(id)}}">${{E(name)}}</a>`:E(name);
+  return `<span class="ksn939-person">${{img}}${{text}}</span>`;
+ }};
  const row=e=>{{
-  const typ=String(e.type||'Event');
-  const player=e.player?.name||'';
-  const assist=e.assist?.name||'';
-  const detail=e.detail||'';
-  const comments=e.comments||'';
-  const desc=[detail,comments].filter(Boolean).join(' · ');
-  const playerId=e.player?.id;
-  const playerName=playerId&&player?`<a href="${{playerUrl(playerId)}}">${{E(player)}}</a>`:E(player||'—');
-  return `<tr><td class="ksn939-minute">${{minute(e)}}</td>
-   <td><span class="ksn939-team">${{logo(e.team)}}<span>${{E(e.team?.name||'—')}}</span></span></td>
-   <td><span class="ksn939-event-label">${{iconFor(e)}} ${{E(typ)}}</span></td>
-   <td>${{playerName}}${{assist?`<div class="tiny muted">Assist: ${{E(assist)}}</div>`:''}}</td>
-   <td>${{E(desc||'—')}}</td></tr>`;
+  const secondary=e.assist?.name?person(e.assist):'';
+  const playerPart=isSub(e)
+   ?`<div class="ksn939-sub-players"><div><span class="ksn939-out">OUT</span>${{person(e.player)}}</div>${{secondary?`<div><span class="ksn939-in">IN</span>${{secondary}}</div>`:''}}</div>`
+   :`${{person(e.player)}}${{isGoal(e)&&secondary?`<div class="tiny muted">Assist: ${{secondary}}</div>`:''}}`;
+  const detail=[e.detail,e.comments].filter(Boolean).map(E).join(' · ')||'—';
+  return `<tr class="ksn939-event-${{status(e)}}"><td class="ksn939-minute">${{minute(e)}}</td>
+   <td><span class="ksn939-team">${{teamLogo(e.team)}}<span>${{E(e.team?.name||'—')}}</span></span></td>
+   <td><span class="ksn939-event-label">${{icon(e)}} ${{label(e)}}</span></td>
+   <td>${{playerPart}}</td><td>${{detail}}</td></tr>`;
  }};
  return `<div class="standings-wrap ksn939-commentary-wrap"><table class="ksn939-commentary-table">
   <thead><tr><th>Time</th><th>Team</th><th>Event</th><th>Player</th><th>Details</th></tr></thead>
   <tbody>${{rows.map(row).join('')}}</tbody></table></div>`;
 }}
-
 
 /* V663 STEP 936E: verified live formations and player ratings.
    Preserve the existing player lists as a complete fallback. */
@@ -29405,7 +29441,7 @@ window.__ksnLiveMatchStatus=matchStatus;const isPreMatch=['NS','TBD','SCHEDULED'
   }};
   void ksnMatchIntelEnrich(pendingMatch,d);
 }}return}}catch(_){{}}}}
-const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs ksn937UnifiedNav" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head To Head</button><button data-p="timeline">Commentary</button>${{["1H","2H","HT","ET","BT","P","LIVE","INT"].includes(matchStatus)?`<button data-p="odds">Odds / Prediction</button>`:""}}</div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14))}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st,home.id,away.id)}}</div><details class="card ksn937Integrated"><summary>Match Intelligence</summary><div id="intel">${{intelligence(ksnNormalizeMatchIntel(d.insights,m,d.standings))}}</div></details></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn936LiveLineups(lu,pl)}}</div><details class="card ksn937Integrated"><summary>Player Stats</summary><div id="players"><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></details></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();ksn937BindHistory(m);void ksnMatchIntelEnrich(m,d);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
+const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs ksn937UnifiedNav" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head To Head</button><button data-p="timeline">Commentary</button>${{["1H","2H","HT","ET","BT","P","LIVE","INT"].includes(matchStatus)?`<button data-p="odds">Odds / Prediction</button>`:""}}</div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14),pl,lu)}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st,home.id,away.id)}}</div><details class="card ksn937Integrated"><summary>Match Intelligence</summary><div id="intel">${{intelligence(ksnNormalizeMatchIntel(d.insights,m,d.standings))}}</div></details></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev,pl,lu)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn936LiveLineups(lu,pl)}}</div><details class="card ksn937Integrated"><summary>Player Stats</summary><div id="players"><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></details></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();ksn937BindHistory(m);void ksnMatchIntelEnrich(m,d);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
 load();
 if(SPORT==='football' &&
    new URLSearchParams(location.search).get('tip')!=='1'){{
