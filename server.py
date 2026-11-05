@@ -29786,6 +29786,32 @@ main{{max-width:1120px;margin:auto;padding:18px}}a{{color:var(--accent)}}.top{{d
 .grid{{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}}.row{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding:9px 0;border-bottom:1px solid var(--line)}}.muted{{color:var(--muted)}}.standings-table{{width:100%;border-collapse:collapse;min-width:620px}}.standings-table th,.standings-table td{{padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle;text-align:center;white-space:nowrap}}.standings-table th{{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:800}}.standings-table th:nth-child(2),.standings-table td:nth-child(2){{text-align:left;min-width:180px}}.standings-table td:last-child{{font-weight:900}}
 .person{{display:flex;gap:12px;align-items:center;padding:12px 10px;border-bottom:1px solid var(--line);border-radius:9px;cursor:pointer}}.person:hover{{background:#171b20}}
 @media(max-width:700px){{.grid,.hero{{grid-template-columns:1fr}}.score{{font-size:28px}}}}
+
+/* V663 STEP 951C: Standalone Match Centre — professional tables, presentation only. */
+#ksn-v663-unified-live-match {{--ksn-table-border:#263342;--ksn-table-stripe:#0e1723;--ksn-table-header:#162437;--ksn-table-hover:#182d42;--ksn-table-accent:#65bcff;}}
+#ksn-v663-unified-live-match [data-kmatch-panel]{{min-width:0}}
+#ksn-v663-unified-live-match [data-kmatch-panel] > h2{{font-size:18px;line-height:1.4;font-weight:750;letter-spacing:-.015em;margin:0 0 16px}}
+#ksn-v663-unified-live-match .standings-wrap,
+#ksn-v663-unified-live-match [data-kmatch-panel] > div:has(>table){{overflow-x:auto;max-width:100%;border:1px solid var(--ksn-table-border);border-radius:12px;scrollbar-width:thin}}
+#ksn-v663-unified-live-match table{{width:100%;border-collapse:separate;border-spacing:0;text-align:left;font-variant-numeric:tabular-nums;font-size:13px;line-height:1.5;min-width:460px}}
+#ksn-v663-unified-live-match table th{{background:var(--ksn-table-header);color:#c8d7e7;text-transform:uppercase;font-size:11px;letter-spacing:.055em;font-weight:750;white-space:nowrap;padding:12px 14px;border-bottom:1px solid var(--ksn-table-border)}}
+#ksn-v663-unified-live-match table td{{padding:12px 14px;vertical-align:middle;border-bottom:1px solid var(--ksn-table-border);color:#e8f0fa}}
+#ksn-v663-unified-live-match table tbody tr:nth-child(even){{background:var(--ksn-table-stripe)}}
+#ksn-v663-unified-live-match table tbody tr:hover{{background:var(--ksn-table-hover)}}
+#ksn-v663-unified-live-match table tbody tr:last-child td{{border-bottom:0}}
+#ksn-v663-unified-live-match table td img{{width:24px;height:24px;object-fit:contain;vertical-align:middle;margin-right:8px}}
+#ksn-v663-unified-live-match table th:first-child,#ksn-v663-unified-live-match table td:first-child{{padding-left:16px}}
+#ksn-v663-unified-live-match table th:last-child,#ksn-v663-unified-live-match table td:last-child{{padding-right:16px}}
+#ksn-v663-unified-live-match table td b{{font-weight:800;color:#fff}}
+#ksn-v663-unified-live-match [data-kmatch-tab]{{font-size:13px!important;font-weight:700!important;white-space:nowrap;transition:color .15s,background .15s;border-radius:7px 7px 0 0}}
+#ksn-v663-unified-live-match [data-kmatch-tab][aria-selected="true"]{{color:var(--ksn-table-accent)!important;background:#101c2b!important}}
+#ksn-v663-unified-live-match [data-kmatch-tab]:focus-visible{{outline:2px solid var(--ksn-table-accent);outline-offset:-2px}}
+@media(max-width:700px){{
+ #ksn-v663-unified-live-match table{{font-size:12px;min-width:420px}}
+ #ksn-v663-unified-live-match table th{{font-size:10px;padding:10px 9px}}
+ #ksn-v663-unified-live-match table td{{padding:10px 9px}}
+ #ksn-v663-unified-live-match [data-kmatch-panel] > h2{{font-size:16px}}
+}}
 </style></head><body class="ks-standalone-page"><main><div class="top"><a class="back" href="/" onclick="event.preventDefault();return kasiBackHome();">← Back to Home</a><div class="ksn-head"><img src="/kasi-sports-news-logo.png" alt="Kasi Sports News"><b>Kasi Sports News</b></div></div>
 <div id="page"><div class="card">Loading {title.lower()}…</div></div></main>
 <script>
@@ -29849,6 +29875,63 @@ async function ksn950LoadH2H(root,teams){{
  }}catch(_){{
   if(root.isConnected)slot.innerHTML='<p class="muted">Verified H2H temporarily unavailable. Select this tab to retry.</p>';
  }}finally{{clearTimeout(timeout);slot.dataset.busy='0';}}
+}}
+
+
+// V663 STEP 951D: verified fixture form and provider-returned odds (no predictions generated).
+function ksn951FixtureTable(rows,mode){{
+ const past=mode==='past',seen=new Set(),valid=[];
+ for(const r of Array.isArray(rows)?rows:[]){{
+  const id=String(r?.fixtureId||''),dt=Date.parse(String(r?.date||''));
+  const status=String(r?.status||'').toUpperCase();
+  if(!/^[1-9]\d*$/.test(id)||seen.has(id)||!Number.isFinite(dt)||!r?.home||!r?.away)continue;
+  if(past?(!['FT','AET','PEN'].includes(status)||dt>Date.now()):(!['NS','TBD'].includes(status)||dt<=Date.now()))continue;
+  if(past&&!/^\d+\s*[-–:]\s*\d+$/.test(String(r.score||'')))continue;
+  seen.add(id);valid.push({{...r,stamp:dt}});
+ }}
+ valid.sort((a,b)=>past?b.stamp-a.stamp:a.stamp-b.stamp);
+ const items=valid.slice(0,5);
+ if(!items.length)return '<p class="muted">No verified '+(past?'completed':'upcoming')+' fixtures available.</p>';
+ const badge=u=>{{const x=String(u||'');return /^https:\/\/[^\s"\'<>]+$/i.test(x)?'<img src="'+E(x)+'" alt="" loading="lazy">':'';}};
+ const rowsHtml=items.map(r=>'<tr><td>'+E(new Date(r.stamp).toLocaleDateString('en-ZA',{{year:'numeric',month:'short',day:'2-digit'}}))+'</td><td>'+badge(r.homeLogo)+E(r.home)+'</td><td><b>'+(past?E(r.score):'vs')+'</b></td><td>'+badge(r.awayLogo)+E(r.away)+'</td></tr>').join('');
+ return '<div style="overflow-x:auto"><table class="standings-table"><thead><tr><th>Date</th><th>Home</th><th>Score</th><th>Away</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
+}}
+function ksn951FixtureRender(data,teams){{
+ const form=data?.form||{{}},next=data?.next5||{{}};
+ const h=teams?.home?.name||'Home',a=teams?.away?.name||'Away';
+ const section=(title,rows,mode)=>'<section class="card"><h3>'+E(title)+'</h3>'+ksn951FixtureTable(rows,mode)+'</section>';
+ return '<div class="grid2">'+section(h+' · Previous 5',form.home?.last10,'past')+section(a+' · Previous 5',form.away?.last10,'past')+section(h+' · Next 5',next.home,'next')+section(a+' · Next 5',next.away,'next')+'</div>';
+}}
+async function ksn951LoadFixture(root,teams){{
+ const slot=root?.querySelector('[data-ksn951-fixture]');
+ if(!slot||slot.dataset.loaded==='1'||slot.dataset.busy==='1')return;
+ slot.dataset.busy='1';slot.innerHTML='<p class="muted">Loading verified team fixtures...</p>';
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);
+ try{{
+  const response=await fetch('/fixtures/'+encodeURIComponent(ID)+'/history-verified',{{method:'GET',headers:{{Accept:'application/json'}},signal:controller.signal}});
+  if(!response.ok)throw Error('History unavailable');
+  const data=await response.json();
+  if(!root.isConnected)return;
+  slot.innerHTML=ksn951FixtureRender(data,teams);slot.dataset.loaded='1';
+ }}catch(_){{if(root.isConnected)slot.innerHTML='<p class="muted">Verified team fixtures unavailable. Select Fixture to retry.</p>';}}
+ finally{{clearTimeout(timeout);slot.dataset.busy='0';}}
+}}
+function ksn951OddsRender(raw){{
+ // Never invent bookmaker prices or prediction probabilities.
+ const obj=raw&&typeof raw==='object'?raw:{{}};
+ const books=Array.isArray(obj.bookmakers)?obj.bookmakers:[];
+ const selected=obj.selected&&typeof obj.selected==='object'?obj.selected:books[0];
+ const markets=Array.isArray(selected?.markets)?selected.markets:[];
+ if(!markets.length)return '<p class="muted">No verified bookmaker markets currently available for this fixture.</p>';
+ const rows=[];
+ for(const market of markets.slice(0,12))for(const opt of (Array.isArray(market?.values)?market.values:[]).slice(0,12)){{
+  const odd=Number(opt?.odd);
+  if(!Number.isFinite(odd)||odd<=1||odd>10000)continue;
+  rows.push('<tr><td>'+E(market.name||market.id||'Market')+'</td><td>'+E(opt.value||'Selection')+'</td><td><b>'+E(odd.toFixed(2))+'</b></td></tr>');
+ }}
+ if(!rows.length)return '<p class="muted">No valid verified bookmaker prices were returned.</p>';
+ const book=String(selected?.name||'Verified bookmaker markets');
+ return '<p class="muted">'+E(book)+' · Provider-returned odds only; not KasiScore predictions.</p><div style="overflow-x:auto"><table class="standings-table"><thead><tr><th>Market</th><th>Selection</th><th>Odds</th></tr></thead><tbody>'+rows.join('')+'</tbody></table></div>';
 }}
 
 const ksnValidCalendarDate=s=>{{
@@ -29933,7 +30016,7 @@ async function match(){{
      return entries||unavailable('Verified statistics are unavailable.');
    }};
    const tabNames=[['match','Match'],['lineups','Lineups'],['stats','Stats'],
-     ['trends','Fixture'],['news','Standing'],['h2h','Head to Head'],['commentary','Commentary']];
+     ['trends','Fixture'],['news','Standing'],['h2h','Head to Head'],['commentary','Commentary'],['odds','Odds / Prediction']];
    page.innerHTML=`<div id="ksn-v663-unified-live-match" style="max-width:1050px;margin:auto">
      <header style="display:flex;justify-content:space-between;align-items:center;gap:12px">
        <strong>KasiScore ?? Match Centre</strong><a href="/#live">Back to Results</a>
@@ -29951,10 +30034,11 @@ async function match(){{
      <section class="card" data-kmatch-panel="match"><h2>Match</h2>${{details}}<h3>Events</h3><div id="ksn-live-events">${{eventHtml(events)}}</div></section>
      <section class="card" data-kmatch-panel="lineups"><h2>Lineups</h2>${{lineups||unavailable('Verified lineups are unavailable.')}}</section>
      <section class="card" data-kmatch-panel="stats"><h2>Match Statistics</h2><div id="ksn-live-stats">${{statisticsHtml(stats)}}</div></section>
-     <section class="card" data-kmatch-panel="trends"><h2>Trends</h2>${{unavailable('Previous five and next five verified fixtures are not yet available in this view.')}}</section>
+     <section class="card" data-kmatch-panel="trends"><h2>Fixture · Team Form</h2><div data-ksn951-fixture>Select Fixture to load verified previous and upcoming matches.</div></section>
      <section class="card" data-kmatch-panel="news"><h2>${{E(m.league?.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,ts.home?.id,ts.away?.id)}}</section>
      <section class="card" data-kmatch-panel="h2h"><h2>Head to Head</h2><div data-ksn950-h2h class="muted">Select Head to Head to load verified previous meetings.</div></section>
      <section class="card" data-kmatch-panel="commentary"><h2>Commentary</h2><div id="ksn-live-commentary">${{eventHtml(events)}}</div></section>
+      <section class="card" data-kmatch-panel="odds"><h2>Odds / Prediction</h2>${{ksn951OddsRender(d.odds)}}</section>
      <p class="muted">Source: ${{E(d.source||'Verified match data')}}. Missing details are not estimated.</p>
    </div>`;
    const liveRoot=page.querySelector('#ksn-v663-unified-live-match');
@@ -29968,7 +30052,7 @@ async function match(){{
      }});
      panels.forEach(p=>{{p.hidden=p.dataset.kmatchPanel!==key;p.style.display=p.hidden?'none':'';}});
    }};
-   buttons.forEach(b=>b.addEventListener('click',()=>{{showTab(b.dataset.kmatchTab);if(b.dataset.kmatchTab==='h2h')void ksn950LoadH2H(liveRoot,ts);}}));
+   buttons.forEach(b=>b.addEventListener('click',()=>{{showTab(b.dataset.kmatchTab);if(b.dataset.kmatchTab==='h2h')void ksn950LoadH2H(liveRoot,ts);if(b.dataset.kmatchTab==='trends')void ksn951LoadFixture(liveRoot,ts);}}));
    showTab('match');
    // Update only verified fields; failed refreshes leave the existing screen intact.
    // Timers are page-local and only run for an active match.
