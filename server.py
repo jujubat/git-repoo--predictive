@@ -29793,6 +29793,64 @@ const V622_TEAMS={json.dumps(_ksn_v622_teams_js())},KIND={json.dumps(kind)},ID={
 const E=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
 // V663 STEP 949D-R2: verified standalone standings renderer.
 function standingsTable(rows,homeId,awayId){{if(!Array.isArray(rows)||!rows.length)return '<div class="empty">No standings available for this competition.</div>';const form=v=>String(v||'').trim().split('').slice(-5).map(x=>`<span class="form-pill form-${{E(x).toLowerCase()}}">${{E(x)}}</span>`).join('');return `<div class="standings-wrap"><table class="standings-table"><thead><tr><th>Pos</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>F</th><th>A</th><th>+/-</th><th>PTS</th><th>Form</th></tr></thead><tbody>${{rows.map(r=>{{const t=r.team||{{}},a=r.all||{{}},g=a.goals||{{}},focus=String(t.id)===String(homeId)?'ksn938-standing-home':String(t.id)===String(awayId)?'ksn938-standing-away':'';return `<tr class="${{focus}}"><td>${{E(r.rank??'—')}}</td><td><div class="standing-team">${{t.logo?`<img src="${{E(t.logo)}}" alt="">`:''}}<b>${{E(t.name||'Team')}}</b></div></td><td>${{E(a.played??'—')}}</td><td>${{E(a.win??'—')}}</td><td>${{E(a.draw??'—')}}</td><td>${{E(a.lose??'—')}}</td><td>${{E(g.for??'—')}}</td><td>${{E(g.against??'—')}}</td><td>${{E(r.goalsDiff??'—')}}</td><td><b>${{E(r.points??'—')}}</b></td><td><div class="form-row">${{form(r.form)}}</div></td></tr>`}}).join('')}}</tbody></table></div>`}}
+// V663 STEP 950B: H2H renders only verified completed records for this fixture pair.
+function ksn950H2HRender(payload,home,away){{
+ const empty='<p class="muted">No verified previous meetings available.</p>';
+ const matches=payload?.h2h?.meetings;
+ if(!Array.isArray(matches)||!matches.length)return empty;
+ const norm=s=>String(s||'').trim().toLowerCase().replace(/\s+/g,' ');
+ const hn=norm(home),an=norm(away);
+ if(!hn||!an||hn===an)return empty;
+ const seen=new Set(),valid=[];
+ for(const r of matches){{
+  if(!r||!['FT','AET','PEN'].includes(String(r.status||'').toUpperCase()))continue;
+  const rh=norm(r.home),ra=norm(r.away);
+  if(!((rh===hn&&ra===an)||(rh===an&&ra===hn)))continue;
+  const score=/^\s*(\d+)\s*[-–:]\s*(\d+)\s*$/.exec(String(r.score||''));
+  if(!score)continue;
+  const ms=Date.parse(String(r.date||''));
+  if(!Number.isFinite(ms)||ms>Date.now())continue;
+  const id=String(r.fixtureId||'').trim();
+  const key=/^[1-9]\d*$/.test(id)?'id:'+id:'row:'+String(r.date)+'|'+rh+'|'+ra+'|'+score[1]+'-'+score[2];
+  if(seen.has(key))continue;
+  seen.add(key);
+  valid.push({{date:ms,home:r.home,away:r.away,hg:Number(score[1]),ag:Number(score[2])}});
+ }}
+ valid.sort((a,b)=>b.date-a.date);
+ const recent=valid.slice(0,5);
+ if(!recent.length)return empty;
+ let hw=0,draws=0,aw=0;
+ const lines=recent.map(r=>{{
+  if(r.hg===r.ag)draws++;
+  else if((r.hg>r.ag&&norm(r.home)===hn)||(r.ag>r.hg&&norm(r.away)===hn))hw++;
+  else aw++;
+  const date=new Date(r.date).toLocaleDateString('en-ZA',{{year:'numeric',month:'short',day:'2-digit'}});
+  return '<tr><td>'+E(date)+'</td><td>'+E(r.home)+'</td><td><b>'+r.hg+' - '+r.ag+'</b></td><td>'+E(r.away)+'</td></tr>';
+ }}).join('');
+ return '<p class="muted">'+recent.length+' verified previous meeting(s)</p>'+
+  '<div class="grid"><div class="card">'+E(home)+' wins: <b>'+hw+'</b></div><div class="card">Draws: <b>'+draws+'</b></div><div class="card">'+E(away)+' wins: <b>'+aw+'</b></div></div>'+
+  '<div style="overflow-x:auto"><table class="standings-table"><thead><tr><th>Date</th><th>Home</th><th>Score</th><th>Away</th></tr></thead><tbody>'+lines+'</tbody></table></div>';
+}}
+// Lazy/once-per-view: deliberately separate from score polling.
+async function ksn950LoadH2H(root,teams){{
+ const slot=root?.querySelector('[data-ksn950-h2h]');
+ if(!slot||slot.dataset.loaded==='1'||slot.dataset.busy==='1')return;
+ slot.dataset.busy='1';
+ slot.innerHTML='<p class="muted">Loading verified previous meetings...</p>';
+ const controller=new AbortController();
+ const timeout=setTimeout(()=>controller.abort(),15000);
+ try{{
+  const res=await fetch('/fixtures/'+encodeURIComponent(ID)+'/history-verified',{{method:'GET',headers:{{Accept:'application/json'}},signal:controller.signal}});
+  if(!res.ok)throw Error('History unavailable');
+  const data=await res.json();
+  if(!root.isConnected)return;
+  slot.innerHTML=ksn950H2HRender(data,teams.home?.name,teams.away?.name);
+  slot.dataset.loaded='1';
+ }}catch(_){{
+  if(root.isConnected)slot.innerHTML='<p class="muted">Verified H2H temporarily unavailable. Select this tab to retry.</p>';
+ }}finally{{clearTimeout(timeout);slot.dataset.busy='0';}}
+}}
+
 const ksnValidCalendarDate=s=>{{
  const m=String(s).match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})T(\\d{{2}}):(\\d{{2}})(?::(\\d{{2}})(?:\\.\\d{{1,3}})?)?(Z|([+-])(\\d{{2}}):(\\d{{2}}))$/i);
  if(!m)return false;
@@ -29895,7 +29953,7 @@ async function match(){{
      <section class="card" data-kmatch-panel="stats"><h2>Match Statistics</h2><div id="ksn-live-stats">${{statisticsHtml(stats)}}</div></section>
      <section class="card" data-kmatch-panel="trends"><h2>Trends</h2>${{unavailable('Previous five and next five verified fixtures are not yet available in this view.')}}</section>
      <section class="card" data-kmatch-panel="news"><h2>${{E(m.league?.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,ts.home?.id,ts.away?.id)}}</section>
-     <section class="card" data-kmatch-panel="h2h"><h2>Head to Head</h2>${{unavailable('Verified head-to-head meetings are not integrated into this live view.')}}</section>
+     <section class="card" data-kmatch-panel="h2h"><h2>Head to Head</h2><div data-ksn950-h2h class="muted">Select Head to Head to load verified previous meetings.</div></section>
      <section class="card" data-kmatch-panel="commentary"><h2>Commentary</h2><div id="ksn-live-commentary">${{eventHtml(events)}}</div></section>
      <p class="muted">Source: ${{E(d.source||'Verified match data')}}. Missing details are not estimated.</p>
    </div>`;
@@ -29910,7 +29968,7 @@ async function match(){{
      }});
      panels.forEach(p=>{{p.hidden=p.dataset.kmatchPanel!==key;p.style.display=p.hidden?'none':'';}});
    }};
-   buttons.forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.kmatchTab)));
+   buttons.forEach(b=>b.addEventListener('click',()=>{{showTab(b.dataset.kmatchTab);if(b.dataset.kmatchTab==='h2h')void ksn950LoadH2H(liveRoot,ts);}}));
    showTab('match');
    // Update only verified fields; failed refreshes leave the existing screen intact.
    // Timers are page-local and only run for an active match.
