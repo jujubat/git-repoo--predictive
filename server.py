@@ -29707,6 +29707,8 @@ function wireTabs(){{
  window.addEventListener('hashchange',activate);
  activate();
 }}
+// V663 STEP 949C-R3: standalone standings renderer.
+function standingsTable(rows,homeId,awayId){{if(!Array.isArray(rows)||!rows.length)return '<div class="empty">No standings available for this competition.</div>';const form=v=>String(v||'').trim().split('').slice(-5).map(x=>`<span class="form-pill form-${{E(x).toLowerCase()}}">${{E(x)}}</span>`).join('');return `<div class="standings-wrap"><table class="standings-table"><thead><tr><th>Pos</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>F</th><th>A</th><th>+/-</th><th>PTS</th><th>Form</th></tr></thead><tbody>${{rows.map(r=>{{const t=r.team||{{}},a=r.all||{{}},g=a.goals||{{}},focus=String(t.id)===String(homeId)?'ksn938-standing-home':String(t.id)===String(awayId)?'ksn938-standing-away':'';return `<tr class="${{focus}}"><td>${{E(r.rank??'—')}}</td><td><div class="standing-team">${{t.logo?`<img src="${{E(t.logo)}}" alt="">`:''}}<b>${{E(t.name||'Team')}}</b></div></td><td>${{E(a.played??'—')}}</td><td>${{E(a.win??'—')}}</td><td>${{E(a.draw??'—')}}</td><td>${{E(a.lose??'—')}}</td><td>${{E(g.for??'—')}}</td><td>${{E(g.against??'—')}}</td><td>${{E(r.goalsDiff??'—')}}</td><td><b>${{E(r.points??'—')}}</b></td><td><div class="form-row">${{form(r.form)}}</div></td></tr>`}}).join('')}}</tbody></table></div>`}}
 function ksnMatchStatus(fx){{
  const st=fx?.status||{{}};
  const code=String(st.short||'').trim().toUpperCase();
@@ -29892,7 +29894,7 @@ async function match(){{
      <section class="card" data-kmatch-panel="lineups"><h2>Lineups</h2>${{lineups||unavailable('Verified lineups are unavailable.')}}</section>
      <section class="card" data-kmatch-panel="stats"><h2>Match Statistics</h2><div id="ksn-live-stats">${{statisticsHtml(stats)}}</div></section>
      <section class="card" data-kmatch-panel="trends"><h2>Trends</h2>${{unavailable('Previous five and next five verified fixtures are not yet available in this view.')}}</section>
-     <section class="card" data-kmatch-panel="news"><h2>News</h2>${{unavailable('Verified competition standings are not yet available in this view.')}}</section>
+     <section class="card" data-kmatch-panel="news"><h2>${{E(m.league?.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,ts.home?.id,ts.away?.id)}}</section>
      <section class="card" data-kmatch-panel="h2h"><h2>Head to Head</h2>${{unavailable('Verified head-to-head meetings are not integrated into this live view.')}}</section>
      <section class="card" data-kmatch-panel="commentary"><h2>Commentary</h2><div id="ksn-live-commentary">${{eventHtml(events)}}</div></section>
      <p class="muted">Source: ${{E(d.source||'Verified match data')}}. Missing details are not estimated.</p>
