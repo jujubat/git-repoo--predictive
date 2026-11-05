@@ -29525,14 +29525,30 @@ function ksn936HeadToHead(insights,match){{
  const rows=(Array.isArray(h2h.meetings)?h2h.meetings:[])
   .filter(r=>r&&r.home&&r.away&&ksn936MatchScore(r.score)
    &&ksn936ValidDate(r.date)!==null&&ksn936ValidDate(r.date)<=Date.now());
- const played=Number(h2h.played), hw=Number(h2h.homeWins), dr=Number(h2h.draws), aw=Number(h2h.awayWins);
- const valid=Number.isInteger(played)&&played>0&&Number.isInteger(hw)&&hw>=0
-  &&Number.isInteger(dr)&&dr>=0&&Number.isInteger(aw)&&aw>=0&&hw+dr+aw===played;
+ // V663 STEP 948C-R2: five verified meetings and matching totals.
+ const norm=x=>String(x||'').trim().toLowerCase().replace(/\s+/g,' ');
+ const hk=norm(home),ak=norm(away);
+ const recent=rows.filter(r=>{{
+  const rh=norm(r.home),ra=norm(r.away);
+  const validScore=/^\s*\d+\s*[-?:]\s*\d+\s*$/.test(String(r.score||''));
+  return validScore&&((rh===hk&&ra===ak)||(rh===ak&&ra===hk));
+ }}).sort((a,b)=>ksn936ValidDate(b.date)-ksn936ValidDate(a.date)).slice(0,5);
+ let hw=0,dr=0,aw=0;
+ for(const r of recent){{
+  const m=String(r.score||'').match(/^\s*(\d+)\s*[-?:]\s*(\d+)\s*$/);
+  if(!m)continue;
+  const gh=Number(m[1]),ga=Number(m[2]);
+  if(gh===ga)dr++;
+  else if((gh>ga&&norm(r.home)===hk)||(ga>gh&&norm(r.away)===hk))hw++;
+  else aw++;
+ }}
+ const played=hw+dr+aw;
+ const valid=played>0;
  if(!valid||!rows.length)
   return '<div class="card"><h2>Head to Head</h2><div class="empty">No verified head-to-head results available.</div></div>';
  const badge=(name,logo)=>`<span class="ksn938-team-identity">${{logo?`<img src="${{E(logo)}}" alt="" loading="lazy">`:''}}<span>${{E(name)}}</span></span>`;
  const dateLabel=value=>new Date(Date.parse(value)).toLocaleDateString(undefined,{{year:'numeric',month:'short',day:'numeric'}});
- const items=rows.slice(0,10).map(r=>`<tr><td class="ksn941-date">${{E(dateLabel(r.date))}}</td>
+ const items=recent.map(r=>`<tr><td class="ksn941-date">${{E(dateLabel(r.date))}}</td>
   <td class="ksn941-club">${{badge(r.home,r.homeLogo)}}</td>
   <td class="ksn941-result">${{E(r.score)}}</td>
   <td class="ksn941-club">${{badge(r.away,r.awayLogo)}}</td></tr>`).join('');
