@@ -19268,6 +19268,20 @@ a{color:#80bdff}
 .ksn925H-next-five>h3{margin:0 0 12px}.ksn925H-team-fixtures{padding:12px 0;border-top:1px solid #304654}
 .ksn925H-team-fixtures h4{margin:4px 0 12px}.ksn925H-team-fixtures a{color:#84b8ef}
 
+/* V663 STEP 942F: finished & live shared Match Centre presentation contract. */
+.ksn942-h2h-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:16px 0}
+.ksn942-h2h-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.ksn942-h2h-table th,.ksn942-h2h-table td{border-bottom:1px solid #35445a;padding:14px 10px;text-align:left;vertical-align:middle}
+.ksn942-h2h-table th{color:#b7cbe0;font-size:13px}
+.ksn942-h2h-table th:first-child{width:21%}
+.ksn942-h2h-table th:nth-child(2),.ksn942-h2h-table th:last-child{width:32%}
+.ksn942-h2h-table th:nth-child(3){width:15%;text-align:center}
+.ksn942-h2h-table td:first-child small{display:block;line-height:1.3}
+.ksn942-club-inner{display:flex;align-items:center;gap:8px;overflow-wrap:anywhere}
+.ksn942-club-inner .ksn-bg4-h2h-badge{width:26px;height:26px;flex:0 0 26px;object-fit:contain}
+.ksn942-score{text-align:center!important;white-space:nowrap;font-weight:800}
+.ksn942-h2h-table tbody tr:hover{background:#1a2b39}
+@media(max-width:620px){.ksn942-h2h-table th,.ksn942-h2h-table td{padding:9px 4px;font-size:12px}.ksn942-club-inner{gap:4px;flex-wrap:wrap}.ksn942-club-inner .ksn-bg4-h2h-badge{width:20px;height:20px;flex-basis:20px}}
 /* V663 STEP 926A: finished Match Centre typography only. */
 #panels .panel{font-size:15px;line-height:1.65}
 #panels .panel :is(h2,h3){font-size:17px;line-height:1.35}
@@ -19297,7 +19311,7 @@ a{color:#80bdff}
 const names=[
  ['match','Match'],['lineups','Lineups'],['stats','Stats'],
  ['trends','Fixture'],['news','Standing'],['h2h','Head to Head'],
- ['commentary','Commentary']
+ ['commentary','Commentary'],['odds','Odds / Prediction']
 ];
 const el=id=>document.getElementById(id);
 const tabBar=el('tabs'),panelArea=el('panels'),panels={};
@@ -19332,6 +19346,12 @@ names.forEach(([key,label])=>{
  });
  tabBar.append(b);panelArea.append(p);
 });
+// Historical bookmaker prices are not retained in the permanent results archive.
+// Never synthesize a market or fetch current prices for a past fixture.
+const historicalOddsNote=document.createElement('p');
+historicalOddsNote.className='muted';
+historicalOddsNote.textContent='No verified historical bookmaker markets are available for this archived match.';
+panels.odds.append(historicalOddsNote);
 const key=new URLSearchParams(location.search).get('archive_key');
 
 // V663 STEP 924AU-2E: canonical archive identity
@@ -20598,21 +20618,41 @@ function h2hSummary(homeWins,draws,awayWins,played){
   const note=add('p',String(played)+' verified completed meetings');note.className='muted';
  }
 }
+// V663 STEP 942F: professional archive H2H table, preserving verified rows.
+function ksn942H2HTable(){
+ let wrap=h2hPanel.querySelector('.ksn942-h2h-wrap');
+ if(wrap)return wrap.querySelector('tbody');
+ wrap=document.createElement('div');wrap.className='ksn942-h2h-wrap';
+ const table=document.createElement('table');table.className='ksn942-h2h-table';
+ const head=document.createElement('thead');
+ const heading=document.createElement('tr');
+ for(const label of ['Date','Home','Score','Away']){
+  const th=document.createElement('th');th.scope='col';th.textContent=label;heading.append(th);
+ }
+ head.append(heading);
+ const body=document.createElement('tbody');
+ table.append(head,body);wrap.append(table);h2hPanel.append(wrap);
+ return body;
+}
 function h2hMeeting(date,league,home,hs,as,away){
  if(!Number.isFinite(Number(hs))||!Number.isFinite(Number(as)))return;
- const row=document.createElement('article');row.className='ksn-bg4-h2h-match';
- const dateEl=document.createElement('small');dateEl.className='muted';
- dateEl.textContent=[String(date||'').slice(0,10),league||''].filter(Boolean).join(' · ');
- const grid=document.createElement('div');grid.className='ksn-bg4-h2h-matchup';
- const left=document.createElement('div');left.className='ksn-bg4-h2h-side';
- left.append(h2hBadge(home),h2hVerifiedLink(home));
- const right=document.createElement('div');right.className='ksn-bg4-h2h-side';
- right.append(h2hBadge(away),h2hVerifiedLink(away));
- const score=document.createElement('strong');score.className='ksn-bg4-h2h-score';
- score.textContent=String(hs)+' – '+String(as);
- if(Number(hs)>Number(as))left.classList.add('ksn-bg4-winner');
- if(Number(as)>Number(hs))right.classList.add('ksn-bg4-winner');
- grid.append(left,score,right);row.append(dateEl,grid);h2hPanel.append(row);
+ const row=document.createElement('tr');
+ const dateCell=document.createElement('td');
+ const dateText=document.createElement('span');dateText.textContent=String(date||'').slice(0,10)||'—';
+ dateCell.append(dateText);
+ if(league){const leagueEl=document.createElement('small');leagueEl.className='muted';leagueEl.textContent=String(league);dateCell.append(leagueEl);}
+ const homeCell=document.createElement('td');homeCell.className='ksn942-club';
+ const homeEl=document.createElement('span');homeEl.className='ksn942-club-inner';
+ homeEl.append(h2hBadge(home),h2hVerifiedLink(home));homeCell.append(homeEl);
+ const awayCell=document.createElement('td');awayCell.className='ksn942-club';
+ const awayEl=document.createElement('span');awayEl.className='ksn942-club-inner';
+ awayEl.append(h2hBadge(away),h2hVerifiedLink(away));awayCell.append(awayEl);
+ const scoreCell=document.createElement('td');scoreCell.className='ksn942-score';
+ const score=document.createElement('strong');score.textContent=String(hs)+' – '+String(as);scoreCell.append(score);
+ if(Number(hs)>Number(as))homeCell.classList.add('ksn-bg4-winner');
+ if(Number(as)>Number(hs))awayCell.classList.add('ksn-bg4-winner');
+ row.append(dateCell,homeCell,scoreCell,awayCell);
+ ksn942H2HTable().append(row);
 }
 
 // V663 STEP 924BA-1B: verified H2H recovery
@@ -20798,6 +20838,17 @@ h2hButton.addEventListener('click',loadH2H);
 
 @app.get("/results/history")
 async def results_history(
+    sport:str=Query("all"), country:str=Query(""), competition:str=Query(""),
+    season:str=Query(""), team:str=Query(""), year:Optional[int]=Query(None,ge=1900,le=2200),
+    date_from:str=Query(""), date_to:str=Query(""), limit:int=Query(100,ge=1,le=500),
+    offset:int=Query(0,ge=0), priority_order:bool=False, priority_visitor:str="",
+    competition_id:Optional[str]=Query(None)
+):
+    """Permanent confirmed-results archive, isolated from the event loop."""
+    return await asyncio.to_thread(_ksn_v663_results_history_sync, sport, country, competition, season, team, year, date_from, date_to, limit, offset, priority_order, priority_visitor, competition_id)
+
+
+def _ksn_v663_results_history_sync(
     sport:str=Query("all"), country:str=Query(""), competition:str=Query(""),
     season:str=Query(""), team:str=Query(""), year:Optional[int]=Query(None,ge=1900,le=2200),
     date_from:str=Query(""), date_to:str=Query(""), limit:int=Query(100,ge=1,le=500),
@@ -29283,44 +29334,47 @@ function ksn936HeadToHead(insights,match){{
  const home=String(teams.home?.name||'Home team');
  const away=String(teams.away?.name||'Away team');
  const rows=(Array.isArray(h2h.meetings)?h2h.meetings:[])
-  .filter(r=>r&&r.home&&r.away
-   &&ksn936MatchScore(r.score)
-   &&ksn936ValidDate(r.date)!==null
-   &&ksn936ValidDate(r.date)<=Date.now());
- const count=Number(h2h.played);
- const hw=Number(h2h.homeWins);
- const dr=Number(h2h.draws);
- const aw=Number(h2h.awayWins);
- const validSummary=
-  Number.isInteger(count)&&count>0&&
-  Number.isInteger(hw)&&hw>=0&&
-  Number.isInteger(dr)&&dr>=0&&
-  Number.isInteger(aw)&&aw>=0&&
-  hw+dr+aw===count;
- if(!validSummary||!rows.length)
-  return '<div class="card"><h2>Head to Head</h2>'+
-   '<div class="empty">No verified head-to-head results available.</div></div>';
- const dateLabel=value=>new Date(Date.parse(value))
-  .toLocaleDateString(undefined,{{
-   year:'numeric',month:'short',day:'numeric'
-  }});
-  const badge=(name,logo)=>`<span class="ksn938-team-identity">${{logo?`<img src="${{E(logo)}}" alt="">`:''}}<span>${{E(name)}}</span></span>`;
- const history=rows.slice(0,10).map(r=>
-  `<div class="event"><div class="minute">FT</div>
-  <div><b>${{badge(r.home,r.homeLogo)}} ${{E(r.score)}} ${{badge(r.away,r.awayLogo)}}</b>
-  <div class="tiny muted">${{E(dateLabel(r.date))}}</div></div></div>`
- ).join('');
- return `<div class="card">
-  <h2>Head to Head</h2>
-  <p class="tiny muted">${{badge(home,teams.home?.logo)}} vs ${{badge(away,teams.away?.logo)}} · Verified meetings: ${{count}}</p>
-  <div class="grid3">
-   <div class="metric"><span class="muted">${{E(home)}} wins</span><b>${{hw}}</b></div>
-   <div class="metric"><span class="muted">Draws</span><b>${{dr}}</b></div>
-   <div class="metric"><span class="muted">${{E(away)}} wins</span><b>${{aw}}</b></div>
-  </div>
-  <h3>Previous meetings</h3>
-   <div class="standings-wrap"><table class="ksn938-fixture-table"><thead><tr><th>Date</th><th>Fixture</th><th>Score</th></tr></thead><tbody>${{rows.slice(0,10).map(r=>`<tr><td>${{E(dateLabel(r.date))}}</td><td>${{badge(r.home,r.homeLogo)}} vs ${{badge(r.away,r.awayLogo)}}</td><td>${{E(r.score)}}</td></tr>`).join('')}}</tbody></table></div>
- </div>`;
+  .filter(r=>r&&r.home&&r.away&&ksn936MatchScore(r.score)
+   &&ksn936ValidDate(r.date)!==null&&ksn936ValidDate(r.date)<=Date.now());
+ const played=Number(h2h.played), hw=Number(h2h.homeWins), dr=Number(h2h.draws), aw=Number(h2h.awayWins);
+ const valid=Number.isInteger(played)&&played>0&&Number.isInteger(hw)&&hw>=0
+  &&Number.isInteger(dr)&&dr>=0&&Number.isInteger(aw)&&aw>=0&&hw+dr+aw===played;
+ if(!valid||!rows.length)
+  return '<div class="card"><h2>Head to Head</h2><div class="empty">No verified head-to-head results available.</div></div>';
+ const badge=(name,logo)=>`<span class="ksn938-team-identity">${{logo?`<img src="${{E(logo)}}" alt="" loading="lazy">`:''}}<span>${{E(name)}}</span></span>`;
+ const dateLabel=value=>new Date(Date.parse(value)).toLocaleDateString(undefined,{{year:'numeric',month:'short',day:'numeric'}});
+ const items=rows.slice(0,10).map(r=>`<tr><td class="ksn941-date">${{E(dateLabel(r.date))}}</td>
+  <td class="ksn941-club">${{badge(r.home,r.homeLogo)}}</td>
+  <td class="ksn941-result">${{E(r.score)}}</td>
+  <td class="ksn941-club">${{badge(r.away,r.awayLogo)}}</td></tr>`).join('');
+ return `<style>
+  .ksn941-h2h-summary{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:18px 0}}
+  .ksn941-h2h-summary .metric{{min-width:0;text-align:center;padding:14px 8px}}
+  .ksn941-h2h-summary .metric b{{display:block;font-size:24px;margin-top:5px}}
+  .ksn941-h2h-table{{width:100%;border-collapse:collapse;table-layout:fixed}}
+  .ksn941-h2h-table th,.ksn941-h2h-table td{{padding:14px 12px;border-bottom:1px solid var(--line);vertical-align:middle}}
+  .ksn941-h2h-table th{{text-align:left;color:var(--muted);font-weight:650}}
+  .ksn941-h2h-table th:nth-child(3),.ksn941-h2h-result{{text-align:center}}
+  .ksn941-h2h-table .ksn941-date{{width:17%;white-space:nowrap}}
+  .ksn941-h2h-table .ksn941-result{{width:12%;text-align:center;font-weight:750;white-space:nowrap}}
+  .ksn941-h2h-table .ksn941-club{{width:35.5%;overflow-wrap:anywhere}}
+  .ksn941-h2h-table .ksn938-team-identity{{display:flex;align-items:center;gap:9px}}
+  .ksn941-h2h-table .ksn938-team-identity img{{width:28px;height:28px;object-fit:contain;flex-shrink:0}}
+  @media(max-width:640px){{.ksn941-h2h-table th,.ksn941-h2h-table td{{padding:10px 5px;font-size:12px}}
+  .ksn941-h2h-table .ksn938-team-identity{{gap:4px;flex-wrap:wrap}}
+  .ksn941-h2h-table .ksn938-team-identity img{{width:20px;height:20px}}
+  .ksn941-h2h-summary{{gap:6px}}.ksn941-h2h-summary .metric{{padding:9px 3px}}
+  .ksn941-h2h-table .ksn941-date{{white-space:normal}}}}
+ </style><div class="card"><h2>Head to Head</h2>
+ <p class="tiny muted">${{badge(home,teams.home?.logo)}} vs ${{badge(away,teams.away?.logo)}} · ${{played}} verified meetings</p>
+ <div class="ksn941-h2h-summary">
+ <div class="metric"><span class="muted">${{E(home)}} wins</span><b>${{hw}}</b></div>
+ <div class="metric"><span class="muted">Draws</span><b>${{dr}}</b></div>
+ <div class="metric"><span class="muted">${{E(away)}} wins</span><b>${{aw}}</b></div></div>
+ <h3>Previous meetings</h3>
+ <div class="standings-wrap"><table class="ksn941-h2h-table"><thead><tr>
+ <th scope="col">Date</th><th scope="col">Home</th><th scope="col">Score</th><th scope="col">Away</th>
+ </tr></thead><tbody>${{items}}</tbody></table></div></div>`;
 }}
 
 // Step 937F: fetch verified history only on Fixture/H2H selection.
@@ -29386,9 +29440,9 @@ function intelligence(i){{i=i||{{}};const f=i.form||{{}},fh=f.home||{{}},fa=f.aw
  <div class="grid2"><div class="card"><h3>Head to head intelligence</h3><div class="grid3"><div class="metric"><span class="tiny muted">Meetings</span><b>${{E(h2.played??'—')}}</b></div><div class="metric"><span class="tiny muted">BTTS</span><b>${{h2.bttsPct==null?'—':E(h2.bttsPct)+'%'}}</b></div><div class="metric"><span class="tiny muted">Over 2.5</span><b>${{h2.over25Pct==null?'—':E(h2.over25Pct)+'%'}}</b></div></div><p class="tiny muted">${{h2.played!=null?(E(fh.team?.name||'Home')+' wins '+E(h2.homeWins??'—')+' | Draws '+E(h2.draws??'—')+' | '+E(fa.team?.name||'Away')+' wins '+E(h2.awayWins??'—')):'No verified head-to-head results available.'}}</p>${{(h2.meetings||[]).slice(0,10).map(x=>`<div class="event"><div class="minute">H2H</div><div><b>${{E(x.home||'')}} ${{E(x.score||'')}} ${{E(x.away||'')}}</b><div class="tiny muted">${{intelDate(x.date)}}</div></div></div>`).join('')||'<div class="empty">Data unavailable.</div>'}}</div><div class="card"><h3>Availability</h3><div class="grid2"><div><b>${{E(fh.team?.name||'Home')}}</b>${{injuries(inj.home)}}</div><div><b>${{E(fa.team?.name||'Away')}}</b>${{injuries(inj.away)}}</div></div></div></div>
  <div class="grid2"><div class="card"><h3>Next 5 · ${{E(fh.team?.name||'Home')}}</h3>${{nextRows(n.home)}}</div><div class="card"><h3>Next 5 · ${{E(fa.team?.name||'Away')}}</h3>${{nextRows(n.away)}}</div></div>`}}
 
-function odds(o){{o=o||{{}};const books=o.bookmakers||[],sel=o.selected||books[0]||{{}},markets=sel.markets||[];
+function odds(o){{o=o||{{}};const books=o.bookmakers||[],sel=o.selected||books[0]||{{}},markets=sel.markets||[];const book=String(sel.name||'').trim();const displayBook=book&&!/api[-\s]?football/i.test(book)?book:'Verified bookmaker markets';
  if(!markets.length)return `<div class="card"><h3>Odds / Prediction</h3><div class="empty">No bookmaker markets currently returned for this fixture.</div></div>`;
- return `<div class="card"><h3>Odds / Prediction</h3><p class="tiny muted">${{E(sel.name||o.source||'Bookmaker')}} · only provider-returned markets</p>${{markets.map(m=>`<div style="padding:11px 0;border-top:1px solid var(--line)"><b>${{E(m.name||m.id||'Market')}}</b><div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:7px">${{(m.values||[]).map(v=>`<span class="pill">${{E(v.value)}} <b>${{E(v.odd)}}</b></span>`).join('')}}</div></div>`).join('')}}</div>`}}
+ return `<div class="card"><h3>Odds / Prediction</h3><p class="tiny muted">${{E(displayBook)}} · Verified market prices</p>${{markets.map(m=>`<div style="padding:11px 0;border-top:1px solid var(--line)"><b>${{E(m.name||m.id||'Market')}}</b><div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:7px">${{(m.values||[]).map(v=>`<span class="pill">${{E(v.value)}} <b>${{E(v.odd)}}</b></span>`).join('')}}</div></div>`).join('')}}</div>`}}
 function standingsTable(rows,homeId,awayId){{if(!Array.isArray(rows)||!rows.length)return '<div class="empty">No standings available for this competition.</div>';const form=v=>String(v||'').trim().split('').slice(-5).map(x=>`<span class="form-pill form-${{E(x).toLowerCase()}}">${{E(x)}}</span>`).join('');return `<div class="standings-wrap"><table class="standings-table"><thead><tr><th>Pos</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>F</th><th>A</th><th>+/-</th><th>PTS</th><th>Form</th></tr></thead><tbody>${{rows.map(r=>{{const t=r.team||{{}},a=r.all||{{}},g=a.goals||{{}},focus=String(t.id)===String(homeId)?'ksn938-standing-home':String(t.id)===String(awayId)?'ksn938-standing-away':'';return `<tr class="${{focus}}"><td>${{E(r.rank??'—')}}</td><td><div class="standing-team">${{t.logo?`<img src="${{E(t.logo)}}" alt="">`:''}}<b>${{E(t.name||'Team')}}</b></div></td><td>${{E(a.played??'—')}}</td><td>${{E(a.win??'—')}}</td><td>${{E(a.draw??'—')}}</td><td>${{E(a.lose??'—')}}</td><td>${{E(g.for??'—')}}</td><td>${{E(g.against??'—')}}</td><td>${{E(r.goalsDiff??'—')}}</td><td><b>${{E(r.points??'—')}}</b></td><td><div class="form-row">${{form(r.form)}}</div></td></tr>`}}).join('')}}</tbody></table></div>`}}
 function wireTabs(){{
  const tabs=[...document.querySelectorAll('.tabs button')];
@@ -29426,7 +29480,7 @@ function ksnMatchStatus(fx){{
  return label||'Match status unavailable';
 }}
 async function load(force=false){{try{{const qs=new URLSearchParams();if(LEAGUE)qs.set('league',LEAGUE);if(force)qs.set('refresh','1');const tipMode=new URLSearchParams(location.search).get('tip')==='1';const d=tipMode?{{match:{{}}}}:await J('/sports/'+encodeURIComponent(SPORT)+'/match/'+encodeURIComponent(ID)+(qs.toString()?'?'+qs.toString():'')),m=d.match||{{}};if(SPORT!=='football'){{page.innerHTML=`<div class="card"><h1>${{E(m.home||m.homeTeam||'Home')}} vs ${{E(m.away||m.awayTeam||'Away')}}</h1><div class="score">${{E(m.homeScore??'—')}} - ${{E(m.awayScore??'—')}}</div><p class="muted">${{E(m.league||SPORT)}} · ${{E(m.status||'')}}</p></div><div class="card"><h2>Sport-specific match data</h2><pre style="white-space:pre-wrap">${{E(JSON.stringify(d.statistics?.sportSpecific||d.statistics||{{}},null,2))}}</pre></div>`;return}}const matchStatus=String(m.fixture?.status?.short||m.status?.short||m.fixture?.status?.long||m.status||'').toUpperCase();// V663 STEP 924AS-1: status-aware live polling
-window.__ksnLiveMatchStatus=matchStatus;const isPreMatch=['NS','TBD','SCHEDULED','NOT STARTED','POSTPONED'].some(x=>matchStatus===x||matchStatus.includes(x));if(isPreMatch||!m.teams?.home?.name||!m.teams?.away?.name){{try{{const q=await J('/tip-stats/'+encodeURIComponent(ID),16000),h=q.home||{{}},a=q.away||{{}},o=q.odds||{{}},hh=q.headToHead||[],ht=matchTeamTheme(h.id,h.name),at=matchTeamTheme(a.id,a.name);page.innerHTML=`<div class="card hero"><div class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px">${{h.badge?`<img src="${{E(h.badge)}}">`:''}}<div class="team-name">${{E(h.name||'Home')}}</div></div><div><div class="status">TIP OF THE DAY · PRE-MATCH STATS</div><div class="score">vs</div><div class="tiny muted">Live match statistics will populate when available.</div></div><div class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px">${{a.badge?`<img src="${{E(a.badge)}}">`:''}}<div class="team-name">${{E(a.name||'Away')}}</div></div></div><div class="grid3"><div class="metric"><span class="tiny muted">Home wins · last 5</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}}/${{E(h.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">Away wins · last 5</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}}/${{E(a.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">H2H matches</span><b>${{E(hh.length)}}</b></div></div><div class="card"><h2>1X2 Odds</h2><p>${{E(h.name||'Home')}}: <b>${{E(o.home??'—')}}</b> · Draw: <b>${{E(o.draw??'—')}}</b> · ${{E(a.name||'Away')}}: <b>${{E(o.away??'—')}}</b></p><p class="tiny muted">${{E(o.bookmaker||'No bookmaker odds currently returned')}}</p></div><div class="grid2"><div class="card" style="${{teamCardStyle(ht)}}"><h2>${{E(h.name||'Home')}} · Last 5</h2>${{(h.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div><div class="card" style="${{teamCardStyle(at)}}"><h2>${{E(a.name||'Away')}} · Last 5</h2>${{(a.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div></div><div class="card"><h2>Head to Head</h2>${{hh.map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No H2H returned.</div>'}}</div><div class="card"><h2>Pre-match Statistics</h2><div class="grid3"><div class="metric"><span class="tiny muted">${{E(h.name||'Home')}} recent wins</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">${{E(a.name||'Away')}} recent wins</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">H2H sample</span><b>${{E(hh.length)}}</b></div></div><p class="tiny muted">These are pre-match indicators from available recent-form, H2H and bookmaker data. Live match statistics populate after kickoff when the provider returns them.</p></div><div class="card"><h2>Standings</h2>${{standingsTable(d.standings,m.teams?.home?.id,m.teams?.away?.id)}}</div>`;if(h.id&&a.id){{
+window.__ksnLiveMatchStatus=matchStatus;const isPreMatch=['NS','TBD','SCHEDULED','NOT STARTED','POSTPONED'].some(x=>matchStatus===x||matchStatus.includes(x));if(tipMode){{try{{const q=await J('/tip-stats/'+encodeURIComponent(ID),16000),h=q.home||{{}},a=q.away||{{}},o=q.odds||{{}},hh=q.headToHead||[],ht=matchTeamTheme(h.id,h.name),at=matchTeamTheme(a.id,a.name);page.innerHTML=`<div class="card hero"><div class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px">${{h.badge?`<img src="${{E(h.badge)}}">`:''}}<div class="team-name">${{E(h.name||'Home')}}</div></div><div><div class="status">TIP OF THE DAY · PRE-MATCH STATS</div><div class="score">vs</div><div class="tiny muted">Live match statistics will populate when available.</div></div><div class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px">${{a.badge?`<img src="${{E(a.badge)}}">`:''}}<div class="team-name">${{E(a.name||'Away')}}</div></div></div><div class="grid3"><div class="metric"><span class="tiny muted">Home wins · last 5</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}}/${{E(h.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">Away wins · last 5</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}}/${{E(a.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">H2H matches</span><b>${{E(hh.length)}}</b></div></div><div class="card"><h2>1X2 Odds</h2><p>${{E(h.name||'Home')}}: <b>${{E(o.home??'—')}}</b> · Draw: <b>${{E(o.draw??'—')}}</b> · ${{E(a.name||'Away')}}: <b>${{E(o.away??'—')}}</b></p><p class="tiny muted">${{E(o.bookmaker||'No bookmaker odds currently returned')}}</p></div><div class="grid2"><div class="card" style="${{teamCardStyle(ht)}}"><h2>${{E(h.name||'Home')}} · Last 5</h2>${{(h.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div><div class="card" style="${{teamCardStyle(at)}}"><h2>${{E(a.name||'Away')}} · Last 5</h2>${{(a.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div></div><div class="card"><h2>Head to Head</h2>${{hh.map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No H2H returned.</div>'}}</div><div class="card"><h2>Pre-match Statistics</h2><div class="grid3"><div class="metric"><span class="tiny muted">${{E(h.name||'Home')}} recent wins</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">${{E(a.name||'Away')}} recent wins</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">H2H sample</span><b>${{E(hh.length)}}</b></div></div><p class="tiny muted">These are pre-match indicators from available recent-form, H2H and bookmaker data. Live match statistics populate after kickoff when the provider returns them.</p></div><div class="card"><h2>Standings</h2>${{standingsTable(d.standings,m.teams?.home?.id,m.teams?.away?.id)}}</div>`;if(h.id&&a.id){{
   page.insertAdjacentHTML('beforeend',
     '<section class="panel active" id="intel">'+
     '<div class="card"><h2>Match Intelligence</h2>'+
@@ -29441,7 +29495,7 @@ window.__ksnLiveMatchStatus=matchStatus;const isPreMatch=['NS','TBD','SCHEDULED'
   }};
   void ksnMatchIntelEnrich(pendingMatch,d);
 }}return}}catch(_){{}}}}
-const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs ksn937UnifiedNav" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head To Head</button><button data-p="timeline">Commentary</button>${{["1H","2H","HT","ET","BT","P","LIVE","INT"].includes(matchStatus)?`<button data-p="odds">Odds / Prediction</button>`:""}}</div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14),pl,lu)}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st,home.id,away.id)}}</div><details class="card ksn937Integrated"><summary>Match Intelligence</summary><div id="intel">${{intelligence(ksnNormalizeMatchIntel(d.insights,m,d.standings))}}</div></details></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev,pl,lu)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn936LiveLineups(lu,pl)}}</div><details class="card ksn937Integrated"><summary>Player Stats</summary><div id="players"><p class="tiny muted">Click a player for the full profile.</p>${{playerStats(pl)}}</div></details></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();ksn937BindHistory(m);void ksnMatchIntelEnrich(m,d);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
+const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div><div class="scorers">${{scorerLines(ev,home.id)||'&nbsp;'}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div><div class="scorers">${{scorerLines(ev,away.id)||'&nbsp;'}}</div></a></div><div class="tabs ksn937UnifiedNav" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head To Head</button><button data-p="timeline">Commentary</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card'].includes(String(x.type||'').toLowerCase())).slice(0,14),pl,lu)}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev,pl,lu)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn936LiveLineups(lu,pl)}}</div></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();ksn937BindHistory(m);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
 load();
 if(SPORT==='football' &&
    new URLSearchParams(location.search).get('tip')!=='1'){{
