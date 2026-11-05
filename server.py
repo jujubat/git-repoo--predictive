@@ -29528,14 +29528,23 @@ function ksn936HeadToHead(insights,match){{
  // V663 STEP 948C-R2: five verified meetings and matching totals.
  const norm=x=>String(x||'').trim().toLowerCase().replace(/\s+/g,' ');
  const hk=norm(home),ak=norm(away);
- const recent=rows.filter(r=>{{
+ // 948D: deduplicate by verified fixture identity (or exact date/teams/score).
+ const unique=new Map();
+ for(const r of rows){{
   const rh=norm(r.home),ra=norm(r.away);
-  const validScore=/^\s*\d+\s*[-?:]\s*\d+\s*$/.test(String(r.score||''));
-  return validScore&&((rh===hk&&ra===ak)||(rh===ak&&ra===hk));
- }}).sort((a,b)=>ksn936ValidDate(b.date)-ksn936ValidDate(a.date)).slice(0,5);
+  const score=String(r.score||'').trim();
+  if(!/^\d+\s*[-–:]\s*\d+$/.test(score))continue;
+  if(!((rh===hk&&ra===ak)||(rh===ak&&ra===hk)))continue;
+  const id=String(r.fixtureId||r.id||'').trim();
+  const date=String(r.date||'').trim();
+  const key=id&&/^\d+$/.test(id)?'id:'+id:'row:'+date+'|'+rh+'|'+ra+'|'+score;
+  if(!unique.has(key))unique.set(key,r);
+ }}
+ const recent=[...unique.values()]
+  .sort((a,b)=>ksn936ValidDate(b.date)-ksn936ValidDate(a.date)).slice(0,5);
  let hw=0,dr=0,aw=0;
  for(const r of recent){{
-  const m=String(r.score||'').match(/^\s*(\d+)\s*[-?:]\s*(\d+)\s*$/);
+  const m=String(r.score||'').match(/^\s*(\d+)\s*[-–:]\s*(\d+)\s*$/);
   if(!m)continue;
   const gh=Number(m[1]),ga=Number(m[2]);
   if(gh===ga)dr++;
@@ -29548,6 +29557,34 @@ function ksn936HeadToHead(insights,match){{
   return '<div class="card"><h2>Head to Head</h2><div class="empty">No verified head-to-head results available.</div></div>';
  const badge=(name,logo)=>`<span class="ksn938-team-identity">${{logo?`<img src="${{E(logo)}}" alt="" loading="lazy">`:''}}<span>${{E(name)}}</span></span>`;
  const dateLabel=value=>new Date(Date.parse(value)).toLocaleDateString(undefined,{{year:'numeric',month:'short',day:'numeric'}});
+ // Verified independent last-five form; no extra API requests.
+ const form=insights?.form||{{}};
+ const formCards=['home','away'].map(side=>{{
+  const team=side==='home'?home:away;
+  const teamKey=norm(team);
+  const seen=new Set();
+  const matches=(Array.isArray(form[side]?.last10)?form[side].last10:[])
+   .filter(r=>{{
+    if(!r||!r.home||!r.away||!ksn936MatchScore(r.score))return false;
+    if(!['FT','AET','PEN'].includes(String(r.status||'').toUpperCase()))return false;
+    const when=ksn936ValidDate(r.date);
+    if(when===null||when>Date.now())return false;
+    if(norm(r.home)!==teamKey&&norm(r.away)!==teamKey)return false;
+    const id=String(r.fixtureId||r.id||'');
+    const key=id||[r.date,norm(r.home),norm(r.away),r.score].join('|');
+    if(seen.has(key))return false;
+    seen.add(key);return true;
+   }}).sort((a,b)=>ksn936ValidDate(b.date)-ksn936ValidDate(a.date)).slice(0,5);
+  const classify=r=>{{
+   const m=String(r.score).match(/^(\d+)\s*[-–:]\s*(\d+)$/);
+   if(!m)return '—';
+   const own=norm(r.home)===teamKey?Number(m[1]):Number(m[2]);
+   const opp=norm(r.home)===teamKey?Number(m[2]):Number(m[1]);
+   return own>opp?'W':own<opp?'L':'D';
+  }};
+  const list=matches.map(r=>`<li>${{E(classify(r))}} · ${{E(r.home)}} ${{E(r.score)}} ${{E(r.away)}}</li>`).join('');
+  return `<section class="card"><h3>${{E(team)}} · Last 5</h3>${{list?`<ul>${{list}}</ul>`:'<p class="muted">No verified recent form available.</p>'}}</section>`;
+ }}).join('');
  const items=recent.map(r=>`<tr><td class="ksn941-date">${{E(dateLabel(r.date))}}</td>
   <td class="ksn941-club">${{badge(r.home,r.homeLogo)}}</td>
   <td class="ksn941-result">${{E(r.score)}}</td>
@@ -29579,7 +29616,7 @@ function ksn936HeadToHead(insights,match){{
  <h3>Previous meetings</h3>
  <div class="standings-wrap"><table class="ksn941-h2h-table"><thead><tr>
  <th scope="col">Date</th><th scope="col">Home</th><th scope="col">Score</th><th scope="col">Away</th>
- </tr></thead><tbody>${{items}}</tbody></table></div></div>`;
+ </tr></thead><tbody>${{items}}</tbody></table></div><div class="grid2">${{formCards}}</div><section class="card"><h3>Top 3 players · each team</h3><p class="muted">Verified player rankings are not available for this match.</p></section></div>`;
 }}
 
 // Step 937F: fetch verified history only on Fixture/H2H selection.
