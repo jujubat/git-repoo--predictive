@@ -28679,6 +28679,25 @@ main{{max-width:1050px}}
 .ksn936-rating-badge{{position:absolute;right:-14px;top:-8px;z-index:2;background:#facc15;color:#1d1d1d;border:1px solid #fff0a5;border-radius:8px;font-size:11px;font-weight:800;padding:3px 5px;text-shadow:none}}
 @media(max-width:620px){{.ksn936-pitch{{min-height:490px}}.ksn936-player{{width:67px}}.ksn936-portrait img,.ksn936-photo-fallback{{width:36px;height:36px}}.ksn936-player-name{{font-size:9px}}.ksn936-rating-badge{{font-size:10px;right:-12px}}.tabs button{{padding:10px}}}}
 
+/* V663 STEP 945A: Live Lineups parity. Scoped to this Match Centre only. */
+.ksn945-lineups{{grid-column:1/-1;min-width:0}}
+.ksn945-side-switch{{display:flex;gap:8px;margin:0 0 12px}}
+.ksn945-side-switch button{{padding:10px 18px;border:1px solid #52708c;border-radius:8px;background:#23394a;color:#eaf2fa;cursor:pointer}}
+.ksn945-side-switch button[aria-pressed="true"]{{background:#266bb1;border-color:#62a5e7;font-weight:800}}
+.ksn945-side-panel[hidden]{{display:none!important}}
+.ksn945-side-panel{{max-width:720px;margin:0 auto}}
+.ksn945-side-label{{color:#80bdff;text-transform:uppercase;font-size:12px;letter-spacing:.07em}}
+.ksn945-nationality{{display:block;max-width:100%;font-size:10px;color:#e1f3e9;line-height:1.15;margin-top:3px;overflow-wrap:anywhere}}
+.ksn945-unrated{{position:absolute;top:-9px;right:-10px;background:#35445a;color:#d1d9e6;padding:1px 5px;border-radius:8px;font-size:10px}}
+@media(max-width:620px){{
+ .ksn945-side-panel{{max-width:100%}}
+ .ksn936-player{{width:clamp(49px,16vw,65px)}}
+ .ksn936-player-name{{font-size:clamp(7px,1.95vw,9px);line-height:1.1;overflow-wrap:anywhere;word-break:normal;padding:2px 3px;max-width:100%}}
+ .ksn945-nationality{{font-size:clamp(7px,1.8vw,9px);line-height:1.1}}
+ .ksn936-portrait img,.ksn936-photo-fallback{{width:34px;height:34px}}
+ .ksn936-rating-badge{{font-size:9px;right:-11px;padding:2px 3px}}
+}}
+
 /* V663 STEP 937H: single-row finished-match style for live navigation. */
 .ksn937UnifiedNav{{display:flex!important;flex-wrap:nowrap!important;overflow-x:auto!important;overflow-y:hidden!important;gap:3px;scrollbar-width:thin;-webkit-overflow-scrolling:touch;border-bottom:1px solid #35475b}}
 .ksn937UnifiedNav button{{flex:0 0 auto!important;white-space:nowrap!important;min-width:max-content;box-sizing:border-box}}
@@ -28839,57 +28858,82 @@ function timeline(ev,playerRows=[],lineupTeams=[]){{
 
 /* V663 STEP 936E: verified live formations and player ratings.
    Preserve the existing player lists as a complete fallback. */
-function ksn936LiveLineups(teams,playerRows){{
- const ratingMap=new Map();
- for(const team of (Array.isArray(playerRows)?playerRows:[])){{
-  for(const item of (Array.isArray(team.players)?team.players:[])){{
-   const id=String(item.player?.id||'');
-   const raw=item.statistics?.[0]?.games?.rating;
-   const value=raw===null||raw===undefined||raw===''?NaN:Number(raw);
-   if(id&&Number.isFinite(value)&&value>0&&value<=10)
-    ratingMap.set(id,value.toFixed(1));
-  }}
+function ksn945Lineups(teams,playerRows,homeId,awayId,phase){{
+ const group=Array.isArray(teams)?teams:[];
+ const players=Array.isArray(playerRows)?playerRows:[];
+ const ratings=new Map(),nationalities=new Map();
+ for(const t of players)for(const item of (Array.isArray(t?.players)?t.players:[])){{
+   const pid=String(item?.player?.id||'');
+   if(!pid)continue;
+   const nationality=String(item?.player?.nationality||item?.player?.country||'').trim();
+   if(nationality&&!nationalities.has(pid))nationalities.set(pid,nationality);
+   const raw=item?.statistics?.[0]?.games?.rating;
+   const num=raw===null||raw===undefined||raw===''?NaN:Number(raw);
+   if(Number.isFinite(num)&&num>0&&num<=10)ratings.set(pid,num.toFixed(1));
  }}
- const cards=[];
- for(const team of (Array.isArray(teams)?teams:[])){{
-  const entries=(Array.isArray(team.players)?team.players:[])
-   .filter(p=>p&&p.starter===true&&typeof p.grid==='string'&&/^[1-9]\d*:[1-9]\d*$/.test(p.grid));
-  if(entries.length!==11)continue;
-  const positions=entries.map(p=>{{
-   const parts=p.grid.split(':').map(Number);
-   return {{p,row:parts[0],col:parts[1]}};
-  }});
-  if(positions.some(x=>x.row>6||x.col>6))continue;
-  const occupied=new Set(positions.map(x=>x.row+':'+x.col));
-  if(occupied.size!==11)continue;
-  const maxRow=Math.max(...positions.map(x=>x.row));
-  if(maxRow<2)continue;
-  const html=positions.map(x=>{{
-   const columns=positions.filter(v=>v.row===x.row).length;
-   const left=(x.col/(columns+1))*100;
-   const top=90-((x.row-1)/(maxRow-1))*80;
-   const p=x.p;
-   const rating=ratingMap.get(String(p.id||''));
-   const photo=p.photo
-    ?`<img src="${{E(p.photo)}}" alt="">`
-    :`<span class="ksn936-photo-fallback">${{E(p.number??'—')}}</span>`;
-   const badge=rating
-    ?`<span class="ksn936-rating-badge">${{E(rating)}}</span>`:'';
-   return `<div class="ksn936-player" style="left:${{left}}%;top:${{top}}%">
-    <span class="ksn936-portrait">${{photo}}${{badge}}</span>
-    <span class="ksn936-player-name">${{E(p.name||'Player')}}</span>
-   </div>`;
-  }}).join('');
-  cards.push(`<section class="ksn936-pitch-card">
-   <h3>${{E(team.team?.name||'Team')}} · ${{E(team.formation||'Formation')}}</h3>
-   <div class="ksn936-pitch">${{html}}</div>
-  </section>`);
+ const s=String(phase||'').trim().toUpperCase();
+ const prematch=['NS','TBD','SCHEDULED','NOT STARTED','POSTPONED','PST','CANC','CANCELLED'].includes(s);
+ const sideOf=t=>String(t?.team?.id||'')===String(homeId||'')?'home':
+   String(t?.team?.id||'')===String(awayId||'')?'away':'';
+ const sorted=[...group].sort((a,b)=>
+   (sideOf(a)==='home'?0:sideOf(a)==='away'?1:2)-
+   (sideOf(b)==='home'?0:sideOf(b)==='away'?1:2));
+ const sections=[];
+ for(const [i,team] of sorted.entries()){{
+   const side=sideOf(team)||(i===0?'home':'away');
+   const entries=(Array.isArray(team?.players)?team.players:[])
+      .filter(p=>p&&p.starter===true&&typeof p.grid==='string'&&/^[1-9]\d*:[1-9]\d*$/.test(p.grid));
+   let pitch='<div class="empty">Verified starting positions unavailable.</div>';
+   if(entries.length===11){{
+     const positions=entries.map(p=>{{const q=p.grid.split(':').map(Number);return {{p,row:q[0],col:q[1]}};}});
+     const occupied=new Set(positions.map(x=>x.row+':'+x.col));
+     const maxRow=Math.max(...positions.map(x=>x.row));
+     if(maxRow>=2&&occupied.size===11&&!positions.some(x=>x.row>6||x.col>6)){{
+       pitch='<div class="ksn936-pitch">'+positions.map(x=>{{
+         const columns=positions.filter(v=>v.row===x.row).length;
+         const left=(x.col/(columns+1))*100;
+         const top=90-((x.row-1)/(maxRow-1))*80;
+         const p=x.p;
+         const rating=ratings.get(String(p.id||''));
+         const country=String(p.nationality||p.country||nationalities.get(String(p.id||''))||'').trim();
+         const photo=p.photo?`<img src="${{E(p.photo)}}" alt="">`:
+           `<span class="ksn936-photo-fallback">${{E(p.number??'—')}}</span>`;
+         const meta=prematch
+           ?`<span class="ksn945-nationality" title="Nationality">${{E(country||'Nationality unavailable')}}</span>`
+           :(rating?`<span class="ksn936-rating-badge" aria-label="Player rating ${{E(rating)}} out of 10">${{E(rating)}}</span>`:
+             '<span class="ksn945-unrated" aria-label="Player rating unavailable">—</span>');
+         return `<div class="ksn936-player" style="left:${{left}}%;top:${{top}}%">
+          <span class="ksn936-portrait">${{photo}}${{prematch?'':meta}}</span>
+          <span class="ksn936-player-name">${{E(p.name||'Player')}}</span>
+          ${{prematch?meta:''}}
+         </div>`;
+       }}).join('')+'</div>';
+     }}
+   }}
+   const label=side==='home'?'Home':'Away';
+   const heading=`<h3><span class="ksn945-side-label">${{label}}</span> · ${{E(team?.team?.name||'Team')}} · ${{E(team?.formation||'Formation unavailable')}}</h3>`;
+   sections.push(`<section class="ksn945-side-panel" data-ksn945-side="${{side}}" ${{sections.length?'hidden':''}}>
+     <div class="ksn936-pitch-card">${{heading}}${{pitch}}</div>
+     ${{lineups([team])}}
+   </section>`);
  }}
- const pitches=cards.length
-  ?`<div class="ksn936-pitches">${{cards.join('')}}</div>`:'';
- return pitches+lineups(teams);
+ if(!sections.length)return '<div class="empty">No verified lineups returned.</div>';
+ const hasBoth=sections.length>1;
+ const tabs=hasBoth?`<div class="ksn945-side-switch" role="group" aria-label="Choose lineup team">
+    <button type="button" data-ksn945-target="home" aria-pressed="true">Home</button>
+    <button type="button" data-ksn945-target="away" aria-pressed="false">Away</button></div>`:'';
+ return `<div class="ksn945-lineups">${{tabs}}${{sections.join('')}}</div>`;
 }}
-
+function ksn945BindLineupSwitch(){{
+ const shell=page.querySelector('.ksn945-lineups');if(!shell)return;
+ const buttons=[...shell.querySelectorAll('[data-ksn945-target]')];
+ const panels=[...shell.querySelectorAll('[data-ksn945-side]')];
+ for(const b of buttons)b.addEventListener('click',()=>{{
+   const target=b.getAttribute('data-ksn945-target');
+   buttons.forEach(btn=>btn.setAttribute('aria-pressed',String(btn===b)));
+   panels.forEach(panel=>{{panel.hidden=panel.getAttribute('data-ksn945-side')!==target;}});
+ }});
+}}
 function lineups(ts){{return ts.length?ts.map(t=>`<div class="card"><h3>${{E(t.team?.name||'Team')}} <span class="pill">${{E(t.formation||'Formation —')}}</span></h3><div class="tiny muted">Coach: ${{E(t.coach?.name||'—')}}</div>${{(t.players||[]).map(p=>`<a class="person" href="${{playerUrl(p.id)}}">${{p.photo?`<img src="${{E(p.photo)}}" alt="">`:`<span class="pill">${{E(p.number??'—')}}</span>`}}<div><b>${{E(p.name||'Player')}}</b><div class="tiny muted">${{E(p.pos||'')}} · ${{p.starter?'Starting XI':'Substitute'}}</div></div><span>›</span></a>`).join('')}}</div>`).join(''):'<div class="empty">No lineups returned.</div>'}}
 function playerStats(rows){{const out=[];(rows||[]).forEach(t=>(t.players||[]).forEach(z=>{{const p=z.player||{{}},st=(z.statistics||[])[0]||{{}};out.push({{team:t.team||{{}},p,st}})}}));return out.length?out.map(x=>{{const g=x.st.games||{{}},go=x.st.goals||{{}},pa=x.st.passes||{{}},sh=x.st.shots||{{}},tk=x.st.tackles||{{}},ca=x.st.cards||{{}};return `<a class="person" href="${{playerUrl(x.p.id)}}">${{x.p.photo?`<img src="${{E(x.p.photo)}}">`:'<span></span>'}}<div><b>${{E(x.p.name||'Player')}}</b><div class="tiny muted">${{E(x.team.name||'')}} · ${{E(g.position||'')}} · ${{E(g.minutes??'—')}} min · Rating ${{E(g.rating??'—')}}</div><div class="tiny muted">Goals ${{E(go.total??0)}} · Assists ${{E(go.assists??0)}} · Shots ${{E(sh.total??0)}} · Passes ${{E(pa.total??0)}} · Tackles ${{E(tk.total??0)}} · YC ${{E(ca.yellow??0)}} · RC ${{E(ca.red??0)}}</div></div><span>›</span></a>`}}).join(''):'<div class="empty">No player match statistics returned.</div>'}}
 
@@ -29523,7 +29567,7 @@ window.__ksnLiveMatchStatus=matchStatus;const isPreMatch=['NS','TBD','SCHEDULED'
   }};
   void ksnMatchIntelEnrich(pendingMatch,d);
 }}return}}catch(_){{}}}}
-const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div></a></div><div class="tabs ksn937UnifiedNav" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head To Head</button><button data-p="timeline">Commentary</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card','subst','substitution'].includes(String(x.type||'').toLowerCase())),pl,lu)}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev,pl,lu)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn936LiveLineups(lu,pl)}}</div></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();ksn937BindHistory(m);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
+const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div></a></div><div class="tabs ksn937UnifiedNav" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head To Head</button><button data-p="timeline">Commentary</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card','subst','substitution'].includes(String(x.type||'').toLowerCase())),pl,lu)}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev,pl,lu)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn945Lineups(lu,pl,home.id,away.id,matchStatus)}}</div></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();ksn945BindLineupSwitch();ksn937BindHistory(m);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
 load();
 if(SPORT==='football' &&
    new URLSearchParams(location.search).get('tip')!=='1'){{
@@ -29536,7 +29580,7 @@ if(SPORT==='football' &&
      clearInterval(timer);
      return;
    }}
-   if(!liveCodes.has(status)||document.hidden||busy)return;
+   if(!(liveCodes.has(status)||['NS','TBD','SCHEDULED','NOT STARTED'].includes(status))||document.hidden||busy)return;
    busy=true;
    try{{
      await load(false);
