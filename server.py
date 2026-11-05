@@ -715,6 +715,49 @@ def _ksn_live_competition_identity(row):
     return x
 
 
+# V663 STEP 947H-R3: response-only live status plausibility filter
+def _ksn947_filter_live_rows(payload):
+    """Do not mutate cached rows or snapshots. No I/O or provider calls."""
+    if not isinstance(payload, dict) or str(payload.get("type") or "").lower() != "live":
+        return payload
+    rows = payload.get("matches")
+    if not isinstance(rows, list):
+        return payload
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc)
+    live_codes = {"1H", "2H", "HT", "ET", "BT", "P", "LIVE", "INT", "IN", "1", "2"}
+    final_codes = {"FT", "AET", "PEN", "CANC", "PST", "ABD", "AWD", "WO"}
+    filtered = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = row.get("statusShort") or row.get("status") or ""
+        if isinstance(status, dict):
+            status = status.get("short") or status.get("long") or ""
+        status = str(status).strip().upper()
+        if status in final_codes or status not in live_codes:
+            continue
+        kickoff = (row.get("datetime") or row.get("fixtureDate") or
+                   row.get("kickoff") or row.get("date"))
+        if not kickoff and isinstance(row.get("fixture"), dict):
+            kickoff = row["fixture"].get("date")
+        if kickoff:
+            try:
+                parsed = _dt.fromisoformat(str(kickoff).replace("Z", "+00:00"))
+                if parsed.tzinfo is not None:
+                    delta = (now - parsed.astimezone(_tz.utc)).total_seconds()
+                    if delta > 6 * 3600 or delta < -30 * 60:
+                        continue
+            except (ValueError, TypeError, OverflowError):
+                pass
+        filtered.append(row)
+    out = dict(payload)
+    out["matches"] = filtered
+    out["count"] = len(filtered)
+    out["liveFilteredCount"] = len(rows) - len(filtered)
+    out["liveFilterMode"] = "status-and-kickoff-only"
+    return out
+
 def _ksn_priority_response(payload, visitor_country=""):
     """Visitor-specific order at response time, including shared-cache hits.
 
@@ -722,6 +765,7 @@ def _ksn_priority_response(payload, visitor_country=""):
     """
     if not isinstance(payload, dict):
         return payload
+    payload = _ksn947_filter_live_rows(payload)
     out = dict(payload)
     for key in ("matches", "games", "predictions", "fixtures", "tips"):
         rows = out.get(key)
@@ -7173,9 +7217,14 @@ async def fixtures(
         )
 
 
+    # V663 STEP 947H-R8-R2: live-only one-minute response bucket.
+    # Preserve the existing non-live 30-minute cache policy.
+    _fixture_bucket_now = datetime.now(timezone.utc)
     bucket = (
-        datetime.now().strftime("%Y-%m-%d-%H")
-        + str(datetime.now().minute // 30)
+        _fixture_bucket_now.strftime("%Y-%m-%d-%H-%M")
+        if type == "live"
+        else datetime.now().strftime("%Y-%m-%d-%H")
+             + str(datetime.now().minute // 30)
     )
     # Include the requested date range in the key.  Without this, two
     # different upcoming windows could incorrectly share the same 30-minute
@@ -28835,6 +28884,36 @@ function scorerLines(ev,id){{
  }}).join('<br>');
 }}
 /* V663 STEP 939M: verified incident mapping; use player imagery only when supplied. */
+/* V663 STEP 947E-R1: verified event-only match action; no synthetic positions. */
+function ksn947LiveAction(events,fixture,homeTeam,awayTeam){{
+ const all=Array.isArray(events)?events:[];
+ const codes=new Set(['1H','2H','HT','ET','BT','P','LIVE','INT']);
+ const finalCodes=new Set(['FT','AET','PEN']);
+ const status=String(fixture?.status?.short||'').toUpperCase();
+ const kickoff=Date.parse(String(fixture?.date||''));
+ const fresh=Number.isFinite(kickoff)&&Date.now()>=kickoff-1800000&&Date.now()-kickoff<21600000;
+ const live=codes.has(status)&&fresh;
+ const final=finalCodes.has(status);
+ const label=final?'MATCH FINISHED':live?'LIVE MATCH ACTION':codes.has(status)?'MATCH STATUS UNVERIFIED':'MATCH EVENTS';
+ const allowed=new Set(['goal','card','subst','substitution']);
+ const ev=all.filter(x=>x&&allowed.has(String(x.type||'').toLowerCase())&&Number.isFinite(Number(x.time?.elapsed))&&Number(x.time?.elapsed)>=0).sort((a,b)=>(Number(b.time?.elapsed)||0)-(Number(a.time?.elapsed)||0)||(Number(b.time?.extra)||0)-(Number(a.time?.extra)||0));
+ const teamName=(x)=>E(x?.name||'Team');
+ const desc=x=>{{
+   const kind=String(x.type||'').toLowerCase();
+   if(kind==='goal')return 'Goal';
+   if(kind==='card')return E(x.detail||'Card');
+   return 'Substitution';
+ }};
+ const time=x=>E(x.time?.elapsed)+(Number(x.time?.extra)>0?'+'+E(x.time.extra):'')+'′';
+ const photo=x=>{{
+   const url=x?.player?.photo;
+   return typeof url==='string'&&/^https:\/\//i.test(url)?'<img src="'+E(url)+'" alt="" loading="lazy" style="width:32px;height:32px;border-radius:50%;object-fit:cover">':'';
+ }};
+ const row=x=>'<div style="display:flex;align-items:center;gap:9px;padding:9px 0;border-bottom:1px solid rgba(128,128,128,.2)">'+photo(x)+'<strong>'+time(x)+'</strong><span>'+desc(x)+' · '+E(x.player?.name||'Player not available')+'<small style="display:block;opacity:.7">'+E(x.team?.name||'')+(x.assist?.name?' · Assist: '+E(x.assist.name):'')+'</small></span></div>';
+ const empty='<div class="empty">No verified match actions are available from the provider.</div>';
+ const pitch='<svg viewBox="0 0 340 148" role="img" aria-label="Illustrative pitch, not player tracking" style="display:block;width:100%;max-height:210px;background:#18452f;border-radius:8px"><rect x="8" y="8" width="324" height="132" fill="none" stroke="#9bd4af" stroke-width="1.5"/><path d="M170 8V140 M8 45H55V103H8 M332 45H285V103H332 M8 60H26V88H8 M332 60H314V88H332" fill="none" stroke="#9bd4af" stroke-width="1.5"/><circle cx="170" cy="74" r="26" fill="none" stroke="#9bd4af" stroke-width="1.5"/></svg>';
+ return '<div class="card ksn947-action"><h2>'+label+'</h2><div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px"><strong>'+teamName(homeTeam)+' vs '+teamName(awayTeam)+'</strong><span class="muted">'+E(status||'STATUS UNKNOWN')+'</span></div>'+pitch+'<p class="tiny muted">Pitch illustration only — actual player positions are not supplied by the provider.</p>'+(ev.length?'<div aria-label="Verified match actions">'+ev.slice(0,5).map(row).join('')+'</div>':empty)+'</div>';
+}}
 function timeline(ev,playerRows=[],lineupTeams=[]){{
  if(!Array.isArray(ev)||!ev.length)return '<div class="empty">No verified match events available.</div>';
  const rows=[...ev].sort((a,b)=>(Number(a.time?.elapsed)||0)-(Number(b.time?.elapsed)||0)||(Number(a.time?.extra)||0)-(Number(b.time?.extra)||0));
@@ -29605,7 +29684,7 @@ window.__ksnLiveMatchStatus=matchStatus;const isPreMatch=['NS','TBD','SCHEDULED'
   }};
   void ksnMatchIntelEnrich(pendingMatch,d);
 }}return}}catch(_){{}}}}
-const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div></a></div><div class="tabs ksn937UnifiedNav" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head To Head</button><button data-p="timeline">Commentary</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div><div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card','subst','substitution'].includes(String(x.type||'').toLowerCase())),pl,lu)}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev,pl,lu)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn945Lineups(lu,pl,home.id,away.id,matchStatus,home.name,away.name)}}</div></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();ksn945BindLineupSwitch();ksn937BindHistory(m);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
+const ts=m.teams||{{}},ev=d.events||[],st=d.statistics||[],lu=d.teams||[],pl=d.players||[],home=ts.home||{{}},away=ts.away||{{}},fx=m.fixture||{{}},lg=m.league||{{}},ht=matchTeamTheme(home.id,home.name),at=matchTeamTheme(away.id,away.name);page.innerHTML=`<div class="card hero"><a class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(home.id||'')}}">${{home.logo?`<img src="${{E(home.logo)}}">`:''}}<div class="team-name">${{E(home.name||'Home')}}</div></a><div><div class="tiny muted">${{lg.flag?`<img src="${{E(lg.flag)}}" alt="" style="width:18px;height:12px;object-fit:cover;vertical-align:middle;margin-right:5px">`:''}}${{E(lg.country||'')}} · ${{E(lg.name||'Football')}}</div><div class="score">${{E(m.goals?.home??'—')}} - ${{E(m.goals?.away??'—')}}</div><div class="status">${{E(ksnMatchStatus(fx))}}</div><div class="tiny muted">${{localDate(fx.date)}}<br>${{E(fx.venue?.name||'Venue —')}}</div></div><a class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px" href="/teams/${{encodeURIComponent(away.id||'')}}">${{away.logo?`<img src="${{E(away.logo)}}">`:''}}<div class="team-name">${{E(away.name||'Away')}}</div></a></div><div class="tabs ksn937UnifiedNav" aria-label="Match Centre"><button class="active" data-p="overview">Match</button><button data-p="lineups">Lineups</button><button data-p="stats">Stats</button><button data-p="fixture">Fixture</button><button data-p="standings">Standing</button><button data-p="h2h">Head To Head</button><button data-p="timeline">Commentary</button><button data-p="odds">Odds / Prediction</button></div><section class="panel active" id="overview"><div class="grid3"><div class="metric"><span class="muted tiny">Venue</span><b>${{E(fx.venue?.name||'—')}}</b><span class="tiny muted">${{E(fx.venue?.city||'')}}</span></div><div class="metric"><span class="muted tiny">Referee</span><b>${{E(fx.referee||'—')}}</b></div><div class="metric"><span class="muted tiny">Round</span><b>${{E(lg.round||'—')}}</b></div></div>${{ksn947LiveAction(ev,fx,home,away)}}<div class="card"><h2>Key Events</h2>${{timeline(ev.filter(x=>['goal','card','subst','substitution'].includes(String(x.type||'').toLowerCase())),pl,lu)}}</div><div class="card"><h2>Match Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="timeline"><div class="card"><h2>Match Timeline</h2>${{timeline(ev,pl,lu)}}</div></section><section class="panel" id="stats"><div class="card"><h2>Detailed Statistics</h2>${{statRows(st,home.id,away.id)}}</div></section><section class="panel" id="standings"><div class="card"><h2>${{E(lg.name||'Competition')}} Standings</h2>${{standingsTable(d.standings,home.id,away.id)}}</div></section><section class="panel" id="lineups"><div class="grid2">${{ksn945Lineups(lu,pl,home.id,away.id,matchStatus,home.name,away.name)}}</div></section><section class="panel" id="fixture">${{ksn936FixtureHistory(d.insights,m)}}</section><section class="panel" id="h2h">${{ksn936HeadToHead(d.insights,m)}}</section><section class="panel" id="odds">${{odds(d.odds)}}</section>`;wireTabs();ksn945BindLineupSwitch();ksn937BindHistory(m);/* v494: cached response is authoritative for this view; never force a provider refresh on page load. */}}catch(e){{page.innerHTML=`<div class="card"><h2>Match data temporarily unavailable</h2><p class="muted">The match service did not return usable data. Please retry.</p><button onclick="location.reload()">Retry</button></div>`}}}}
 load();
 if(SPORT==='football' &&
    new URLSearchParams(location.search).get('tip')!=='1'){{
@@ -29626,7 +29705,7 @@ if(SPORT==='football' &&
    }}finally{{
      busy=false;
    }}
- }},90000);
+ }},30000);
 }}
 
 </script></body></html>""")
