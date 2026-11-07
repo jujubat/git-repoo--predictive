@@ -15825,19 +15825,19 @@ const ksn565Upcoming=x=>{
   if(typeof raw==='string'&&!/[T ]\d{2}:\d{2}/.test(raw))return false;
   return d.getTime()>Date.now();
 };
-window.ksn432PredTable=function(rows,sport){
+window.ksn432PredTable=function(rows,sport,scope){
   rows=(Array.isArray(rows)?rows:[]).filter(ksn565Upcoming);
-  lastPred[sport]=rows;const foot=sport==='football';
+  const key=scope||sport;lastPred[key]=rows;const foot=sport==='football';
   const dates=[...new Set(rows.map(dkey).filter(Boolean))].sort();
-  if(PD[sport]&&!dates.includes(PD[sport]))PD[sport]='';
-  const use=PD[sport]?rows.filter(x=>dkey(x)===PD[sport]):rows;
+  if(PD[key]&&!dates.includes(PD[key]))PD[key]='';
+  const use=PD[key]?rows.filter(x=>dkey(x)===PD[key]):rows;
   const cols=foot?10:8;
   const body=group(use).map(g=>`<tr class="k432-lg"><td colspan="${cols}">${E(g.league)}${g.country?` · <span style="color:var(--muted);font-weight:600">${E(g.country)}</span>`:''}</td></tr>`+g.rows.slice().sort((a,b)=>(dkey(a)+tkey(a)).localeCompare(dkey(b)+tkey(b))).map(m=>{
     const p=m.prediction||{},o=m.odds||m.bookmakerOdds||m.liveBookmakerOdds||{},c=pc(p.confidence??m.confidence),pick=p.bestPick||p.winner||p.recommendation||m.bestOutcome||'Pending',pr=p.probabilities||{},id=fid(m);
     const o25=pc(pr.over25??pr.over2_5??m.over25Pct),dk=dkey(m);
     const verifiedO25=(m.over25Verified===true||pr.over25Verified===true||pr.over2_5Verified===true);
     return `<tr data-ksn-item="prediction"><td class="num" style="font-weight:700">${E(dk?new Date(dk+'T12:00:00').toLocaleDateString('en-ZA',{day:'2-digit',month:'short',year:'numeric'}):'—')}</td><td class="num">${E(tkey(m)||'—')}</td><td><div class="m">${badge(m,'home')}<b>${E(nm(m,'home'))}</b> <span style="color:var(--muted)">v</span> ${badge(m,'away')}<b>${E(nm(m,'away'))}</b></div></td><td><b>${E(pick)}</b></td><td class="num">${c!=null?`<span class="k432-conf">${c.toFixed(0)}%</span>`:'—'}</td><td class="num">${od(o.homeWin??o.home??o['1'])}</td><td class="num">${od(o.draw??o.X)}</td><td class="num">${od(o.awayWin??o.away??o['2'])}</td>${foot?`<td class="num">${verifiedO25&&o25!=null?o25.toFixed(0)+'%':'—'}</td>`:''}<td class="num">${window.ksnStatsButton?window.ksnStatsButton(m,{sport,finished:false}):(id?`<a class="match-stats-btn" href="/matches/${encodeURIComponent(id)}/stats">Stats</a>`:'<span class="sub">—</span>')}</td></tr>`}).join('')).join('');
-  const bar=`<div class="k432-pbar"><label>Date <select data-k432-pdate="${sport}"><option value="">All dates</option>${dates.map(d=>`<option value="${d}"${PD[sport]===d?' selected':''}>${E(dlabel(d))}</option>`).join('')}</select></label><span>${use.length} prediction${use.length===1?'':'s'}</span></div>`;
+  const bar=`<div class="k432-pbar"><label>Date <select data-k432-pdate="${key}"><option value="">All dates</option>${dates.map(d=>`<option value="${d}"${PD[key]===d?' selected':''}>${E(dlabel(d))}</option>`).join('')}</select></label><span>${use.length} prediction${use.length===1?'':'s'}</span></div>`;
   return bar+`<div class="k432-ptable-wrap"><table class="k432-ptable"><thead><tr><th>Date</th><th>Time</th><th>Match</th><th>Prediction</th><th>Conf.</th><th>1</th><th>X</th><th>2</th>${foot?'<th>O2.5</th>':''}<th></th></tr></thead><tbody>${body||`<tr><td colspan="${cols}" class="empty">No predictions for this date.</td></tr>`}</tbody></table></div>`};
 // Scoped ownership guard: older async renderers must not restore legacy prediction cards.
 (function(){const target=document.getElementById('predictionList');if(!target)return;let busy=false;const guard=new MutationObserver(()=>{if(busy||!target.isConnected||target.querySelector('.k432-ptable'))return;const rows=lastPred.football;if(!Array.isArray(rows)||!rows.length)return;busy=true;try{target.innerHTML=window.ksn432PredTable(rows,'football');target.dataset.ksnOwner='predictions.football'}finally{busy=false}});guard.observe(target,{childList:true});})();
@@ -17042,6 +17042,8 @@ function sidebarStatusLabel(value){
 }
 async function get(path){let r=await fetch(path,{headers:{Accept:'application/json'},cache:'default'});if(!r.ok)throw Error('HTTP '+r.status);return r.json()}
 function panel(){const hub=document.getElementById('ksn523CompetitionHub');if(!hub)return null;let p=document.getElementById('ksn527Content');if(!p){p=document.createElement('section');p.id='ksn527Content';p.setAttribute('aria-live','polite');hub.after(p)}return p}
+// V663 STEP 955D-R2: competition-scoped Predictions date filtering
+let scopedPred=null;
 async function show(view){const c=window.__KSN_SIDEBAR_COMPETITION__||window.__KSN_ACTIVE_COMPETITION__;if(!c||!N(c.id))return;const id=N(c.id),p=panel();if(!p)return;const token=++serial;p.hidden=false;window.__KSN_COMPETITION_VIEW__=view;
 document.querySelectorAll('#ksn523CompetitionHub [data-comp-view]').forEach(b=>{b.setAttribute('aria-current',b.dataset.compView===view?'page':'false');b.setAttribute('aria-pressed',String(b.dataset.compView===view))});
 p.innerHTML='<h3>'+E(c.name)+' — '+E(({standings:'League Tables',teams:'Teams',players:'Players',predictions:'Predictions',finished:'Finished Matches',fixtures:'Fixtures'})[view])+'</h3>'+box('Loading competition-specific data…');
@@ -17049,7 +17051,40 @@ try{
  if(view==='predictions'){
    // Existing predictions engine remains authoritative; refresh=0 can be empty if no snapshot exists.
    const d=await get('/ai-predictions?'+new URLSearchParams({league:String(id),type:'upcoming',limit:'100',refresh:'0'}));if(token!==serial)return;
-   let rs=matches(d).filter(x=>lid(x)===id);if(!rs.length){try{const pool=await get('/ai-predictions?league=ALL&type=upcoming&limit=100&refresh=0');if(token!==serial)return;rs=matches(pool).filter(x=>lid(x)===id)}catch(_){}}p.innerHTML='<h3>'+E(c.name)+' — Predictions</h3>'+(rs.length?table(['Match','Kickoff','Prediction','Odds'],rs.map(r=>{const o=r.odds_1x2??r.bookmakerOdds??r.odds;const odds=(typeof o==='string'||typeof o==='number')?String(o):(o&&typeof o==='object'&&['home','draw','away'].every(k=>o[k]!=null))?['home','draw','away'].map(k=>k.toUpperCase()+': '+o[k]).join(' · '):'Not available';return '<tr><td>'+E(label(r))+'</td><td>'+E(r.date||r.datetime||'')+'</td><td>'+E(predictionText(r))+(predictionConfidence(r)?'<small class="ksn527-muted"> · '+E(predictionConfidence(r))+' confidence</small>':'')+'</td><td>'+E(odds)+'</td></tr>'})):box('No eligible predictions for this competition. Predictions require supported upcoming fixtures and bookmaker odds.'));return;
+   // V663 STEP 955B: canonical league Predictions renderer
+       let rs=matches(d).filter(x=>lid(x)===id);
+       if(!rs.length){
+         try{
+           const pool=await get('/ai-predictions?league=ALL&type=upcoming&limit=100&refresh=0');
+           if(token!==serial)return;
+           rs=matches(pool).filter(x=>lid(x)===id);
+         }catch(_){}
+       }
+       // Never display expired, live, completed, abandoned or postponed matches
+       // as upcoming predictions. Preserve verified league identity.
+       const upcoming=rs.filter(x=>{
+         if(lid(x)!==id||x.isFinished===true||x.isLive===true)return false;
+         const status=String(x.status?.short||x.statusShort||x.fixture?.status?.short||x.matchStatus||x.status||'').trim().toUpperCase();
+         if(/^(FT|AET|PEN|1H|2H|HT|ET|BT|LIVE|PST|CANC|ABD|SUSP|INT|AWD|WO)$/.test(status))return false;
+         const raw=x.datetime||x.kickoff||x.startTime||x.date||x.fixture?.date;
+         if(!raw)return false;
+         if(typeof raw==='string'&&!/[T ]\d{2}:\d{2}/.test(raw))return false;
+         const dt=typeof raw==='number'?new Date(raw<1e11?raw*1000:raw):new Date(raw);
+         return Number.isFinite(dt.getTime())&&dt.getTime()>Date.now();
+       });
+       // One canonical authority for main-bar and all competition-specific prediction
+       // tables. It provides team logos, date filter, odds and Stats links.
+       const renderer=window.ksn432PredTable;
+       const scope='football.competition.'+id;
+    const view=typeof renderer==='function'
+         ?renderer(upcoming,'football',scope)
+         :box('Predictions table temporarily unavailable.');
+       if(token!==serial)return;
+       p.innerHTML='<h3>'+E(c.name)+' — Predictions</h3>'+view;
+       p.dataset.ksnOwner='predictions.football.competition';
+       p.dataset.ksnKind='predictions';
+    scopedPred={id,name:c.name,token,scope,rows:upcoming};
+       return;
  }
  const d=await get('/competition/data?'+new URLSearchParams({league:String(id),view}));if(token!==serial)return;if(N(d.leagueId)!==id){p.innerHTML=box('Competition ID mismatch; unrelated data blocked.');return}
  const rows=d.items||[];
@@ -17074,7 +17109,22 @@ try{
 }catch(err){if(token===serial)p.innerHTML=box('Competition data request failed: '+(err?.message||'unknown error'))}
 }
 document.addEventListener('click',e=>{const b=e.target.closest?.('#ksn523CompetitionHub button[data-comp-view]');if(!b)return;const view=b.dataset.compView;if(!TARGETS.has(view)){++serial;const p=document.getElementById('ksn527Content');if(p)p.hidden=true;return}e.preventDefault();e.stopImmediatePropagation();show(view)},true);
-document.addEventListener('ksn:sidebar-competition-selected',()=>{++serial;const p=document.getElementById('ksn527Content');if(p)p.hidden=true});
+document.addEventListener('change',e=>{
+  const input=e.target;
+  if(!input?.matches?.('#ksn527Content select[data-k432-pdate]'))return;
+  const state=scopedPred;
+  const active=window.__KSN_SIDEBAR_COMPETITION__||window.__KSN_ACTIVE_COMPETITION__;
+  if(!state || state.token!==serial ||
+     window.__KSN_COMPETITION_VIEW__!=='predictions' ||
+     Number(active?.id)!==state.id ||
+     input.dataset.k432Pdate!==state.scope)return;
+  const panelEl=document.getElementById('ksn527Content');
+  const render=window.ksn432PredTable;
+  if(!panelEl || panelEl.hidden || typeof render!=='function')return;
+  panelEl.innerHTML='<h3>'+E(state.name)+' — Predictions</h3>'+
+    render(state.rows,'football',state.scope);
+},true);
+document.addEventListener('ksn:sidebar-competition-selected',()=>{scopedPred=null;++serial;const p=document.getElementById('ksn527Content');if(p)p.hidden=true});
 })();
 </script>
 <style id="ksn-v534-fixture-single-owner">
@@ -20806,7 +20856,7 @@ if(typeof oldMatch==='function'){
 
 /* Predictions final owner: preserve table, change group order only. */
 const oldPred=window.ksn432PredTable;
-if(typeof oldPred==='function')window.ksn432PredTable=function(rows,sport){if(sport!=='football'||!rows?.length)return oldPred(rows||[],sport);const sorted=orderedGroups(rows).flatMap(g=>g.rows);return oldPred(sorted,sport)};
+if(typeof oldPred==='function')window.ksn432PredTable=function(rows,sport,scope){if(sport!=='football'||!rows?.length)return oldPred(rows||[],sport,scope);const sorted=orderedGroups(rows).flatMap(g=>g.rows);return oldPred(sorted,sport,scope)};
 
 /* Fixtures final owner: grouped league table and same locked priority. */
 function fixtureTable(rows){const groups=orderedGroups(rows);if(!groups.length)return '<div class="empty">No fixtures match these filters.</div>';return `<div class="ks475-fixture-wrap"><table class="ks475-fixture-table"><thead><tr><th>Date / Time</th><th>Match</th><th>Country</th><th>Status</th><th></th></tr></thead><tbody>${groups.map(g=>`<tr class="ks475-league"><td colspan="5">${E(g.league)}${g.country?` · <span class="sub">${E(g.country)}</span>`:''}</td></tr>`+g.rows.map(x=>{const home=x.home||x.homeTeam||x.teams?.home?.name||'Home',away=x.away||x.awayTeam||x.teams?.away?.name||'Away',dt=x.datetime||x.date||x.startTime||'',sp=String(x.sport||'football').toLowerCase();let tm='—';try{tm=new Date(dt).toLocaleTimeString('en-ZA',{hour:'2-digit',minute:'2-digit'})}catch(_){}const href=window.ksnMatchStatsHref?window.ksnMatchStatsHref(x,{sport:sp}):'';return `<tr><td class="ks475-time">${E((()=>{const d=new Date(dt);return !Number.isNaN(d.getTime())?d.toLocaleDateString(undefined,{day:'2-digit',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}):String(dt||'—')})())}</td><td class="ks475-match">${E(home)} <span class="sub">vs</span> ${E(away)}</td><td>${E(country(x)||'—')}</td><td>${E((sp==='rugby'||sp==='cricket')?(window.ksnFriendlySportStatus?.(x.status||x.statusShort||'Upcoming')||x.status||'Upcoming'):(x.status||'Upcoming'))}</td><td>${href?`<a class="match-stats-btn" href="${E(href)}">Stats</a>`:''}</td></tr>`}).join('')).join('')}</tbody></table></div>`}
