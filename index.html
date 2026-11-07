@@ -16624,7 +16624,7 @@ window.ksn540OpenVerifiedCompetition=function(item){
  if(!Number.isSafeInteger(id)||id<=0||!name||!country||!item?.providerIdVerified||!Number.isInteger(Number(item?.season)))return false;
  // Key by provider ID, never by a potentially ambiguous league name.
  const key=name+' · '+country+' (#'+id+')';
- KSN540_DYNAMIC_COMPETITIONS[key]={id,country,season:Number(item.season)};
+ KSN540_DYNAMIC_COMPETITIONS[key]={id,country,season:Number(item.season),type:String(item.type||item.competitionType||item.leagueType||'').trim().toLowerCase()};
  setLeague(key);
  return true;
 };
@@ -16633,8 +16633,8 @@ function setLeague(name){
   const competition=SIDEBAR_COMPETITIONS[name]||KSN540_DYNAMIC_COMPETITIONS[name]||{};
   LEAGUE_FILTER.id=competition.id||0;
   LEAGUE_FILTER.country=competition.country||'';
-  window.__KSN_SIDEBAR_COMPETITION__=name?{name,id:LEAGUE_FILTER.id,country:LEAGUE_FILTER.country}:null;
-  window.__KSN_ACTIVE_COMPETITION__=name?{name,id:LEAGUE_FILTER.id,country:LEAGUE_FILTER.country,sport:'football'}:null;
+  window.__KSN_SIDEBAR_COMPETITION__=name?{name,id:LEAGUE_FILTER.id,country:LEAGUE_FILTER.country,type:competition.type||''}:null;
+  window.__KSN_ACTIVE_COMPETITION__=name?{name,id:LEAGUE_FILTER.id,country:LEAGUE_FILTER.country,type:competition.type||'',sport:'football'}:null;
   window.__KSN_COMPETITION_VIEW__=null;
   document.dispatchEvent(new CustomEvent('ksn:sidebar-competition-selected',{
     detail:window.__KSN_SIDEBAR_COMPETITION__
@@ -17044,6 +17044,77 @@ async function get(path){let r=await fetch(path,{headers:{Accept:'application/js
 function panel(){const hub=document.getElementById('ksn523CompetitionHub');if(!hub)return null;let p=document.getElementById('ksn527Content');if(!p){p=document.createElement('section');p.id='ksn527Content';p.setAttribute('aria-live','polite');hub.after(p)}return p}
 // V663 STEP 955D-R2: competition-scoped Predictions date filtering
 let scopedPred=null;
+// V663 STEP 955N-R1: archived previous two matches (no retroactive predictions)
+const KSN955N_FIXED_CUPS=new Set([2,3,6,45,48]);
+let ksn955nHistory=null;
+function ksn955nIrregular(c,id){
+  // Provider-confirmed competition identity is required before this function is called.
+  // Type metadata is carried from verified dynamic competition selections.
+  const type=String(c?.type||'').trim().toLowerCase();
+  if(/^(cup|tournament|knockout|international cup|continental cup|national cup|super cup)$/.test(type))return true;
+  if(/^(league|division)$/.test(type))return KSN955N_FIXED_CUPS.has(id);
+  if(KSN955N_FIXED_CUPS.has(id))return true;
+  const name=String(c?.name||'').replace(/\s*·.*\(#[0-9]+\)\s*$/,'').toLowerCase();
+  return /\b(champions league|europa league|conference league|nations league|world cup|gold cup|afcon|africa cup|asian cup|cup|cups|trophy|trophies|knockout|qualifier|qualifiers|qualification|playoffs|play-offs|copa|coupe|coppa|pokal|pokalrunde|taça|taca|kupa|puchar|beker|supercopa|supercoppa|supercup|super cup|championship of nations|champions trophy|libertadores|sudamericana|recopa|concacaf|caf champions|afc champions|fifa club world)\b/i.test(name);
+}
+function ksn955nDone(x){
+  const status=String(x?.statusShort||x?.fixture?.status?.short||x?.status?.short||x?.status||'').toUpperCase();
+  if(!/^(FT|AET|PEN|FULL.TIME|FINISHED)$/.test(status))return false;
+  const home=x?.homeScore??x?.homeGoals??x?.goals?.home??x?.score?.fulltime?.home;
+  const away=x?.awayScore??x?.awayGoals??x?.goals?.away??x?.score?.fulltime?.away;
+  return home!==null&&home!==undefined&&away!==null&&away!==undefined&&
+    Number.isFinite(Number(home))&&Number.isFinite(Number(away));
+}
+function ksn955nTime(x){
+  const s=x?.datetime||x?.date||x?.startTime||x?.kickoff||x?.fixture?.date;
+  const t=s?Date.parse(String(s)):NaN;
+  return Number.isFinite(t)?t:NaN;
+}
+async function ksn955nAppend(p,c,id,token){
+  if(!ksn955nIrregular(c,id))return;
+  let body='';
+  try{
+    const url='/results/search?'+new URLSearchParams({competition_id:String(id),sport:'football',limit:'500',include_recent:'false'});
+    const archive=await get(url);
+    if(token!==serial||window.__KSN_COMPETITION_VIEW__!=='predictions'||
+      Number((window.__KSN_SIDEBAR_COMPETITION__||window.__KSN_ACTIVE_COMPETITION__)?.id)!==id||!p.isConnected)return;
+    const rows=matches(archive).filter(x=>lid(x)===id&&ksn955nDone(x)&&Number.isFinite(ksn955nTime(x))&&ksn955nTime(x)<=Date.now());
+    rows.sort((a,b)=>ksn955nTime(b)-ksn955nTime(a));
+    const unique=[],seen=new Set();
+    for(const x of rows){
+      const key=String(x.fixtureId||x.providerFixtureId||x.fixture?.id||x.id||'')||
+        [x.home||x.homeTeam,x.away||x.awayTeam,ksn955nTime(x)].join('|');
+      if(seen.has(key))continue;
+      seen.add(key);unique.push(x);
+      if(unique.length===2)break;
+    }
+    body=unique.length&&typeof window.ksn432MatchList==='function'
+      ?window.ksn432MatchList(unique,true,true)
+      :box('No verified completed fixtures found in the available permanent archive.');
+  }catch(_){
+    if(token!==serial||window.__KSN_COMPETITION_VIEW__!=='predictions')return;
+    body=box('Historical results temporarily unavailable.');
+  }
+  if(token!==serial||window.__KSN_COMPETITION_VIEW__!=='predictions'||
+    Number((window.__KSN_SIDEBAR_COMPETITION__||window.__KSN_ACTIVE_COMPETITION__)?.id)!==id||!p.isConnected)return;
+  const section=document.createElement('section');
+  section.className='ksn955n-previous-two';
+  section.setAttribute('data-ksn-owner','historical-results-only');
+  section.innerHTML='<h4>Previous 2 Matches · confirmed results</h4>'+
+    '<p class="ksn527-muted">Historical pre-match predictions unavailable unless independently verified. These are final results, not newly generated predictions.</p>'+body;
+  p.appendChild(section);
+  ksn955nHistory={section,p,id,token};
+}
+// Main sidebar date selection re-paints its panel. Preserve verified archive
+// content after that repaint without re-fetching or losing competition scoping.
+document.addEventListener('change',e=>{
+  if(!e.target?.matches?.('#ksn527Content select[data-k432-pdate]'))return;
+  const state=ksn955nHistory;
+  if(!state||state.token!==serial||window.__KSN_COMPETITION_VIEW__!=='predictions')return;
+  const active=window.__KSN_SIDEBAR_COMPETITION__||window.__KSN_ACTIVE_COMPETITION__;
+  if(Number(active?.id)!==state.id||!state.p.isConnected||state.section.isConnected)return;
+  state.p.appendChild(state.section);
+},false);
 async function show(view){const c=window.__KSN_SIDEBAR_COMPETITION__||window.__KSN_ACTIVE_COMPETITION__;if(!c||!N(c.id))return;const id=N(c.id),p=panel();if(!p)return;const token=++serial;p.hidden=false;window.__KSN_COMPETITION_VIEW__=view;
 document.querySelectorAll('#ksn523CompetitionHub [data-comp-view]').forEach(b=>{b.setAttribute('aria-current',b.dataset.compView===view?'page':'false');b.setAttribute('aria-pressed',String(b.dataset.compView===view))});
 p.innerHTML='<h3>'+E(c.name)+' — '+E(({standings:'League Tables',teams:'Teams',players:'Players',predictions:'Predictions',finished:'Finished Matches',fixtures:'Fixtures'})[view])+'</h3>'+box('Loading competition-specific data…');
@@ -17084,6 +17155,7 @@ try{
        p.dataset.ksnOwner='predictions.football.competition';
        p.dataset.ksnKind='predictions';
     scopedPred={id,name:c.name,token,scope,rows:upcoming};
+    if(ksn955nIrregular(c,id))void ksn955nAppend(p,c,id,token);
        return;
  }
  const d=await get('/competition/data?'+new URLSearchParams({league:String(id),view}));if(token!==serial)return;if(N(d.leagueId)!==id){p.innerHTML=box('Competition ID mismatch; unrelated data blocked.');return}
