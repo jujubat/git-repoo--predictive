@@ -21077,7 +21077,7 @@ def _v660_archive_query_rows(
             add("sport=?", "football")
         elif sport.lower() in {"football","rugby","cricket"}:
             add("sport=?", sport.lower())
-        if competition_id is not None: add("competition_id=?", competition_id)  # v529 exact provider competition filter
+        if competition_id is not None: add("competition_id=?", str(competition_id))  # v529 exact provider competition filter
         # v457: named fields are canonical structured filters. Keep q broad below.
         if country.strip(): add("lower(trim(country))=?",country.strip().lower())
         if competition.strip(): add("lower(trim(competition))=?",competition.strip().lower())
