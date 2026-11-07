@@ -29582,13 +29582,25 @@ function ksn936HeadToHead(insights,match){{
    const opp=norm(r.home)===teamKey?Number(m[2]):Number(m[1]);
    return own>opp?'W':own<opp?'L':'D';
   }};
-  const list=matches.map(r=>`<li>${{E(classify(r))}} · ${{E(r.home)}} ${{E(r.score)}} ${{E(r.away)}}</li>`).join('');
-  return `<section class="card"><h3>${{E(team)}} · Last 5</h3>${{list?`<ul>${{list}}</ul>`:'<p class="muted">No verified recent form available.</p>'}}</section>`;
+  const badge=(name,logo)=>{{const u=String(logo||'');return '<span class="ksn938-team-identity">'+(/^https:\/\/[^\s"\'<>]+$/i.test(u)?'<img src="'+E(u)+'" alt="" loading="lazy">':'')+'<span>'+E(name)+'</span></span>'}};
+  const rows=matches.map(r=>{{
+   const id=String(r.fixtureId||r.id||'');
+   const href=/^[1-9]\d*$/.test(id)?'/sports/football/match/'+encodeURIComponent(id):'';
+   const result=classify(r);
+   const score=href?'<a class="ksn952-match-link" href="'+href+'" title="View match details">'+E(r.score)+'</a>':E(r.score);
+   return '<tr><td>'+E(dateLabel(r.date))+'</td><td>'+badge(r.home,r.homeLogo)+'</td><td><b>'+score+'</b></td><td>'+badge(r.away,r.awayLogo)+'</td><td><strong class="ksn952-result ksn952-'+result.toLowerCase()+'">'+result+'</strong></td></tr>';
+  }}).join('');
+  return `<section class="card"><h3>${{E(team)}} · Last 5</h3>${{rows?'<div class="standings-wrap"><table class="ksn952-form-table"><thead><tr><th>Date</th><th>Home</th><th>Score</th><th>Away</th><th>W/D/L</th></tr></thead><tbody>'+rows+'</tbody></table></div>':'<p class="muted">No verified recent form available.</p>'}}</section>`;
  }}).join('');
- const items=recent.map(r=>`<tr><td class="ksn941-date">${{E(dateLabel(r.date))}}</td>
+ const items=recent.map(r=>{{
+  const id=String(r.fixtureId||r.id||'');
+  const href=/^[1-9]\d*$/.test(id)?'/sports/football/match/'+encodeURIComponent(id):'';
+  const score=href?'<a class="ksn952-match-link" href="'+href+'" title="View match details">'+E(r.score)+'</a>':E(r.score);
+  return `<tr><td class="ksn941-date">${{E(dateLabel(r.date))}}</td>
   <td class="ksn941-club">${{badge(r.home,r.homeLogo)}}</td>
-  <td class="ksn941-result">${{E(r.score)}}</td>
-  <td class="ksn941-club">${{badge(r.away,r.awayLogo)}}</td></tr>`).join('');
+  <td class="ksn941-result">${{score}}</td>
+  <td class="ksn941-club">${{badge(r.away,r.awayLogo)}}</td></tr>`;
+ }}).join('');
  return `<style>
   .ksn941-h2h-summary{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:18px 0}}
   .ksn941-h2h-summary .metric{{min-width:0;text-align:center;padding:14px 8px}}
@@ -29607,6 +29619,17 @@ function ksn936HeadToHead(insights,match){{
   .ksn941-h2h-table .ksn938-team-identity img{{width:20px;height:20px}}
   .ksn941-h2h-summary{{gap:6px}}.ksn941-h2h-summary .metric{{padding:9px 3px}}
   .ksn941-h2h-table .ksn941-date{{white-space:normal}}}}
+   /* V663 STEP 953A: readable last-five match tables */
+  .ksn952-form-table{{width:100%;border-collapse:collapse;min-width:550px;font-size:13px}}
+  .ksn952-form-table th,.ksn952-form-table td{{padding:11px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}}
+  .ksn952-form-table th{{white-space:nowrap;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.045em}}
+  .ksn952-form-table tbody tr:nth-child(even){{background:rgba(120,150,190,.045)}}
+  .ksn952-form-table .ksn938-team-identity{{display:flex;gap:7px;align-items:center}}
+  .ksn952-form-table .ksn938-team-identity img{{width:24px;height:24px;object-fit:contain}}
+  .ksn952-match-link{{color:#76c5ff;text-decoration:underline;text-underline-offset:3px;font-weight:800}}
+  .ksn952-match-link:hover,.ksn952-match-link:focus-visible{{color:#fff}}
+  .ksn952-result{{display:inline-flex;min-width:24px;justify-content:center;padding:3px 6px;border-radius:5px}}
+  .ksn952-w{{background:#0e5139;color:#a4f5ce}}.ksn952-d{{background:#424a54;color:#e3e8ef}}.ksn952-l{{background:#682c36;color:#ffd6dc}}
  </style><div class="card"><h2>Head to Head</h2>
  <p class="tiny muted">${{badge(home,teams.home?.logo)}} vs ${{badge(away,teams.away?.logo)}} · ${{played}} verified meetings</p>
  <div class="ksn941-h2h-summary">
@@ -29616,7 +29639,7 @@ function ksn936HeadToHead(insights,match){{
  <h3>Previous meetings</h3>
  <div class="standings-wrap"><table class="ksn941-h2h-table"><thead><tr>
  <th scope="col">Date</th><th scope="col">Home</th><th scope="col">Score</th><th scope="col">Away</th>
- </tr></thead><tbody>${{items}}</tbody></table></div><div class="grid2">${{formCards}}</div><section class="card"><h3>Top 3 players · each team</h3><p class="muted">Verified player rankings are not available for this match.</p></section></div>`;
+ </tr></thead><tbody>${{items}}</tbody></table></div><div class="grid2">${{formCards}}</div></div>`;
 }}
 
 // Step 937F: fetch verified history only on Fixture/H2H selection.
@@ -29812,6 +29835,23 @@ main{{max-width:1120px;margin:auto;padding:18px}}a{{color:var(--accent)}}.top{{d
  #ksn-v663-unified-live-match table td{{padding:10px 9px}}
  #ksn-v663-unified-live-match [data-kmatch-panel] > h2{{font-size:16px}}
 }}
+/* V663 STEP 953A: all-live head-to-head readable data grids */
+#ksn-v663-unified-live-match .ksn952-h2h{{width:100%;min-width:0}}
+#ksn-v663-unified-live-match .ksn952-scroll{{max-width:100%;overflow-x:auto;border:1px solid #263342;border-radius:12px}}
+#ksn-v663-unified-live-match .ksn952-form-table{{width:100%;min-width:520px;border-collapse:collapse;font-size:13px}}
+#ksn-v663-unified-live-match .ksn952-team{{display:inline-flex;align-items:center;gap:8px}}
+#ksn-v663-unified-live-match .ksn952-team img{{width:25px;height:25px;object-fit:contain}}
+#ksn-v663-unified-live-match .ksn952-form-grid{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:20px}}
+#ksn-v663-unified-live-match .ksn952-summary{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:20px;text-align:center}}
+#ksn-v663-unified-live-match .ksn952-summary strong{{display:block;font-size:25px;margin:6px 0}}
+#ksn-v663-unified-live-match .ksn952-match-link{{color:#65bcff;text-decoration:underline;text-underline-offset:3px}}
+#ksn-v663-unified-live-match .ksn952-match-link:focus-visible{{outline:2px solid #65bcff;outline-offset:2px}}
+#ksn-v663-unified-live-match .ksn952-result{{display:inline-block;padding:3px 7px;border-radius:5px;font-weight:800}}
+#ksn-v663-unified-live-match .ksn952-w{{background:#0f5139;color:#a4f5ce}}
+#ksn-v663-unified-live-match .ksn952-d{{background:#424a54;color:#e3e8ef}}
+#ksn-v663-unified-live-match .ksn952-l{{background:#682c36;color:#ffd6dc}}
+@media(max-width:850px){{#ksn-v663-unified-live-match .ksn952-form-grid{{grid-template-columns:minmax(0,1fr)}}}}
+@media(max-width:480px){{#ksn-v663-unified-live-match .ksn952-summary{{gap:5px}}#ksn-v663-unified-live-match .ksn952-summary .card{{font-size:11px;padding:10px 4px}}}}
 </style></head><body class="ks-standalone-page"><main><div class="top"><a class="back" href="/" onclick="event.preventDefault();return kasiBackHome();">← Back to Home</a><div class="ksn-head"><img src="/kasi-sports-news-logo.png" alt="Kasi Sports News"><b>Kasi Sports News</b></div></div>
 <div id="page"><div class="card">Loading {title.lower()}…</div></div></main>
 <script>
@@ -29820,42 +29860,78 @@ const E=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&g
 // V663 STEP 949D-R2: verified standalone standings renderer.
 function standingsTable(rows,homeId,awayId){{if(!Array.isArray(rows)||!rows.length)return '<div class="empty">No standings available for this competition.</div>';const form=v=>String(v||'').trim().split('').slice(-5).map(x=>`<span class="form-pill form-${{E(x).toLowerCase()}}">${{E(x)}}</span>`).join('');return `<div class="standings-wrap"><table class="standings-table"><thead><tr><th>Pos</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>F</th><th>A</th><th>+/-</th><th>PTS</th><th>Form</th></tr></thead><tbody>${{rows.map(r=>{{const t=r.team||{{}},a=r.all||{{}},g=a.goals||{{}},focus=String(t.id)===String(homeId)?'ksn938-standing-home':String(t.id)===String(awayId)?'ksn938-standing-away':'';return `<tr class="${{focus}}"><td>${{E(r.rank??'—')}}</td><td><div class="standing-team">${{t.logo?`<img src="${{E(t.logo)}}" alt="">`:''}}<b>${{E(t.name||'Team')}}</b></div></td><td>${{E(a.played??'—')}}</td><td>${{E(a.win??'—')}}</td><td>${{E(a.draw??'—')}}</td><td>${{E(a.lose??'—')}}</td><td>${{E(g.for??'—')}}</td><td>${{E(g.against??'—')}}</td><td>${{E(r.goalsDiff??'—')}}</td><td><b>${{E(r.points??'—')}}</b></td><td><div class="form-row">${{form(r.form)}}</div></td></tr>`}}).join('')}}</tbody></table></div>`}}
 // V663 STEP 950B: H2H renders only verified completed records for this fixture pair.
+// V663 STEP 953A: shared verified H2H and team Last 5 professional table rendering.
+function ksn952Badge(name,url){{
+ const u=String(url||'');
+ const pic=/^https:\/\/[^\s"'<>]+$/i.test(u)?'<img src="'+E(u)+'" alt="" loading="lazy">':'';
+ return '<span class="ksn952-team">'+pic+'<span>'+E(name||'Unknown team')+'</span></span>';
+}}
+function ksn952MatchScore(score,id){{
+ const n=String(id||'');
+ const label=E(score||'—');
+ return /^[1-9]\d*$/.test(n)?'<a href="/sports/football/match/'+encodeURIComponent(n)+'" class="ksn952-match-link" title="View match details">'+label+'</a>':label;
+}}
+function ksn952RecentForm(raw,team){{
+ const norm=x=>String(x||'').trim().toLowerCase().replace(/\s+/g,' ');
+ const name=norm(team),seen=new Set(),valid=[];
+ for(const r of Array.isArray(raw)?raw:[]){{
+  if(!r||!['FT','AET','PEN'].includes(String(r.status||'').toUpperCase()))continue;
+  if(norm(r.home)!==name&&norm(r.away)!==name)continue;
+  const score=/^\s*(\d+)\s*[-–:]\s*(\d+)\s*$/.exec(String(r.score||''));
+  const stamp=Date.parse(String(r.date||''));
+  if(!score||!Number.isFinite(stamp)||stamp>Date.now())continue;
+  const id=String(r.fixtureId||r.id||'');
+  const key=/^[1-9]\d*$/.test(id)?'id:'+id:'row:'+String(r.date)+'|'+norm(r.home)+'|'+norm(r.away)+'|'+r.score;
+  if(seen.has(key))continue;
+  seen.add(key);valid.push({{r,stamp,hg:Number(score[1]),ag:Number(score[2])}});
+ }}
+ valid.sort((a,b)=>b.stamp-a.stamp);
+ const matches=valid.slice(0,5);
+ if(!matches.length)return '<p class="muted">No verified recent games available.</p>';
+ const rows=matches.map(o=>{{
+  const r=o.r,ownHome=norm(r.home)===name;
+  const goals=ownHome?o.hg:o.ag,against=ownHome?o.ag:o.hg;
+  const result=goals>against?'W':goals<against?'L':'D';
+  const dt=new Date(o.stamp).toLocaleDateString('en-ZA',{{year:'numeric',month:'short',day:'2-digit'}});
+  return '<tr><td>'+E(dt)+'</td><td>'+ksn952Badge(r.home,r.homeLogo)+'</td><td><b>'+ksn952MatchScore(r.score,r.fixtureId||r.id)+'</b></td><td>'+ksn952Badge(r.away,r.awayLogo)+'</td><td><span class="ksn952-result ksn952-'+result.toLowerCase()+'">'+result+'</span></td></tr>';
+ }}).join('');
+ return '<div class="ksn952-scroll"><table class="ksn952-form-table"><thead><tr><th>Date</th><th>Home</th><th>Score</th><th>Away</th><th>W/D/L</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+}}
 function ksn950H2HRender(payload,home,away){{
  const empty='<p class="muted">No verified previous meetings available.</p>';
- const matches=payload?.h2h?.meetings;
- if(!Array.isArray(matches)||!matches.length)return empty;
- const norm=s=>String(s||'').trim().toLowerCase().replace(/\s+/g,' ');
+ const norm=x=>String(x||'').trim().toLowerCase().replace(/\s+/g,' ');
  const hn=norm(home),an=norm(away);
  if(!hn||!an||hn===an)return empty;
- const seen=new Set(),valid=[];
- for(const r of matches){{
+ const valid=[],seen=new Set();
+ for(const r of Array.isArray(payload?.h2h?.meetings)?payload.h2h.meetings:[]){{
   if(!r||!['FT','AET','PEN'].includes(String(r.status||'').toUpperCase()))continue;
   const rh=norm(r.home),ra=norm(r.away);
   if(!((rh===hn&&ra===an)||(rh===an&&ra===hn)))continue;
   const score=/^\s*(\d+)\s*[-–:]\s*(\d+)\s*$/.exec(String(r.score||''));
-  if(!score)continue;
-  const ms=Date.parse(String(r.date||''));
-  if(!Number.isFinite(ms)||ms>Date.now())continue;
-  const id=String(r.fixtureId||'').trim();
-  const key=/^[1-9]\d*$/.test(id)?'id:'+id:'row:'+String(r.date)+'|'+rh+'|'+ra+'|'+score[1]+'-'+score[2];
+  const stamp=Date.parse(String(r.date||''));
+  if(!score||!Number.isFinite(stamp)||stamp>Date.now())continue;
+  const id=String(r.fixtureId||r.id||'');
+  const key=/^[1-9]\d*$/.test(id)?'id:'+id:'row:'+String(r.date)+'|'+rh+'|'+ra+'|'+r.score;
   if(seen.has(key))continue;
-  seen.add(key);
-  valid.push({{date:ms,home:r.home,away:r.away,hg:Number(score[1]),ag:Number(score[2])}});
+  seen.add(key);valid.push({{r,stamp,hg:Number(score[1]),ag:Number(score[2])}});
  }}
- valid.sort((a,b)=>b.date-a.date);
+ valid.sort((a,b)=>b.stamp-a.stamp);
  const recent=valid.slice(0,5);
- if(!recent.length)return empty;
  let hw=0,draws=0,aw=0;
- const lines=recent.map(r=>{{
-  if(r.hg===r.ag)draws++;
-  else if((r.hg>r.ag&&norm(r.home)===hn)||(r.ag>r.hg&&norm(r.away)===hn))hw++;
+ const rows=recent.map(o=>{{
+  const r=o.r;
+  if(o.hg===o.ag)draws++;
+  else if((o.hg>o.ag&&norm(r.home)===hn)||(o.ag>o.hg&&norm(r.away)===hn))hw++;
   else aw++;
-  const date=new Date(r.date).toLocaleDateString('en-ZA',{{year:'numeric',month:'short',day:'2-digit'}});
-  return '<tr><td>'+E(date)+'</td><td>'+E(r.home)+'</td><td><b>'+r.hg+' - '+r.ag+'</b></td><td>'+E(r.away)+'</td></tr>';
+  const dt=new Date(o.stamp).toLocaleDateString('en-ZA',{{year:'numeric',month:'short',day:'2-digit'}});
+  return '<tr><td>'+E(dt)+'</td><td>'+ksn952Badge(r.home,r.homeLogo)+'</td><td><b>'+ksn952MatchScore(r.score,r.fixtureId||r.id)+'</b></td><td>'+ksn952Badge(r.away,r.awayLogo)+'</td></tr>';
  }}).join('');
- return '<p class="muted">'+recent.length+' verified previous meeting(s)</p>'+
-  '<div class="grid"><div class="card">'+E(home)+' wins: <b>'+hw+'</b></div><div class="card">Draws: <b>'+draws+'</b></div><div class="card">'+E(away)+' wins: <b>'+aw+'</b></div></div>'+
-  '<div style="overflow-x:auto"><table class="standings-table"><thead><tr><th>Date</th><th>Home</th><th>Score</th><th>Away</th></tr></thead><tbody>'+lines+'</tbody></table></div>';
+ const meetings=recent.length?'<p class="muted">'+recent.length+' verified previous meeting(s)</p><div class="ksn952-scroll"><table class="ksn952-form-table"><thead><tr><th>Date</th><th>Home</th><th>Score</th><th>Away</th></tr></thead><tbody>'+rows+'</tbody></table></div>':empty;
+ const summary=recent.length?'<div class="ksn952-summary"><div class="card">'+E(home)+' wins <strong>'+hw+'</strong></div><div class="card">Draws <strong>'+draws+'</strong></div><div class="card">'+E(away)+' wins <strong>'+aw+'</strong></div></div>':'';
+ const form=payload?.form||{{}};
+ return '<div class="ksn952-h2h">'+summary+'<h3>Previous meetings</h3>'+meetings+
+  '<div class="ksn952-form-grid"><section class="card"><h3>'+E(home)+' · Last 5 games</h3>'+ksn952RecentForm(form.home?.last10,home)+'</section>'+
+  '<section class="card"><h3>'+E(away)+' · Last 5 games</h3>'+ksn952RecentForm(form.away?.last10,away)+'</section></div></div>';
 }}
 // Lazy/once-per-view: deliberately separate from score polling.
 async function ksn950LoadH2H(root,teams){{
