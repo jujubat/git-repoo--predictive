@@ -30095,7 +30095,7 @@ async function match(){{
      ['trends','Fixture'],['news','Standing'],['h2h','Head to Head'],['commentary','Commentary'],['odds','Odds / Prediction']];
    page.innerHTML=`<div id="ksn-v663-unified-live-match" style="max-width:1050px;margin:auto">
      <header style="display:flex;justify-content:space-between;align-items:center;gap:12px">
-       <strong>KasiScore ?? Match Centre</strong><a href="/#live">Back to Results</a>
+       <strong>KasiScore ?? Match Centre</strong><a href="${{['FT','AET','PEN'].includes(String(st?.short||'').toUpperCase())?'/?ksn_return=finished#live':'/#live'}}">Back to Results</a>
      </header>
      <p class="muted" style="margin-top:16px">${{E(m.league?.name||'Football')}}${{m.league?.round?' ?? '+E(m.league.round):''}}</p>
      <section class="card" aria-label="Match scoreboard" style="display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:14px;padding:24px 12px;background:#172231;text-align:center">
