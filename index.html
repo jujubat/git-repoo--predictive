@@ -20565,6 +20565,77 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 
 </script>
 
+<script id="ksn-v663-step956G4-finished-return">
+(function () {
+  'use strict';
+
+  const url = new URL(window.location.href);
+  if (url.searchParams.get('ksn_return') !== 'finished') return;
+
+  let attempts = 0;
+  const maxAttempts = 40;
+
+  function restoreFinished() {
+    attempts++;
+
+    const ready =
+      typeof window.showTab === 'function' &&
+      typeof window.ksn422SetLiveMode === 'function' &&
+      !!document.getElementById('live') &&
+      !!document.getElementById('ksn422FinishedTab');
+
+    if (!ready) {
+      if (attempts < maxAttempts) {
+        window.setTimeout(restoreFinished, 250);
+      } else {
+        console.warn('V663 956I: finished navigation not ready');
+      }
+      return;
+    }
+
+    try {
+      window.showTab(
+        'live',
+        document.querySelector('[data-primary="live"]')
+      );
+
+      const result = window.ksn422SetLiveMode('finished');
+      const button = document.getElementById('ksn422FinishedTab');
+
+      const activated =
+        result === true &&
+        document.body.dataset.kasiLiveView === 'finished' &&
+        button?.classList.contains('active') === true;
+
+      if (!activated) {
+        console.warn('V663 956I: finished activation unconfirmed');
+        return;
+      }
+
+      url.searchParams.delete('ksn_return');
+      history.replaceState(
+        history.state,
+        '',
+        url.pathname + url.search + url.hash
+      );
+
+      console.info('V663 956I: finished navigation restored');
+    } catch (err) {
+      console.warn('V663 956I: navigation failed', err);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener(
+      'DOMContentLoaded',
+      restoreFinished,
+      { once: true }
+    );
+  } else {
+    restoreFinished();
+  }
+})();
+</script>
 </body>
 </html>
 
