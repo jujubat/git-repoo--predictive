@@ -12737,7 +12737,7 @@ body.ks-admin-open #kasiscoreAdminWidget{display:block!important}
  async function loadMultiLive(){
    const el=document.getElementById('liveList');if(!el)return;
    try{const d=await J('/sports/live');const rows=d.games||[];
-     el.innerHTML=rows.length?groupedLive(rows):'<div class="empty">No football matches are live right now.</div>';
+     el.innerHTML=rows.length?(typeof window.ksn432MatchList==='function'?window.ksn432MatchList(rows,false,false):groupedLive(rows)):'<div class="empty">No football matches are live right now.</div>';
      const c=document.getElementById('liveTabCount');if(c)c.textContent=rows.length+' live';
    }catch(e){el.innerHTML=`<div class="empty">Live Unable to load data: ${E(e.message)}</div>`}
  }
@@ -17334,6 +17334,121 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
 </script>
+<!-- V663 STEP 957N: read-only global live sidebar mirror. -->
+<style id="ksn-v663-step957N-global-live-sidebar-style">
+#ksn957GlobalLive{margin:12px 0;border:1px solid #30485b;border-radius:10px;background:#101c27;padding:10px;min-width:0}
+#ksn957GlobalLive>summary{cursor:pointer;color:#eff7ff;font-weight:750;font-size:13px}
+#ksn957GlobalLive .ksn957-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:10px 0}
+#ksn957GlobalLive .ksn957-head a{font-size:12px;color:#a9d6ff}
+#ksn957GlobalLive .ksn957-note{font-size:12px;color:#afc0cf;line-height:1.4;padding:8px 0}
+#ksn957GlobalLiveRows{max-height:55vh;overflow:auto;overscroll-behavior:contain}
+#ksn957GlobalLive .k432-group{margin:8px 0;border:1px solid #253b4e;border-radius:7px;overflow:hidden}
+#ksn957GlobalLive .k432-ghead{padding:7px 8px;font-size:11px;line-height:1.4}
+#ksn957GlobalLive .k432-match{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px;padding:8px;border-top:1px solid #253b4e;align-items:center}
+#ksn957GlobalLive .k432-st{grid-column:1/-1;font-size:11px}
+#ksn957GlobalLive .k432-team{display:flex;min-width:0;align-items:center;gap:5px;font-size:12px}
+#ksn957GlobalLive .k432-team.away{grid-column:1}
+#ksn957GlobalLive .k432-team span{overflow-wrap:anywhere}
+#ksn957GlobalLive .k432-badge{width:20px;height:20px;object-fit:contain;flex:none}
+#ksn957GlobalLive .k432-score{grid-column:2;grid-row:2 / span 2;font-size:15px;font-weight:800;white-space:nowrap}
+#ksn957GlobalLive .k432-stats{grid-column:1/-1;justify-self:start;font-size:11px}
+#ksn957GlobalLive .k432-kickoff{font-size:10px!important;padding:2px 8px 6px!important}
+</style>
+<script id="ksn-v663-step957N-global-live-sidebar">
+(()=>{'use strict';
+  // V663 STEP 957S: load a single /sports/live feed only while this panel is
+  // expanded. Reuse the authoritative match-list renderer; never fetch stats
+  // or call fixture/provider endpoints per row. Fail closed when feed fails.
+  const KEY='ksn957GlobalLive', INTERVAL=180000;
+  const liveCodes=new Set(['1H','2H','HT','ET','BT','P','LIVE','INT']);
+  const rejectCodes=new Set(['FT','AET','PEN','PST','CANC','ABD','SUSP','NS','TBD']);
+  const idOf=x=>String(x?.providerFixtureId??x?.provider_fixture_id??x?.fixtureId??x?.fixture_id??x?.fixture?.id??x?._afootFixtureId??x?.id??'').trim();
+  const statusOf=x=>{const v=x?.statusShort??x?.status?.short??x?.fixture?.status?.short??x?.status??'';return String(typeof v==='object'?(v.short||''):v).trim().toUpperCase()};
+  const verified=x=>{
+    if(!x||String(x.sport||'football').toLowerCase()!=='football'||!/^[1-9]\d*$/.test(idOf(x)))return false;
+    const st=statusOf(x);
+    return !rejectCodes.has(st)&&(liveCodes.has(st)||x.isLive===true);
+  };
+  function init(){
+    const sidebar=document.getElementById('ks537Sidebar');
+    if(!sidebar||document.getElementById(KEY))return;
+    const panel=document.createElement('details');panel.id=KEY;
+    const heading=document.createElement('summary');heading.textContent='Global Live Matches';
+    const head=document.createElement('div');head.className='ksn957-head';
+    const count=document.createElement('span');count.id='ksn957GlobalLiveCount';count.className='ksn957-note';
+    const link=document.createElement('a');link.href='#live';link.textContent='Open Live Scores';
+    link.addEventListener('click',e=>{
+      if(typeof window.ksn422Activate==='function'){
+        e.preventDefault();window.ksn422Activate('live');window.ksn422SetLiveMode?.('live');
+      }
+    });
+    head.append(count,link);
+    const body=document.createElement('div');body.id='ksn957GlobalLiveRows';
+    const note=document.createElement('p');note.className='ksn957-note';
+    const message=t=>{note.textContent=t;body.replaceChildren(note);count.textContent='';};
+    panel.append(heading,head,body);
+    const catalogue=document.getElementById('ksn539Catalogue');
+    if(catalogue?.parentElement===sidebar)sidebar.insertBefore(panel,catalogue);
+    else sidebar.append(panel);
+    let serial=0, timer=null, inFlight=null, controller=null;
+    message('Expand to check verified global live matches.');
+    const display=rows=>{
+      const filtered=rows.filter(verified);
+      if(!filtered.length){message('No verified live football matches right now.');count.textContent='0 live';return}
+      if(typeof window.ksn432MatchList!=='function'){
+        message('Live match presentation is temporarily unavailable.');return;
+      }
+      const temp=document.createElement('div');
+      temp.innerHTML=window.ksn432MatchList(filtered,false,false);
+      // Keep only canonical football match navigation.
+      for(const row of temp.querySelectorAll('.k432-match')){
+        const url=row.querySelector('a.match-stats-btn,a.k432-stats')?.getAttribute('href')||'';
+        if(!/^\/matches\/[1-9]\d*\/stats(?:[?#].*)?$/.test(url))row.remove();
+      }
+      for(const group of temp.querySelectorAll('.k432-group')){
+        if(!group.querySelector('.k432-match'))group.remove();
+      }
+      const total=temp.querySelectorAll('.k432-match').length;
+      if(!total){message('Verified match links are unavailable.');return}
+      body.replaceChildren(...[...temp.children]);
+      count.textContent=total+' live';
+    };
+    const refresh=async()=>{
+      if(!panel.open)return;
+      if(inFlight)return inFlight;
+      const ticket=++serial;
+      message('Checking verified live matches…');
+      controller=new AbortController();
+      const timeout=setTimeout(()=>controller?.abort(),12000);
+      inFlight=(async()=>{
+        try{
+          const r=await (window.__KSN_NATIVE_FETCH__||fetch)('/sports/live',{
+            method:'GET',headers:{Accept:'application/json'},credentials:'same-origin',
+            cache:'default',signal:controller.signal
+          });
+          if(!r.ok)throw Error('HTTP '+r.status);
+          const d=await r.json();
+          if(d?.providerError)throw Error('Provider unavailable');
+          const rows=Array.isArray(d?.games)?d.games:Array.isArray(d?.matches)?d.matches:null;
+          if(!rows)throw Error('Malformed live response');
+          if(panel.open&&ticket===serial)display(rows);
+        }catch(_){
+          if(panel.open&&ticket===serial)message('Live scores temporarily unavailable. Please retry.');
+        }finally{clearTimeout(timeout)}
+      })();
+      try{await inFlight}finally{inFlight=null;controller=null}
+    };
+    panel.addEventListener('toggle',()=>{
+      if(panel.open){void refresh();timer=setInterval(()=>{if(panel.open)void refresh()},INTERVAL)}
+      else{serial++;controller?.abort();clearInterval(timer);timer=null;message('Expand to check verified global live matches.')}
+    });
+    // Kept for existing browser diagnostics; does not fetch while closed.
+    window.ksn957SidebarRefresh=refresh;
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
+})();
+</script>
+
 <!-- v549: Rugby & Cricket competition navigator. Existing data owners unchanged. -->
 <style>
 #ksn549Overlay{position:fixed;inset:0;background:rgba(0,0,0,.76);z-index:11000;display:none}
