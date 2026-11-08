@@ -19342,7 +19342,7 @@ a{color:#80bdff}
 </head>
 <body>
 <main>
-<header><strong>KasiScore · Match Centre</strong><a href="/#live">Back to Results</a></header>
+<header><strong>KasiScore · Match Centre</strong><a href="/?ksn_return=finished#live">Back to Results</a></header>
 <p class="meta" id="meta">Loading archived match…</p>
 <section class="scoreboard" aria-label="Final result">
 <div class="team" id="home">—</div>
