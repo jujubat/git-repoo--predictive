@@ -11573,6 +11573,261 @@ if(document.readyState==='loading'){
   };
 })();
 </script>
+<!-- V663 Step 959: Full-screen standings overlay -->
+<style id="ksn-v663-959-standings-overlay">
+.ksn959-open {
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  background:#123247;
+  color:#e2f4ff;
+  border:1px solid #426e87;
+  border-radius:8px;
+  padding:9px 14px;
+  font-size:12px;
+  font-weight:700;
+  cursor:pointer;
+}
+.ksn959-open:hover {
+  background:#20506b;
+}
+#homeStandingsSection > .ksn959-open {
+  float:right;
+  margin:0 0 12px 12px;
+}
+#ksn527Content > h3 .ksn959-open {
+  float:right;
+  margin-left:12px;
+}
+#ksn959Dialog {
+  position:fixed;
+  inset:0;
+  margin:0;
+  padding:0;
+  width:100vw;
+  height:100dvh;
+  max-width:none;
+  max-height:none;
+  border:0;
+  background:#09141f;
+  color:#eaf5ff;
+  overflow:hidden;
+  box-sizing:border-box;
+}
+#ksn959Dialog::backdrop {
+  background:rgba(0,0,0,.85);
+}
+.ksn959-shell {
+  display:flex;
+  flex-direction:column;
+  height:100%;
+}
+.ksn959-header {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  padding:18px 24px;
+  background:#102435;
+  border-bottom:1px solid #2e485a;
+}
+.ksn959-header h2 {
+  margin:0;
+  font-size:clamp(17px,2.5vw,24px);
+  color:#ffffff;
+}
+.ksn959-close {
+  background:#1b3548;
+  color:#ffffff;
+  border:1px solid #52778e;
+  border-radius:8px;
+  padding:10px 15px;
+  font-weight:700;
+  cursor:pointer;
+}
+.ksn959-body {
+  flex:1;
+  min-height:0;
+  overflow:auto;
+  padding:clamp(12px,3vw,30px);
+}
+.ksn959-body .ksn958-scroll {
+  width:100%;
+  max-width:none;
+  margin:14px 0 25px;
+}
+.ksn959-body .ksn958-table {
+  width:100%;
+}
+.ksn959-body h4 {
+  color:#eaf5ff;
+  margin:24px 0 10px;
+}
+@media(max-width:600px) {
+  .ksn959-header {padding:12px;}
+  .ksn959-body {padding:10px;}
+  .ksn959-close {padding:9px;}
+}
+</style>
+<script id="ksn-v663-959-standings-overlay">
+(function(){
+  "use strict";
+
+  let previousFocus = null;
+
+  function dialog(){
+    let d = document.getElementById("ksn959Dialog");
+    if(d) return d;
+
+    d = document.createElement("dialog");
+    d.id = "ksn959Dialog";
+    d.setAttribute("aria-labelledby","ksn959Title");
+
+    d.innerHTML =
+      '<div class="ksn959-shell">' +
+      '<header class="ksn959-header">' +
+      '<h2 id="ksn959Title">League Standings</h2>' +
+      '<button type="button" class="ksn959-close">Close ✕</button>' +
+      '</header>' +
+      '<main class="ksn959-body" id="ksn959Body"></main>' +
+      '</div>';
+
+    document.body.appendChild(d);
+
+    d.querySelector(".ksn959-close")
+      .addEventListener("click",function(){d.close();});
+
+    d.addEventListener("click",function(e){
+      if(e.target === d) d.close();
+    });
+
+    d.addEventListener("close",function(){
+      if(previousFocus && previousFocus.isConnected){
+        previousFocus.focus();
+      }
+      previousFocus = null;
+    });
+
+    return d;
+  }
+
+  function source(kind){
+    if(kind === "home"){
+      const h = document.getElementById("homeStandingsGrid");
+      return h && h.querySelector(".ksn958-scroll") ? h : null;
+    }
+
+    if(window.__KSN_COMPETITION_VIEW__ !== "standings"){
+      return null;
+    }
+
+    const c = document.getElementById("ksn527Content");
+    return c && c.querySelector(".ksn958-scroll") ? c : null;
+  }
+
+  function open(kind,trigger){
+    const s = source(kind);
+    if(!s) return;
+
+    const d = dialog();
+    const body = d.querySelector("#ksn959Body");
+    body.replaceChildren();
+
+    let title = "League Standings";
+
+    if(kind === "home"){
+      const picker = document.getElementById("homeStandingsLeague");
+
+      title = picker && picker.selectedOptions[0]
+        ? picker.selectedOptions[0].textContent.trim()
+        : title;
+
+      const subtitle = s.querySelector(".sub");
+      if(subtitle) body.appendChild(subtitle.cloneNode(true));
+
+      const table = s.querySelector(".ksn958-scroll");
+      if(table) body.appendChild(table.cloneNode(true));
+
+    } else {
+      const h = s.querySelector("h3");
+      if(h) title = h.textContent.trim();
+
+      s.querySelectorAll("h4,.ksn958-scroll").forEach(function(node){
+        body.appendChild(node.cloneNode(true));
+      });
+    }
+
+    d.querySelector("#ksn959Title").textContent =
+      title + " — Full Table";
+
+    previousFocus = trigger || document.activeElement;
+    body.scrollTop = 0;
+    d.showModal();
+  }
+
+  function createButton(kind){
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ksn959-open";
+    b.dataset.ksn959Open = kind;
+    b.textContent = "⤢ Open Full Table";
+
+    b.addEventListener("click",function(){
+      open(kind,b);
+    });
+
+    return b;
+  }
+
+  function sync(){
+    const home = source("home");
+    const section = document.getElementById("homeStandingsSection");
+
+    if(home && section &&
+       !section.querySelector(":scope > .ksn959-open")){
+      section.insertBefore(createButton("home"),section.firstChild);
+    }
+
+    const competition = source("competition");
+    const heading = competition &&
+      competition.querySelector(":scope > h3");
+
+    if(heading && !heading.querySelector(".ksn959-open")){
+      heading.appendChild(createButton("competition"));
+    }
+  }
+
+  function init(){
+    sync();
+
+    const observer = new MutationObserver(function(records){
+      for(const record of records){
+        const updated = Array.from(record.addedNodes).some(function(n){
+          return n.nodeType === 1 &&
+            (n.matches?.(".ksn958-scroll") ||
+             n.querySelector?.(".ksn958-scroll"));
+        });
+
+        if(updated){
+          sync();
+          break;
+        }
+      }
+    });
+
+    observer.observe(document.body,{
+      childList:true,
+      subtree:true
+    });
+  }
+
+  if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded",init,{once:true});
+  } else {
+    init();
+  }
+})();
+</script>
 <!-- KasiScore v189 team/stats/injuries fail-soft fix -->
 <script id="kasiscore-v190-functional-fixes">
 /* v190: standings, team/player SPA routing, live badges, back navigation and fail-soft stats */
