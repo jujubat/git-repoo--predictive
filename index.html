@@ -11516,6 +11516,63 @@ if(document.readyState==='loading'){
   window.addEventListener('popstate',route);
 })();
 </script>
+<style id="ksn-v663-958-global-standings">
+.ksn958-scroll{overflow-x:auto;overscroll-behavior-x:contain;margin-top:9px;border:1px solid #293b4b;border-radius:10px;background:#0c151e}
+.ksn958-table{width:100%;min-width:650px;border-collapse:collapse;color:#e6edf5;font-size:12px;white-space:nowrap}
+.ksn958-table th{padding:10px 9px;text-transform:uppercase;letter-spacing:.04em;font-size:10px;color:#a8bed0;background:#101e2d;border-bottom:1px solid #2c4050}
+.ksn958-table td{padding:9px;border-top:1px solid #233645;vertical-align:middle;text-align:center}
+.ksn958-table td:nth-child(2),.ksn958-table th:nth-child(2){text-align:left}
+.ksn958-table tbody tr:hover{background:#162637}
+.ksn958-team{display:inline-flex;align-items:center;gap:8px;color:#61c8f4;text-decoration:none;font-weight:700;white-space:normal;min-width:135px}
+.ksn958-team:hover{text-decoration:underline}
+.ksn958-team-plain{color:#e6edf5;cursor:default}
+.ksn958-crest{width:24px;height:24px;object-fit:contain;flex:none}
+.ksn958-form{display:inline-flex;gap:3px;align-items:center}
+.ksn958-form b{display:inline-flex;align-items:center;justify-content:center;width:21px;height:21px;border-radius:4px;color:#fff;font-size:11px;font-weight:800}
+.ksn958-form .ksn958-win{background:#166534}
+.ksn958-form .ksn958-loss{background:#991b1b}
+.ksn958-form .ksn958-draw{background:#a35409}
+.ksn958-empty{font-size:12px;color:#a8bed0}
+@media(max-width:700px){.ksn958-table{min-width:630px}.ksn958-team{min-width:120px}}
+</style>
+<script id="ksn-v663-958-global-standings-js">
+(()=>{'use strict';
+  const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const positive=v=>{const x=String(v??'').trim();return /^[1-9]\d*$/.test(x)?x:''};
+  const teamRef=r=>{
+    const t=r?.team&&typeof r.team==='object'?r.team:{};
+    // A verified numeric provider ID or publicRef is necessary; never build a URL from the name.
+    for(const candidate of [r?.publicRef,t?.publicRef,r?.teamId,t?.id,r?.internalId]){
+      const x=String(candidate??'').trim();
+      if(/^[1-9]\d*(?:--[a-z0-9-]+)?$/i.test(x))return x;
+    }
+    return '';
+  };
+  const formHtml=value=>{
+    let seq=Array.isArray(value)?value.join(''):String(value??'');
+    seq=seq.toUpperCase().replace(/[^WDL]/g,'').slice(-5);
+    if(!seq)return '<span class="ksn958-empty">—</span>';
+    return '<span class="ksn958-form" aria-label="Recent form '+E(seq)+'">'+[...seq].map(c=>
+      '<b class="ksn958-'+({W:'win',D:'draw',L:'loss'}[c])+'" title="'+({W:'Win',D:'Draw',L:'Loss'}[c])+'">'+c+'</b>'
+    ).join('')+'</span>';
+  };
+  const cell=(r,k,alt='—')=>{const v=r?.[k];return E(v===undefined||v===null||v===''?alt:v)};
+  window.ksn958StandingsTable=function(rows){
+    if(!Array.isArray(rows)||!rows.length)return '<div class="empty">No verified standings available.</div>';
+    return '<div class="ksn958-scroll" role="region" aria-label="League standings" tabindex="0"><table class="ksn958-table"><thead><tr>'+['#','Team','P','W','D','L','GD','Pts','Form'].map(h=>'<th scope="col">'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>{
+      const t=r?.team&&typeof r.team==='object'?r.team:{};
+      const name=String(typeof r?.team==='string'?r.team:t.name||r?.name||'Unknown team');
+      const logo=String(r?.logo||r?.badge||t.logo||t.badge||'');
+      const icon=/^https:\/\//i.test(logo)?'<img class="ksn958-crest" loading="lazy" decoding="async" src="'+E(logo)+'" alt="'+E(name)+' crest">':'';
+      const identity=icon+'<span>'+E(name)+'</span>';
+      const ref=teamRef(r);
+      const link=ref?'<a class="ksn958-team" href="/teams/'+encodeURIComponent(ref)+'" title="Open '+E(name)+' team profile">'+identity+'</a>':'<span class="ksn958-team ksn958-team-plain" title="Verified team profile unavailable">'+identity+'</span>';
+      const gd=r?.goalDiff??r?.goalsDiff??r?.goalDifference;
+      return '<tr><td>'+cell(r,'rank')+'</td><td>'+link+'</td><td>'+cell(r,'played')+'</td><td>'+cell(r,'win',r?.wins??'—')+'</td><td>'+cell(r,'draw',r?.draws??'—')+'</td><td>'+cell(r,'lose',r?.losses??'—')+'</td><td>'+E(gd??'—')+'</td><td><strong>'+cell(r,'points')+'</strong></td><td>'+formHtml(r?.form??r?.last5??r?.recentForm)+'</td></tr>';
+    }).join('')+'</tbody></table></div>';
+  };
+})();
+</script>
 <!-- KasiScore v189 team/stats/injuries fail-soft fix -->
 <script id="kasiscore-v190-functional-fixes">
 /* v190: standings, team/player SPA routing, live badges, back navigation and fail-soft stats */
@@ -11526,7 +11583,7 @@ window.loadHomeStandings = async function(){
   try{
     const d=await get('/standings/2026-27',{league}); const lg=(d.leagues||[])[0]||{}; const rows=lg.table||[];
     if(!rows.length){el.innerHTML='<div class="empty">No current standings returned for this competition.</div>';return;}
-    el.innerHTML=`<div class="sub" style="margin-bottom:8px">${esc(lg.league||league)} · ${esc(String(lg.season||d.season||'Current season'))} · Kasi Sports News</div><div class="tablewrap"><table class="home-standings-table"><thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th><th>Form</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.rank??'—')}</td><td>${teamCell(r.logo||'',r.team||'Team','xs',r.teamId||0)}</td><td>${esc(r.played??0)}</td><td>${esc(r.win??0)}</td><td>${esc(r.draw??0)}</td><td>${esc(r.lose??0)}</td><td>${esc(r.goalDiff??0)}</td><td><b>${esc(r.points??0)}</b></td><td>${esc(r.form||'—')}</td></tr>`).join('')}</tbody></table></div>`;
+    el.innerHTML=`<div class="sub" style="margin-bottom:8px">${esc(lg.league||league)} · ${esc(String(lg.season||d.season||'Current season'))} · KasiScore</div>`+window.ksn958StandingsTable(rows);
   }catch(e){el.innerHTML=`<div class="empty">Standings unavailable.<br><small>${esc(e.message||e)}</small></div>`;}
 };
 // Make Back to Live deterministic even after a #match-stats deep link.
@@ -17167,7 +17224,11 @@ try{
    p.innerHTML='<h3>'+E(c.name)+' — Fixtures · '+E(d.season||'')+'</h3>'+(valid.length?[...byRound].map(([round,items])=>'<h4>'+E(round)+'</h4>'+table(['Kickoff','Match','Match Status','Match Info'],items.map(r=>'<tr><td>'+E(String(r.date||'').slice(0,16).replace('T',' '))+'</td><td>'+badge(r.homeBadge,r.home)+E(r.home)+' vs '+badge(r.awayBadge,r.away)+E(r.away)+'</td><td>'+E(sidebarStatusLabel(r.status))+'</td><td>'+(N(r.fixtureId)?'<a href="/matches/'+N(r.fixtureId)+'/stats">View Match</a>':'—')+'</td></tr>'))).join(''):box(d.reason||'No verified fixtures available.'));return;
  }
  if(view==='standings'){
-   const groups=d.groups||[];p.innerHTML='<h3>'+E(c.name)+' — League Tables</h3>'+(groups.length?groups.map(g=>'<h4>'+E(g.name||'Table')+' · '+E(d.season)+'</h4>'+table(['#','Team','P','W','D','L','GD','Pts'],(g.rows||[]).map(x=>'<tr><td>'+E(x.rank)+'</td><td>'+E(x.team)+'</td><td>'+E(x.played)+'</td><td>'+E(x.win)+'</td><td>'+E(x.draw)+'</td><td>'+E(x.lose)+'</td><td>'+E(x.goalDiff)+'</td><td>'+E(x.points)+'</td></tr>'))).join(''):(d.rounds?.length?'<h4>Tournament rounds · '+E(d.season)+'</h4><div class="ksn527-grid">'+d.rounds.map(r=>'<div class="ksn527-item">'+E(r)+'</div>').join('')+'</div>':box(d.reason||'No published standings.')));return;
+    const groups=d.groups||[];
+    p.innerHTML='<h3>'+E(c.name)+' — League Tables</h3>'+(groups.length
+      ?groups.map(g=>'<h4>'+E(g.name||'Table')+' · '+E(d.season||'')+'</h4>'+window.ksn958StandingsTable(g.rows||[])).join('')
+      :(d.rounds?.length?'<h4>Tournament rounds · '+E(d.season||'')+'</h4><div class="ksn527-grid">'+d.rounds.map(r=>'<div class="ksn527-item">'+E(r)+'</div>').join('')+'</div>':box(d.reason||'No published standings.')));
+    return;
  }
  if(view==='teams'||view==='players'){
    p.innerHTML='<h3>'+E(c.name)+' — '+(view==='teams'?'Teams':'Players')+' ('+E(d.season||'')+')</h3>'+(rows.length?'<div class="ksn527-grid">'+rows.map((t,i)=>'<div class="ksn527-item">'+(t.badge&&/^https:\/\//.test(t.badge)?'<img src="'+E(t.badge)+'" alt="">':'')+(t.publicRef&&N(t.internalId)?'<a class="ksn546-team-link" href="/teams/'+encodeURIComponent(String(t.publicRef))+'" title="Open '+E(t.name)+' team profile"><b>'+E(t.name)+'</b></a>':'<b>'+E(t.name)+'</b>')+(view==='players'?'<p><button type="button" data-ksn529-squad="'+i+'">View squad</button></p><div data-ksn529-out="'+i+'"></div>':'<p class="ksn527-muted">'+E(t.country||'')+'</p>')+'</div>').join('')+'</div>':box(d.reason||'No verified teams available.'));

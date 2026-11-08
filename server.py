@@ -15380,7 +15380,7 @@ async def ksn529_competition_data(league:int=Query(...,ge=1), view:str=Query(...
                 for entry in data.get("response") or []:
                     groups.extend((entry.get("league") or {}).get("standings") or [])
                 if groups:
-                    out.update(season=yr,groups=[{"name":str((g[0].get("group") or "League Table") if g else "League Table"),"rows":[{"rank":z.get("rank"),"team":(z.get("team") or {}).get("name"),"logo":(z.get("team") or {}).get("logo"),"played":(z.get("all") or {}).get("played"),"points":z.get("points"),"goalDiff":z.get("goalsDiff"),"win":(z.get("all") or {}).get("win"),"draw":(z.get("all") or {}).get("draw"),"lose":(z.get("all") or {}).get("lose")} for z in g]} for g in groups])
+                    out.update(season=yr,groups=[{"name":str((g[0].get("group") or "League Table") if g else "League Table"),"rows":[{"rank":z.get("rank"),"team":(z.get("team") or {}).get("name"),"logo":(z.get("team") or {}).get("logo"),"teamId":(z.get("team") or {}).get("id"),"form":z.get("form"),"played":(z.get("all") or {}).get("played"),"points":z.get("points"),"goalDiff":z.get("goalsDiff"),"win":(z.get("all") or {}).get("win"),"draw":(z.get("all") or {}).get("draw"),"lose":(z.get("all") or {}).get("lose")} for z in g]} for g in groups])
                     return out
             except Exception as exc:
                 log.warning("v531 standings league=%s season=%s: %s",league,yr,exc)
