@@ -15431,7 +15431,7 @@ async def ksn529_competition_data(league:int=Query(...,ge=1), view:str=Query(...
             goals=x.get("goals") or {}; t=x.get("teams") or {}
             if goals.get("home") is None or goals.get("away") is None: continue
             if int((x.get("league") or {}).get("id") or 0)!=league: continue
-            out["items"].append({"leagueId":league,"season":yr,"date":fx.get("date"),"round":(x.get("league") or {}).get("round"),"home":(t.get("home") or {}).get("name"),"away":(t.get("away") or {}).get("name"),"homeScore":goals["home"],"awayScore":goals["away"],"fixtureId":fx.get("id")})
+            out["items"].append({"leagueId":league,"season":yr,"date":fx.get("date"),"round":(x.get("league") or {}).get("round"),"home":(t.get("home") or {}).get("name"),"away":(t.get("away") or {}).get("name"),"homeScore":goals["home"],"awayScore":goals["away"],"status":st,"fixtureId":fx.get("id")})
     out["items"].sort(key=lambda x:x.get("date") or "",reverse=True)
     out["count"]=len(out["items"])
     return out
@@ -28839,6 +28839,14 @@ main{{max-width:1050px}}
 .ksn939-in{{color:#70d99c}}
 .ksn939-out{{color:#f4a6a6}}
 @media(max-width:620px){{.ksn939-commentary-table{{font-size:12px}}.ksn939-commentary-table td,.ksn939-commentary-table th{{padding:9px 7px}}}}
+/* V663 STEP 961R-R1: fallback match presentation parity */
+body.ksn962i-finished .hero{{--ksn-finished-parity:1;grid-template-columns:minmax(0,1fr) minmax(0,190px) minmax(0,1fr);gap:15px;border-radius:12px;margin:18px 0;align-items:center}}
+body.ksn962i-finished .hero > *{{min-width:0;overflow-wrap:anywhere}}
+body.ksn962i-finished .hero .score{{font-variant-numeric:tabular-nums;font-weight:800}}
+body.ksn962i-finished .tabs{{gap:4px;scrollbar-width:thin;-webkit-overflow-scrolling:touch}}
+body.ksn962i-finished .tabs button{{white-space:nowrap;flex:0 0 auto;letter-spacing:normal}}
+body.ksn962i-finished .panel{{min-width:0;overflow-wrap:anywhere}}
+@media(max-width:500px){{body.ksn962i-finished .hero{{grid-template-columns:minmax(0,1fr) minmax(70px,88px) minmax(0,1fr);gap:6px}}body.ksn962i-finished .hero .score{{font-size:25px}}}}
 </style></head><body><main><div class="top"><a class="back" href="/" onclick="event.preventDefault();return kasiBackHome();">← Back to Home</a><div class="ksn-head"><img src="/kasi-sports-news-logo.png" alt="KasiScore"><b>KasiScore | Match Centre</b></div></div><div id="page"><div class="card">Loading match data…</div></div></main><script>
 const ID={eid},SPORT={sp},LEAGUE={lg},page=document.getElementById('page');function ksnMatchAd(){{if(document.getElementById('ksnMatchCentreAd'))return;const cards=page.querySelectorAll('.card');if(cards.length<2)return;const box=document.createElement('div');box.id='ksnMatchCentreAd';box.className='ksn-ad';box.innerHTML='<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-5442799591686279" data-ad-slot="3030391892" data-ad-format="auto" data-full-width-responsive="true"></ins>';page.append(box);try{{(window.adsbygoogle=window.adsbygoogle||[]).push({{}})}}catch(_){{}};const ins=box.querySelector('ins');new MutationObserver((m,o)=>{{if(ins.getAttribute('data-ad-status')==='unfilled'){{box.remove();o.disconnect()}}else if(ins.getAttribute('data-ad-status')==='filled')o.disconnect()}}).observe(ins,{{attributes:true,attributeFilter:['data-ad-status']}});}}new MutationObserver(()=>ksnMatchAd()).observe(page,{{childList:true,subtree:true}});function kasiBackHome(){{try{{if(history.length>1){{history.back();return false}}}}catch(_){{}}location.replace('/');return false;}}const E=v=>String(v??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
 const ksnValidCalendarDate=s=>{{
@@ -29745,7 +29753,7 @@ function ksnMatchStatus(fx){{
  return label||'Match status unavailable';
 }}
 async function load(force=false){{try{{const qs=new URLSearchParams();if(LEAGUE)qs.set('league',LEAGUE);if(force)qs.set('refresh','1');const tipMode=new URLSearchParams(location.search).get('tip')==='1';const d=tipMode?{{match:{{}}}}:await J('/sports/'+encodeURIComponent(SPORT)+'/match/'+encodeURIComponent(ID)+(qs.toString()?'?'+qs.toString():'')),m=d.match||{{}};if(SPORT!=='football'){{page.innerHTML=`<div class="card"><h1>${{E(m.home||m.homeTeam||'Home')}} vs ${{E(m.away||m.awayTeam||'Away')}}</h1><div class="score">${{E(m.homeScore??'—')}} - ${{E(m.awayScore??'—')}}</div><p class="muted">${{E(m.league||SPORT)}} · ${{E(m.status||'')}}</p></div><div class="card"><h2>Sport-specific match data</h2><pre style="white-space:pre-wrap">${{E(JSON.stringify(d.statistics?.sportSpecific||d.statistics||{{}},null,2))}}</pre></div>`;return}}const matchStatus=String(m.fixture?.status?.short||m.status?.short||m.fixture?.status?.long||m.status||'').toUpperCase();// V663 STEP 924AS-1: status-aware live polling
-window.__ksnLiveMatchStatus=matchStatus;const isPreMatch=['NS','TBD','SCHEDULED','NOT STARTED','POSTPONED'].some(x=>matchStatus===x||matchStatus.includes(x));if(tipMode){{try{{const q=await J('/tip-stats/'+encodeURIComponent(ID),16000),h=q.home||{{}},a=q.away||{{}},o=q.odds||{{}},hh=q.headToHead||[],ht=matchTeamTheme(h.id,h.name),at=matchTeamTheme(a.id,a.name);page.innerHTML=`<div class="card hero"><div class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px">${{h.badge?`<img src="${{E(h.badge)}}">`:''}}<div class="team-name">${{E(h.name||'Home')}}</div></div><div><div class="status">TIP OF THE DAY · PRE-MATCH STATS</div><div class="score">vs</div><div class="tiny muted">Live match statistics will populate when available.</div></div><div class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px">${{a.badge?`<img src="${{E(a.badge)}}">`:''}}<div class="team-name">${{E(a.name||'Away')}}</div></div></div><div class="grid3"><div class="metric"><span class="tiny muted">Home wins · last 5</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}}/${{E(h.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">Away wins · last 5</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}}/${{E(a.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">H2H matches</span><b>${{E(hh.length)}}</b></div></div><div class="card"><h2>1X2 Odds</h2><p>${{E(h.name||'Home')}}: <b>${{E(o.home??'—')}}</b> · Draw: <b>${{E(o.draw??'—')}}</b> · ${{E(a.name||'Away')}}: <b>${{E(o.away??'—')}}</b></p><p class="tiny muted">${{E(o.bookmaker||'No bookmaker odds currently returned')}}</p></div><div class="grid2"><div class="card" style="${{teamCardStyle(ht)}}"><h2>${{E(h.name||'Home')}} · Last 5</h2>${{(h.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div><div class="card" style="${{teamCardStyle(at)}}"><h2>${{E(a.name||'Away')}} · Last 5</h2>${{(a.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div></div><div class="card"><h2>Head to Head</h2>${{hh.map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No H2H returned.</div>'}}</div><div class="card"><h2>Pre-match Statistics</h2><div class="grid3"><div class="metric"><span class="tiny muted">${{E(h.name||'Home')}} recent wins</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">${{E(a.name||'Away')}} recent wins</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">H2H sample</span><b>${{E(hh.length)}}</b></div></div><p class="tiny muted">These are pre-match indicators from available recent-form, H2H and bookmaker data. Live match statistics populate after kickoff when the provider returns them.</p></div><div class="card"><h2>Standings</h2>${{standingsTable(d.standings,m.teams?.home?.id,m.teams?.away?.id)}}</div>`;if(h.id&&a.id){{
+window.__ksnLiveMatchStatus=matchStatus;window.__ksn962PenaltyScore=(m.score&&m.score.penalty)||null;const isPreMatch=['NS','TBD','SCHEDULED','NOT STARTED','POSTPONED'].some(x=>matchStatus===x||matchStatus.includes(x));if(tipMode){{try{{const q=await J('/tip-stats/'+encodeURIComponent(ID),16000),h=q.home||{{}},a=q.away||{{}},o=q.odds||{{}},hh=q.headToHead||[],ht=matchTeamTheme(h.id,h.name),at=matchTeamTheme(a.id,a.name);page.innerHTML=`<div class="card hero"><div class="team" style="${{teamCardStyle(ht)}};padding:14px;border:1px solid ${{ht.primary}};border-radius:12px">${{h.badge?`<img src="${{E(h.badge)}}">`:''}}<div class="team-name">${{E(h.name||'Home')}}</div></div><div><div class="status">TIP OF THE DAY · PRE-MATCH STATS</div><div class="score">vs</div><div class="tiny muted">Live match statistics will populate when available.</div></div><div class="team" style="${{teamCardStyle(at)}};padding:14px;border:1px solid ${{at.primary}};border-radius:12px">${{a.badge?`<img src="${{E(a.badge)}}">`:''}}<div class="team-name">${{E(a.name||'Away')}}</div></div></div><div class="grid3"><div class="metric"><span class="tiny muted">Home wins · last 5</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}}/${{E(h.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">Away wins · last 5</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}}/${{E(a.last5?.length||"—")}}</b></div><div class="metric"><span class="tiny muted">H2H matches</span><b>${{E(hh.length)}}</b></div></div><div class="card"><h2>1X2 Odds</h2><p>${{E(h.name||'Home')}}: <b>${{E(o.home??'—')}}</b> · Draw: <b>${{E(o.draw??'—')}}</b> · ${{E(a.name||'Away')}}: <b>${{E(o.away??'—')}}</b></p><p class="tiny muted">${{E(o.bookmaker||'No bookmaker odds currently returned')}}</p></div><div class="grid2"><div class="card" style="${{teamCardStyle(ht)}}"><h2>${{E(h.name||'Home')}} · Last 5</h2>${{(h.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div><div class="card" style="${{teamCardStyle(at)}}"><h2>${{E(a.name||'Away')}} · Last 5</h2>${{(a.last5||[]).map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No recent form returned.</div>'}}</div></div><div class="card"><h2>Head to Head</h2>${{hh.map(x=>`<p>${{E(x.home)}} ${{E(x.homeScore??'—')}} - ${{E(x.awayScore??'—')}} ${{E(x.away)}}</p>`).join('')||'<div class="empty">No H2H returned.</div>'}}</div><div class="card"><h2>Pre-match Statistics</h2><div class="grid3"><div class="metric"><span class="tiny muted">${{E(h.name||'Home')}} recent wins</span><b>${{E((h.last5?.length?h.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">${{E(a.name||'Away')}} recent wins</span><b>${{E((a.last5?.length?a.winsLast5:"—"))}} / 5</b></div><div class="metric"><span class="tiny muted">H2H sample</span><b>${{E(hh.length)}}</b></div></div><p class="tiny muted">These are pre-match indicators from available recent-form, H2H and bookmaker data. Live match statistics populate after kickoff when the provider returns them.</p></div><div class="card"><h2>Standings</h2>${{standingsTable(d.standings,m.teams?.home?.id,m.teams?.away?.id)}}</div>`;if(h.id&&a.id){{
   page.insertAdjacentHTML('beforeend',
     '<section class="panel active" id="intel">'+
     '<div class="card"><h2>Match Intelligence</h2>'+
@@ -31160,11 +31168,167 @@ def _ksn_v657_archived_match_seo(fixture_id):
             conn.close()
 
 
+def _ksn_v663_finished_parity_fallback(document):
+    """Presentation-only adapter: only verified finished status in browser activates it.
+
+    Preserves existing provider and archive endpoints, SEO gating, non-football,
+    live/upcoming DOM, match tab handlers and all existing supplementary panels.
+    """
+    if not isinstance(document, str):
+        return document
+    if (document.count('</style>') < 1 or document.count('</body>') != 1
+            or 'id="page"' not in document):
+        return document
+    css = r"""<style id="ksn962i-finished-parity-style">
+body.ksn962i-finished main{max-width:1050px;padding:20px}
+body.ksn962i-finished .top{display:flex;justify-content:space-between;gap:12px;align-items:center}
+body.ksn962i-finished .top .ksn-head{font-size:16px;font-weight:700;min-width:0;overflow-wrap:anywhere}
+body.ksn962i-finished .top .back{color:#80bdff;border:0;background:none;padding:6px;text-decoration:underline;border-radius:0}
+body.ksn962i-finished .hero{grid-template-columns:minmax(0,1fr) minmax(85px,auto) minmax(0,1fr);gap:15px;padding:24px 12px;background:#172231;border-radius:12px;border:0;margin:18px 0}
+body.ksn962i-finished .hero .team{min-width:0;background:transparent!important;border:0!important;box-shadow:none!important;padding:6px!important;border-radius:0!important;display:flex;flex-direction:column;align-items:center;gap:6px;text-decoration:none}
+body.ksn962i-finished .hero .team-name{font-size:16px;font-weight:700;color:#80bdff;overflow-wrap:anywhere}
+body.ksn962i-finished .hero .team img{width:64px;height:64px;object-fit:contain}
+body.ksn962i-finished .hero .score{font-size:32px;font-weight:800;color:#eef3f9;font-variant-numeric:tabular-nums}
+body.ksn962i-finished .hero .status{font-size:15px;color:#eef3f9}
+body.ksn962i-finished .ksn962i-follow{display:inline-flex;justify-content:center;align-items:center;margin-top:6px;border:1px solid #4b7098;border-radius:18px;background:#213d58;color:#fff;text-decoration:none;font-size:12px;font-weight:700;padding:7px 10px;max-width:100%;text-align:center}
+body.ksn962i-finished .tabs{background:#0b111b;position:relative;border-bottom:1px solid #35445a;gap:4px;padding:0;margin:16px 0;max-width:100%;overflow-x:auto}
+body.ksn962i-finished .tabs button{border:0;border-bottom:3px solid transparent;border-radius:0;background:transparent;color:#abc0d5;padding:13px;font-size:14px}
+body.ksn962i-finished .tabs button.active{border-bottom-color:#499dfa;color:#fff}
+body.ksn962i-finished .ksn962i-details{display:block;margin:12px 0 20px}
+body.ksn962i-finished .ksn962i-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:12px 10px;border-bottom:1px solid #28384c;font-size:15px}
+body.ksn962i-finished .ksn962i-row span:last-child{text-align:right;overflow-wrap:anywhere;min-width:0}
+body.ksn962i-finished .panel{min-width:0;max-width:100%;overflow-wrap:anywhere}
+@media(max-width:600px){
+ body.ksn962i-finished main{padding:12px}
+ body.ksn962i-finished .top{gap:10px;flex-wrap:wrap}
+ body.ksn962i-finished .hero{grid-template-columns:minmax(0,1fr) minmax(76px,92px) minmax(0,1fr);gap:6px;padding:14px 7px}
+ body.ksn962i-finished .hero .team-name{font-size:12px}
+ body.ksn962i-finished .hero .team img{width:42px;height:42px}
+ body.ksn962i-finished .hero .score{font-size:25px}
+ body.ksn962i-finished .hero .tiny{font-size:10px;line-height:1.3}
+ body.ksn962i-finished .ksn962i-follow{font-size:10px;padding:5px 6px}
+ body.ksn962i-finished .tabs button{padding:11px 9px;font-size:12px}
+ body.ksn962i-finished .ksn962i-row{font-size:13px}
+}
+</style>"""
+    js = r"""<script id="ksn962i-finished-parity-script">
+(()=>{
+ 'use strict';
+ const page=document.getElementById('page');
+ if(!page)return;
+ const finals=new Set(['FT','AET','PEN','FINISHED','FULL TIME']);
+ const numeric=/^[1-9][0-9]{0,11}$/;
+ const clean=(s)=>String(s||'').trim();
+ function addRow(target,label,value){
+   const r=document.createElement('div');r.className='ksn962i-row';
+   const a=document.createElement('span');a.textContent=label;
+   const b=document.createElement('span');b.textContent=clean(value)||'—';
+   r.append(a,b);target.append(r);
+ }
+ function decorate(){
+   if(!finals.has(clean(window.__ksnLiveMatchStatus).toUpperCase()))return;
+   const hero=page.querySelector('.hero');
+   const overview=page.querySelector('#overview');
+   const tabs=page.querySelector('.tabs');
+   if(!hero||!overview||!tabs||hero.dataset.ksn962iDone==='1')return;
+   const teams=[...hero.querySelectorAll('a.team')];
+   if(teams.length!==2)return;
+   const [home,away]=teams;
+   const homeName=clean(home.querySelector('.team-name')?.textContent);
+   const awayName=clean(away.querySelector('.team-name')?.textContent);
+   if(!homeName||!awayName)return;
+   // V663 STEP 962O: preserve 0-0 goals and show verified shootout score separately.
+   if(clean(window.__ksnLiveMatchStatus).toUpperCase()==='PEN'){
+     const statusEl=hero.querySelector('.status');
+     if(statusEl)statusEl.textContent='PEN';
+     const pens=window.__ksn962PenaltyScore;
+     const h=pens?.home,a=pens?.away;
+     if(Number.isInteger(h)&&Number.isInteger(a)&&h>=0&&a>=0&&h<=99&&a<=99){
+       const center=hero.querySelector('.score')?.parentElement;
+       if(center&&!center.querySelector('.ksn962o-shootout')){
+         const line=document.createElement('div');
+         line.className='ksn962o-shootout';
+         line.style.cssText='font-size:12px;line-height:1.4;color:#eef3f9;margin-top:5px;overflow-wrap:anywhere';
+         line.textContent='Penalties: '+homeName+' '+h+'–'+a+' '+awayName;
+         line.setAttribute('aria-label','Penalty shootout '+homeName+' '+h+' to '+a+' '+awayName);
+         center.append(line);
+       }
+     }
+   }
+   hero.dataset.ksn962iDone='1';
+   document.body.classList.add('ksn962i-finished');
+   const homeId=home.getAttribute('href')?.match(/^\/teams\/([1-9][0-9]{0,11})$/)?.[1];
+   const awayId=away.getAttribute('href')?.match(/^\/teams\/([1-9][0-9]{0,11})$/)?.[1];
+   for(const [team,name,id] of [[home,homeName,homeId],[away,awayName,awayId]]){
+     if(!id||!numeric.test(id)||team.querySelector('.ksn962i-follow'))continue;
+     const follow=new URL('/',location.origin);
+     follow.searchParams.set('view','platform');
+     follow.searchParams.set('follow_team',name);
+     follow.searchParams.set('follow_id',id);
+     follow.hash='platform';
+     const action=document.createElement('a');
+     action.className='ksn962i-follow';
+     action.href=follow.pathname+follow.search+follow.hash;
+     action.textContent='Follow in My Kasi';
+     action.setAttribute('aria-label','Follow '+name+' in My Kasi');
+     team.insertAdjacentElement('afterend',action);
+   }
+   // Group each team and its separate follow link inside a single grid cell.
+   for(const team of teams){
+     const follow=team.nextElementSibling;
+     if(!follow?.classList.contains('ksn962i-follow'))continue;
+     const wrapper=document.createElement('div');
+     wrapper.className='ksn962i-team-column';
+     wrapper.style.cssText='display:flex;flex-direction:column;align-items:center;min-width:0';
+     team.parentNode.insertBefore(wrapper,team);
+     wrapper.append(team,follow);
+   }
+   const title=document.querySelector('.top .ksn-head b');
+   if(title)title.textContent=homeName+' vs '+awayName+' | Match Centre';
+   const logo=document.querySelector('.top .ksn-head img');
+   if(logo)logo.remove(); // historical header has no logo; avoids broken local asset
+   const back=document.querySelector('.top .back');
+   if(back){
+     back.removeAttribute('onclick');
+     back.href='/?ksn_return=finished#live';
+     back.textContent='Back to Results';
+     const top=back.parentElement;
+     const heading=top?.querySelector('.ksn-head');
+     if(top&&heading){top.insertBefore(heading,back)}
+   }
+   const details=document.createElement('div');
+   details.className='ksn962i-details';
+   details.setAttribute('aria-label','Match information');
+   const score=clean(hero.querySelector('.score')?.textContent);
+   const league=clean(hero.querySelector('.tiny.muted')?.textContent);
+   addRow(details,'Home',homeName);
+   addRow(details,'Away',awayName);
+   addRow(details,'Final score',score);
+   if(league)addRow(details,'Competition',league);
+   const grid=overview.querySelector('.grid3');
+   if(grid){
+     for(const card of grid.querySelectorAll('.metric')){
+       const label=clean(card.querySelector('span')?.textContent);
+       const value=clean(card.querySelector('b')?.textContent);
+       if(label)addRow(details,label,value);
+     }
+     grid.replaceWith(details);
+   }else overview.insertBefore(details,overview.firstChild);
+ }
+ const observer=new MutationObserver(decorate);
+ observer.observe(page,{childList:true,subtree:true});
+ decorate();
+})();
+</script>"""
+    return document.replace('</head>', css + '</head>', 1).replace('</body>', js + '</body>', 1)
+
 def _ksn_v657_match_document(fixture_id):
     from html import escape as html_escape
 
     document = _ksn_v492_match_seo(
-        _standalone_match_stats_page(fixture_id, "football", ""),
+        _ksn_v663_finished_parity_fallback(
+            _standalone_match_stats_page(fixture_id, "football", "")
+        ),
         fixture_id
     )
 
