@@ -18976,7 +18976,13 @@ function draw(note=''){
  const list=root.querySelector('.ksn662-list');
  const count=root.querySelector('.ksn662-count');
  const more=root.querySelector('[data-action="more"]');
- const cards=S.rows.map(renderRow).filter(Boolean);
+ const cards=S.rows.slice().sort((a,b)=>{
+    const date=x=>String(x?.date||x?.datetime||x?.kickoff||x?.fixture?.date||'');
+    const aDate=Date.parse(date(a)),bDate=Date.parse(date(b));
+    if(Number.isFinite(aDate)&&Number.isFinite(bDate))
+      return bDate-aDate;
+    return date(b).localeCompare(date(a));
+  }).map(renderRow).filter(Boolean);
  list.innerHTML=cards.join('')||
   `<div class="ksn662-empty">${E(note||'No confirmed results matched your filters.')}</div>`;
  count.textContent=''; // V663 Step 482: hide archive/display totals; keep internal pagination counts.
@@ -18998,7 +19004,7 @@ async function load(append){
    params.set('sport','football');
   params.set('limit',String(PAGE));
  params.set('offset',String(append?S.rows.length:0));
- params.set('include_recent','false');params.set('archive_only','true');
+ params.set('include_recent','true');params.set('archive_only','false');
  S.loading=true;
  draw(append?'Loading more?':'Searching the permanent archive?');
  try{
@@ -21440,7 +21446,34 @@ if(typeof oldMatch==='function'){
  const nm=(x,s)=>x?.[s]||x?.[s+'Name']||x?.[s+'Team']?.name||x?.[s+'Team']||x?.teams?.[s]?.name||(s==='home'?'Home':'Away');
  const sc=(x,s)=>x?.[s+'Score']??x?.[s+'Goals']??x?.goals?.[s]??x?.score?.[s];
  const fid=x=>x?.providerFixtureId||x?.provider_fixture_id||x?.fixtureId||x?.fixture_id||x?.fixture?.id||x?._afootFixtureId||x?.id||'';
- const badge=(x,s)=>{const t=x?.teams?.[s]||{},u=x?.[s+'Logo']||x?.[s+'Badge']||t.logo||t.badge||'';return u?`<img class="k432-badge" src="${E(u)}" alt="" loading="lazy" onerror="this.remove()">`:''};
+ const badge=(x,s)=>{
+  const t=x?.teams?.[s]||{},obj=x?.[s+'Team']||{};
+  const safe=v=>typeof v==='string'&&/^(https:\/\/|\/(?!\/))[^\s<>"']+$/.test(v.trim())?v.trim():'';
+  const values=[x?.[s+'Logo'],x?.[s+'Badge'],x?.[s+'_logo'],
+    x?.[s+'_badge'],x?.[s+'TeamLogo'],x?.[s+'TeamBadge'],
+    t.logo,t.badge,t.image,obj.logo,obj.badge,obj.image];
+  let u=values.map(safe).find(Boolean)||'';
+  const id=x?.[s+'Id']??x?.[s+'TeamId']??x?.[s+'_id']??t.id??obj.id;
+  if(!u&&String(x?.sport||'football').toLowerCase()==='football'
+     &&/^[1-9]\d{0,11}$/.test(String(id??''))){
+    u='/sports/football/team-badge/'+encodeURIComponent(String(id));
+  }
+  const name=String(nm(x,s)||'?');
+  const fallback=`<span class="k432-badge" aria-hidden="true">${E(name.charAt(0).toUpperCase())}</span>`;
+  return u?`<img class="k432-badge" src="${E(u)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-grid'"><span class="k432-badge" style="display:none" aria-hidden="true">${E(name.charAt(0).toUpperCase())}</span>`:fallback;
+};
+const competitionFlag=g=>{
+  const safe=v=>typeof v==='string'&&/^(https:\/\/|\/(?!\/))[^\s<>"']+$/.test(v.trim())?v.trim():'';
+  let u='';
+  for(const x of g.rows||[]){
+    u=[x?.countryFlag,x?.country?.flag,x?.flag,
+       x?.leagueFlag,x?.league?.flag,x?.competition?.flag,
+       x?.leagueLogo,x?.league?.logo,x?.competition?.logo]
+       .map(safe).find(Boolean)||'';
+    if(u)break;
+  }
+  return u?`<img src="${E(u)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">`:'';
+};
  // Use elapsed minutes supplied by the live feed; never infer a clock from 1H/2H alone.
 
  // v656: Display recorded kickoff dates without guessing.
@@ -21555,7 +21588,47 @@ if(typeof oldMatch==='function'){
    if(/^\d{1,3}\+\d{1,2}['′]?$/.test(formatted))return formatted.replace(/['′]?$/,'′');
    return status||'LIVE';
  };
- window.ksn432MatchList=function(rows,finished,saved){if(!rows?.length)return oldMatch(rows||[],finished,saved);return orderedGroups(rows).map(g=>`<section class="k432-group" data-league-id="${g.rows[0]?leagueId(g.rows[0]):0}" data-league-name="${E(g.league)}" data-country="${E(g.country)}"><div class="k432-ghead"><span>${g.country?E(g.country)+' · ':''}${E(g.league)}</span><small>${g.country?`Country: ${E(g.country)}`:'Country unavailable'}</small></div>${g.rows.map(x=>{const h=sc(x,'home'),a=sc(x,'away'),sp=String(x?.sport||'football').toLowerCase(),id=fid(x),st=finished?'FT':E(liveMinute(x)),href=window.ksnMatchStatsHref?window.ksnMatchStatsHref(x,{sport:sp,finished,home:nm(x,'home'),away:nm(x,'away'),date:x?.date||x?.datetime||'',competition:league(x)}):(id?`/matches/${encodeURIComponent(id)}/stats`:'');return `<div class="k432-match"><span class="k432-st ${finished?'ft':''}">${st}</span><div class="k432-team">${badge(x,'home')}<span>${E(nm(x,'home'))}</span></div><div class="k432-score">${h!=null&&a!=null?E(h)+' – '+E(a):'v'}</div><div class="k432-team away">${badge(x,'away')}<span>${E(nm(x,'away'))}</span></div>${href?`<a class="match-stats-btn k432-stats" href="${E(href)}">Stats</a>`:'<span class="k432-stats sub">Stats unavailable</span>'}</div><div class="k432-kickoff" style="display:block;padding:3px 12px 9px;font-size:12px;line-height:1.4;opacity:.78;overflow-wrap:anywhere">${E(ksn656Kickoff(x))}</div>`}).join('')}</section>`).join('')};
+ window.ksn432MatchList=function(rows,finished,saved){if(!rows?.length)return oldMatch(rows||[],finished,saved);return (finished ? (() => {
+  // Completed fixtures: newest date first across competitions.
+  // Preserve competition headers and deduplication.
+  const groups = orderedGroups(rows);
+  const daily = new Map();
+  for (const g of groups) {
+    for (const x of g.rows) {
+      const timestamp = String(
+        x?.date || x?.datetime || x?.kickoff ||
+        x?.fixture?.date || x?.startTime || ''
+      );
+      const day = timestamp.slice(0, 10);
+      const key = day + '|' + String(
+        g.rows[0] ? leagueId(g.rows[0]) : 0
+      ) + '|' + g.league + '|' + g.country;
+      if (!daily.has(key)) {
+        daily.set(key, {
+          ...g,
+          day,
+          rows: []
+        });
+      }
+      daily.get(key).rows.push(x);
+    }
+  }
+  const dateOf = x => String(
+    x?.date || x?.datetime || x?.kickoff ||
+    x?.fixture?.date || x?.startTime || ''
+  );
+  return [...daily.values()]
+    .map(g => ({
+      ...g,
+      rows: g.rows.sort((a,b) =>
+        dateOf(b).localeCompare(dateOf(a))
+      )
+    }))
+    .sort((a,b) =>
+      b.day.localeCompare(a.day) ||
+      dateOf(b.rows[0]).localeCompare(dateOf(a.rows[0]))
+    );
+})() : orderedGroups(rows)).map(g=>`<section class="k432-group" data-league-id="${g.rows[0]?leagueId(g.rows[0]):0}" data-league-name="${E(g.league)}" data-country="${E(g.country)}"><div class="k432-ghead">${competitionFlag(g)}<span>${g.country?E(g.country)+' · ':''}${E(g.league)}</span><small>${g.country?`Country: ${E(g.country)}`:'Country unavailable'}</small></div>${g.rows.map(x=>{const h=sc(x,'home'),a=sc(x,'away'),sp=String(x?.sport||'football').toLowerCase(),id=fid(x),st=finished?'FT':E(liveMinute(x)),href=window.ksnMatchStatsHref?window.ksnMatchStatsHref(x,{sport:sp,finished,home:nm(x,'home'),away:nm(x,'away'),date:x?.date||x?.datetime||'',competition:league(x)}):(id?`/matches/${encodeURIComponent(id)}/stats`:'');return `<div class="k432-match"><span class="k432-st ${finished?'ft':''}">${st}</span><div class="k432-team">${badge(x,'home')}<span>${E(nm(x,'home'))}</span></div><div class="k432-score">${h!=null&&a!=null?E(h)+' – '+E(a):'v'}</div><div class="k432-team away">${badge(x,'away')}<span>${E(nm(x,'away'))}</span></div>${href?`<a class="match-stats-btn k432-stats" href="${E(href)}">Stats</a>`:'<span class="k432-stats sub">Stats unavailable</span>'}</div><div class="k432-kickoff" style="display:block;padding:3px 12px 9px;font-size:12px;line-height:1.4;opacity:.78;overflow-wrap:anywhere">${E(ksn656Kickoff(x))}</div>`}).join('')}</section>`).join('')};
 }
 
 /* Predictions final owner: preserve table, change group order only. */
