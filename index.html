@@ -17490,10 +17490,140 @@ try{
    if(view==='players')p.onclick=async e=>{const b=e.target.closest('[data-ksn529-squad]');if(!b)return;const i=N(b.dataset.ksn529Squad),t=rows[i],out=p.querySelector('[data-ksn529-out="'+i+'"]');if(!t||!out)return;if(!N(t.internalId)){out.innerHTML=box('Verified team ID unavailable; player links cannot be confirmed.');return}out.innerHTML=box('Loading squad…');try{const q=new URLSearchParams({team:String(N(t.internalId)),league:String(id),fantasy_team:t.fantasyTeam||''});const sd=await get('/players/team-squad?'+q);if(token!==serial)return;out.innerHTML=(sd.players||[]).length?(sd.players||[]).map(x=>{const ref=String(x.publicRef||'');const url=ref?'/players/'+encodeURIComponent(ref):'';const pic=/^https:\/\//.test(String(x.photo||''))?'<img loading="lazy" src="'+E(x.photo)+'" alt="'+E(x.name)+'" style="width:38px;height:38px;object-fit:cover;border-radius:50%;margin-right:8px">':'';const txt=pic+'<span><strong>'+E(x.name)+'</strong><small style="display:block">'+E(x.position||'')+(x.age?' · Age '+E(x.age):'')+'</small></span>';return '<div style="display:flex;align-items:center;margin:10px 0">'+(url?'<a href="'+E(url)+'" style="display:flex;align-items:center;color:inherit;text-decoration:none" title="View '+E(x.name)+' player profile">'+txt+'</a>':txt)+'</div>'}).join(''):box('Squad unavailable from provider.')}catch(e){out.innerHTML=box('Squad request failed: '+e.message)}};
    return;
  }
- if(view==='finished'){
-   let rs=rows;if(!rs.length){const archive=await get('/results/search?'+new URLSearchParams({competition_id:String(id),sport:'football',limit:'500',include_recent:'false'}));if(token!==serial)return;rs=matches(archive).filter(x=>lid(x)===id)}
-   p.innerHTML='<h3>'+E(c.name)+' — Finished Matches</h3>'+(rs.length?box(rs.length+' confirmed results · season-aware provider / permanent archive')+table(['Date','Round','Match','Score'],rs.map(r=>'<tr><td>'+E(String(r.date||'').slice(0,16).replace('T',' '))+'</td><td>'+E(r.round||'')+'</td><td>'+E(label(r))+'</td><td>'+E(r.homeScore??'—')+' – '+E(r.awayScore??'—')+'</td></tr>')):box('No confirmed results found in available seasons or permanent archive.'));return;
- }
+  if(view==='finished'){
+    // V663 Step 960: competition archive uses the global finished renderer.
+    const PAGE_SIZE=500;
+    const verified=x=>{
+      if(lid(x)!==id)return false;
+      const raw=x?.statusShort||x?.fixture?.status?.short||
+        x?.status?.short||x?.status||'';
+      const status=String(typeof raw==='object'?
+        (raw.short||raw.long||''):raw).trim().toUpperCase();
+      if(!/^(FT|AET|PEN|FINISHED|FULL[ .-]?TIME)$/.test(status))
+        return false;
+      const h=x?.homeScore??x?.homeGoals??x?.goals?.home;
+      const a=x?.awayScore??x?.awayGoals??x?.goals?.away;
+      return h!==null&&h!==undefined&&h!==''&&
+        a!==null&&a!==undefined&&a!==''&&
+        Number.isFinite(Number(h))&&Number.isFinite(Number(a));
+    };
+    const key=x=>{
+      const fid=x?.providerFixtureId||x?.fixtureId||
+        x?.fixture?.id||x?.id;
+      if(fid!=null&&fid!=='')return 'id:'+String(fid);
+      return [x?.date||x?.datetime||'',x?.home||'',
+        x?.away||''].map(v=>String(v).toLowerCase()).join('|');
+    };
+    // Step 960K: strong cross-source identity when fixture IDs differ.
+    // Require the same competition, date, teams and final score.
+    const fingerprint=x=>{
+      const league=Number(x?.leagueId??x?.league_id??
+        x?.competitionId??x?.competition_id??x?.league?.id??0);
+      const date=String(x?.date??x?.datetime??
+        x?.fixture?.date??'').slice(0,10);
+      const norm=v=>String(v??'').normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g,'')
+        .toLowerCase().replace(/[^a-z0-9]/g,'');
+      const home=norm(x?.home??x?.homeName??
+        x?.homeTeam?.name??x?.teams?.home?.name);
+      const away=norm(x?.away??x?.awayName??
+        x?.awayTeam?.name??x?.teams?.away?.name);
+      const h=x?.homeScore??x?.homeGoals??
+        x?.goals?.home??x?.score?.home;
+      const a=x?.awayScore??x?.awayGoals??
+        x?.goals?.away??x?.score?.away;
+      if(!league||! /^\d{4}-\d{2}-\d{2}$/.test(date)||
+         !home||!away||h==null||a==null||
+         h===''||a===''||
+         !Number.isFinite(Number(h))||
+         !Number.isFinite(Number(a)))return '';
+      return [league,date,home,away,Number(h),Number(a)].join('|');
+    };
+    // V663 Step 961: provider-verified competition fixtures use the existing
+    // canonical Match Centre, not the generic archive reconciliation fallback.
+    // Apply only to /competition/data finished rows (not archive rows).
+    const ksn961CompetitionMatch=x=>{
+      // Only provider gap-fill from this response has verified fixture.id provenance.
+      if(d?.source!=='API-Football')return x;
+      const n=Number(x?.fixtureId);
+      if(!Number.isSafeInteger(n)||n<=0||
+         !/^[1-9][0-9]{0,11}$/.test(String(x?.fixtureId??'')))return x;
+      return {...x,providerFixtureId:n,provider:'API-Football'};
+    };
+    let results=(Array.isArray(rows)?rows:[])
+      .filter(verified).map(ksn961CompetitionMatch);
+    let offset=0,total=null,hasMore=false,busy=false;
+    const current=()=>token===serial&&p.isConnected;
+    function paintFinished(note=''){
+      if(!current())return;
+      const sorted=results.slice().sort((a,b)=>
+        String(b.date||b.datetime||'').localeCompare(
+          String(a.date||a.datetime||'')));
+      const cards=sorted.length&&
+        typeof window.ksn432MatchList==='function'
+        ?window.ksn432MatchList(sorted,true,false)
+        :box(sorted.length?'Renderer unavailable.':
+          'No confirmed finished matches found.');
+      p.dataset.ksnOwner='finished.football.competition';
+      p.dataset.ksnKind='finished';
+      p.innerHTML='<h3>'+E(c.name)+' — Finished Matches</h3>'+
+        box(results.length+' confirmed matches shown'+
+          (total!==null?' / '+total+' archived':''))+
+        cards+
+        (hasMore?'<p><button id="ksn960More" type="button">'+
+          'Load more archived results</button></p>':'')+
+        (note?'<p class="ksn527-muted">'+E(note)+'</p>':'');
+      p.querySelector('#ksn960More')?.addEventListener(
+        'click',()=>void loadPage(true));
+    }
+    async function loadPage(more){
+      if(busy||!current())return;
+      busy=true;
+      const start=more?offset:0;
+      hasMore=false;
+      paintFinished('Loading permanent archive...');
+      try{
+        const q=new URLSearchParams({
+          competition_id:String(id),sport:'football',
+          limit:String(PAGE_SIZE),offset:String(start),
+          include_recent:'false',archive_only:'true'
+        });
+        const data=await get('/results/search?'+q);
+        if(!current())return;
+        const fetched=matches(data);
+        const seen=new Set(results.map(key));
+        const seenMatches=new Set(results.map(fingerprint).filter(Boolean));
+        let excluded=0,duplicates=0;
+        for(const x of fetched){
+          if(!verified(x)){excluded++;continue}
+          const k=key(x),fp=fingerprint(x);
+          if(seen.has(k)||(fp&&seenMatches.has(fp))){
+            duplicates++;
+            continue;
+          }
+          seen.add(k);
+          if(fp)seenMatches.add(fp);
+          results.push(x);
+        }
+        offset=start+fetched.length;
+        const n=Number(data?.total);
+        total=Number.isFinite(n)&&n>=0?n:null;
+        hasMore=fetched.length>0&&
+          (total!==null?offset<total:
+            fetched.length===PAGE_SIZE);
+        paintFinished(excluded?
+          excluded+' unverified archive rows excluded.':'');
+      }catch(_){
+        if(current())paintFinished(
+          'Archive unavailable; showing confirmed results already loaded.');
+      }finally{
+        busy=false;
+      }
+    }
+    paintFinished();
+    await loadPage(false);
+    return;
+  }
 }catch(err){if(token===serial)p.innerHTML=box('Competition data request failed: '+(err?.message||'unknown error'))}
 }
 document.addEventListener('click',e=>{const b=e.target.closest?.('#ksn523CompetitionHub button[data-comp-view]');if(!b)return;const view=b.dataset.compView;if(!TARGETS.has(view)){++serial;const p=document.getElementById('ksn527Content');if(p)p.hidden=true;return}e.preventDefault();e.stopImmediatePropagation();show(view)},true);
