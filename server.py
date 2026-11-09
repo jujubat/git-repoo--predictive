@@ -31541,7 +31541,8 @@ async def canonical_match_stats_page(fixture_id:str):
         )
         document = document.replace(
             head_marker,
-            '<meta name="robots" content="index,follow">\n'
+            f'<link rel="canonical" href="https://kasilivescore.com/matches/{int(fixture_id)}/stats">\n'
+            + '<meta name="robots" content="index,follow">\n'
             + head_marker,
             1,
         )
@@ -31618,7 +31619,7 @@ async def canonical_player_page(player_id:str):
         raise HTTPException(404,"Player not found")
     # v536: Serve the actual data-hydrating player profile document.
     # The older SEO-only shell displayed a heading without player data.
-    return HTMLResponse(_standalone_sports_page("player", str(canonical_id), "football", ""),
+    return HTMLResponse(_ksn_v491_seo_profile("player", canonical_id),
                         headers={"Cache-Control":"no-store", "X-KSN-Build":KSN_BUILD_VERSION})
 
 @app.get("/match/{slug:path}",response_class=HTMLResponse)
