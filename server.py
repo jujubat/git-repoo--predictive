@@ -11166,11 +11166,62 @@ async def players_team_squad(team:int=Query(0,ge=0),league:int=Query(0,ge=0),fan
     fantasy_team=str(fantasy_team or "").strip(); key=f"squad:v482-autofill:{team}:{league}:{_ksn_norm_team_name(fantasy_team)}"
     c=_PLAYERS_EXPLORER_CACHE.get(key)
     if c and c.get("players"):return c
+    # V663 Step 965N: verified, exact-team/current-season snapshot is the
+    # first-choice squad source. Read only: no provider calls or DB writes.
+    # Do not treat fantasy-only names as provider player identities.
+    if team:
+        try:
+            season = _current_season()
+            snap = _dashboard_snapshot_get(
+                f"team_verified_squad_v609:{int(team)}:{int(season)}"
+            ) or {}
+            data = snap.get("data") if isinstance(snap, dict) else None
+            if (isinstance(data, dict)
+                    and int(data.get("teamId") or 0) == int(team)
+                    and int(data.get("season") or 0) == int(season)):
+                verified = []
+                seen = set()
+                for p in data.get("players") or []:
+                    if not isinstance(p, dict):
+                        continue
+                    raw_id = str(p.get("id") or "")
+                    if not raw_id.isdigit() or int(raw_id) <= 0 or not p.get("name"):
+                        continue
+                    pid = int(raw_id)
+                    if pid in seen:
+                        continue
+                    seen.add(pid)
+                    identity = dict(p)
+                    identity["id"] = pid
+                    identity["publicRef"] = _public_ref(
+                        "player", pid, p.get("name") or "player"
+                    )
+                    verified.append(identity)
+                if verified:
+                    out = {"players": verified, "teamId": int(team),
+                           "fantasyTeam": fantasy_team or None,
+                           "source": "verified durable squad snapshot"}
+                    _PLAYERS_EXPLORER_CACHE[key] = out
+                    return out
+        except Exception as exc:
+            log.warning("V663 squad snapshot read failed team=%s type=%s",
+                        team, type(exc).__name__)
     rows=[]
     if team:
-        try:d=await _afoot_get("/players/squads",{"team":team})
-        except Exception:d={"response":[]}
-        rows=(d.get("response") or [{}])[0].get("players") or []
+        # Bound a single provider request; do not make visitors wait indefinitely.
+        # This does not disable the staging database-write safety guard below.
+        try:
+            d = await asyncio.wait_for(
+                _afoot_get("/players/squads", {"team": team}), timeout=8.0
+            )
+        except asyncio.TimeoutError:
+            log.warning("V663 squad provider timed out team=%s", team)
+            d = {"response": []}
+        except Exception as exc:
+            log.warning("V663 squad provider failed team=%s type=%s", team, type(exc).__name__)
+            d = {"response": []}
+        records = d.get("response") if isinstance(d, dict) else []
+        rows = (records[0].get("players") or []) if (records and isinstance(records[0], dict)) else []
     players=[]
     if rows:
         if SPORTS_DB_ENABLED and team and not _ksn_v663_staging_football_only():
@@ -11208,7 +11259,7 @@ async def players_team_squad(team:int=Query(0,ge=0),league:int=Query(0,ge=0),fan
 
             await asyncio.to_thread(_persist_verified_squad)
 
-        players=[{"name":p.get("name"),"photo":p.get("photo"),"age":p.get("age"),"number":p.get("number"),"position":p.get("position"),"publicRef":_public_ref("player",int(p["id"]),p.get("name") or "player"),"source":"API-Football"} for p in rows if p.get("id")]
+        players=[{"id":int(p["id"]),"name":p.get("name"),"photo":p.get("photo"),"age":p.get("age"),"number":p.get("number"),"position":p.get("position"),"publicRef":_public_ref("player",int(p["id"]),p.get("name") or "player"),"source":"API-Football"} for p in rows if isinstance(p,dict) and str(p.get("id") or "").isdigit() and int(p["id"])>0]
     # V663 Step 693: publish verified provider squads to the existing durable
     # PostgreSQL-backed snapshot consumed by _ksn_v590_team_view. SQLite alone
     # is not reliable across Render instances or deployments.
