@@ -15431,7 +15431,30 @@ async def ksn529_competition_data(league:int=Query(...,ge=1), view:str=Query(...
             goals=x.get("goals") or {}; t=x.get("teams") or {}
             if goals.get("home") is None or goals.get("away") is None: continue
             if int((x.get("league") or {}).get("id") or 0)!=league: continue
-            out["items"].append({"leagueId":league,"season":yr,"date":fx.get("date"),"round":(x.get("league") or {}).get("round"),"home":(t.get("home") or {}).get("name"),"away":(t.get("away") or {}).get("name"),"homeScore":goals["home"],"awayScore":goals["away"],"status":st,"fixtureId":fx.get("id")})
+            competition=x.get("league") or {}
+            home_team=t.get("home") or {}
+            away_team=t.get("away") or {}
+            out["items"].append({
+                "leagueId":league,
+                "league":competition.get("name") or "",
+                "leagueName":competition.get("name") or "",
+                "country":competition.get("country") or "",
+                "countryFlag":competition.get("flag"),
+                "leagueLogo":competition.get("logo"),
+                "season":yr,
+                "date":fx.get("date"),
+                "round":competition.get("round"),
+                "home":home_team.get("name"),
+                "away":away_team.get("name"),
+                "homeId":home_team.get("id"),
+                "awayId":away_team.get("id"),
+                "homeLogo":home_team.get("logo"),
+                "awayLogo":away_team.get("logo"),
+                "homeScore":goals["home"],
+                "awayScore":goals["away"],
+                "status":st,
+                "fixtureId":fx.get("id"),
+            })
     out["items"].sort(key=lambda x:x.get("date") or "",reverse=True)
     out["count"]=len(out["items"])
     return out
