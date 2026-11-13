@@ -33525,7 +33525,7 @@ async def ksn_v482_team_seo_guard(request: Request, call_next):
     match = re.fullmatch(r"/teams/([^/]+)/?", request.url.path)
     if request.method in ("GET", "HEAD") and match:
         try:
-            return _ksn_v482_team_response(match.group(1))
+            return await asyncio.to_thread(_ksn_v482_team_response, match.group(1))
         except HTTPException as exc:
             return Response(status_code=exc.status_code, content=str(exc.detail))
     return await call_next(request)
@@ -33629,6 +33629,30 @@ def _ksn_v597_team_initial_html(team_id, team_name):
         log.debug("v597 team SSR cache-only content unavailable for %s: %s", team_id, type(exc).__name__)
         return ""
 
+# V663 Step 968M-2: bounded, provider-free team SSR cache fill.
+_KSN_V968M2_TEAM_SSR_SEMAPHORE = threading.BoundedSemaphore(4)
+
+def _ksn_v968m2_cached_team_html(team_id, team_name):
+    tid = int(team_id)
+    cached = _KSN_V597_TEAM_HTML_CACHE.get(tid, '')
+    if cached:
+        return cached
+    # No waiting threads accumulate under heavy crawler traffic.
+    if not _KSN_V968M2_TEAM_SSR_SEMAPHORE.acquire(blocking=False):
+        return ''
+    try:
+        return _ksn_v597_team_initial_html(tid, team_name) or ''
+    finally:
+        _KSN_V968M2_TEAM_SSR_SEMAPHORE.release()
+
+def _ksn_v968m2_noindex_team(document):
+    """Consolidate robots tags in this team document only, fail closed."""
+    robots = r'<meta\b(?=[^>]*\bname\s*=\s*[\"\']robots[\"\'])[^>]*>\s*'
+    document = re.sub(robots, '', document, flags=re.I)
+    if '</head>' not in document:
+        raise ValueError('Team document has no closing head tag')
+    return document.replace('</head>', '<meta name="robots" content="noindex,follow"></head>', 1)
+
 def _ksn_v491_seo_profile(kind, entity_id):
     document = _standalone_sports_page(kind, str(entity_id), 'football', '')
     name = _ksn_v491_identity_meta(kind, entity_id)
@@ -33662,7 +33686,9 @@ def _ksn_v491_seo_profile(kind, entity_id):
                 f'</nav></div></div>'
             )
             # Verified data is rendered before JavaScript; JS can still replace #page.
-            verified_html = _KSN_V597_TEAM_HTML_CACHE.get(int(entity_id), '')
+            verified_html = _ksn_v968m2_cached_team_html(entity_id, name)
+            if not verified_html:
+                document = _ksn_v968m2_noindex_team(document)
             if verified_html:
                 fallback = fallback.replace('<p class="muted">Loading verified team information from the existing shared data sources…</p>', verified_html, 1)
             else:
