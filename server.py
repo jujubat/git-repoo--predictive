@@ -12341,7 +12341,7 @@ def _ksn_v591_standings(team_id, league_id, season):
     for candidate in candidates:
         if not isinstance(candidate,dict):
             continue
-        standings = candidate.get('standings') or []
+        standings = (candidate.get('standings') or (candidate.get('league') or {}).get('standings') or [])
         if isinstance(standings,dict):
             standings = (standings.get('league') or {}).get('standings') or standings.get('standings') or []
         if isinstance(standings,list) and standings and isinstance(standings[0],list):
@@ -13015,6 +13015,65 @@ def _ksn_v663_968gc_intel_summary(summary, profile, team_id, season):
         return summary
 
 
+
+def _ksn_v663_970n_team_completeness(profile, team_id, season):
+    """Validate completed football team profiles without provider calls."""
+    p = dict(profile) if isinstance(profile, dict) else {}
+    try:
+        tid = int(team_id)
+        yr = int(season)
+        team = p.get("team") or {}
+        league = p.get("league") or {}
+        table = p.get("standings") or []
+        squad = p.get("players") or []
+        matches = (p.get("past10") or []) + (p.get("future") or [])
+
+        identity_ok = (
+            tid > 0
+            and int(team.get("id") or 0) == tid
+            and bool(team.get("name"))
+            and str(team.get("name")) != str(tid)
+        )
+        league_ok = (
+            int(league.get("id") or 0) > 0
+            and int(league.get("season") or yr) == yr
+        )
+
+        matching = [
+            row for row in table
+            if isinstance(row, dict)
+            and int((row.get("team") or {}).get("id") or 0) == tid
+        ]
+        standings_ok = league_ok and len(matching) == 1
+
+        player_ids = [
+            int(row.get("id") or 0)
+            for row in squad if isinstance(row, dict)
+        ]
+        squad_ok = (
+            bool(squad)
+            and len(player_ids) == len(squad)
+            and all(pid > 0 for pid in player_ids)
+            and len(set(player_ids)) == len(player_ids)
+        )
+        matches_ok = bool(matches)
+        statistics_ok = bool(_ksn_valid_team_stats(p.get("teamStats")))
+
+        complete = bool(
+            identity_ok
+            and standings_ok
+            and squad_ok
+            and matches_ok
+            and statistics_ok
+        )
+    except (TypeError, ValueError, AttributeError):
+        complete = False
+
+    p["dataComplete"] = complete
+    p["repairRequired"] = not complete
+    return p
+
+
 def _ksn_v590_team_view(profile, team_id, season):
     base = dict(profile) if isinstance(profile, dict) else {}
     snap = _dashboard_snapshot_get(f"team_profile_last_good:{team_id}:{season}")
@@ -13282,6 +13341,7 @@ def _ksn_v590_team_view(profile, team_id, season):
         base, team_id, season
     )
     base = _ksn_v663_968fx_season_stats(base, team_id, season)
+    base = _ksn_v663_970n_team_completeness(base, team_id, season)
     base["cached"] = True
     base["refreshing"] = False
     return base
