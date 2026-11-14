@@ -12421,6 +12421,231 @@ def _ksn_v644_standings_identity(team_id, season):
         log.warning("v644 standings identity read failed team=%s: %s", team_id, type(exc).__name__)
     return None
 
+
+def _ksn_v663_968ek_fresh_epl_standings(base, team_id, season):
+    """Cache-only EPL standings recovery; no provider or database writes."""
+    if int(season) != 2026:
+        return base
+
+    league = base.get("league") or {}
+    if not isinstance(league, dict) or str(league.get("id")) != "39":
+        return base
+
+    key = "standings2627:last_good:PREMIER LEAGUE"
+
+    def _snapshot_epoch(value):
+        """Normalize PostgreSQL datetime and numeric snapshot timestamps."""
+        from datetime import datetime, timezone
+        import math
+
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            number = float(value)
+            return number if math.isfinite(number) else None
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.timestamp()
+        return None
+
+    try:
+        snapshot = _dashboard_snapshot_get(key) or {}
+        data = snapshot.get("data") or {}
+        leagues = data.get("leagues") or []
+
+        if not isinstance(leagues, list):
+            return base
+
+        for entry in leagues:
+            if not isinstance(entry, dict):
+                continue
+
+            if str(entry.get("leagueId")) != "39":
+                continue
+
+            if str(entry.get("season")) != "2026":
+                continue
+
+            rows = entry.get("table") or []
+
+            if not isinstance(rows, list) or len(rows) != 20:
+                continue
+
+            ids = []
+            ranks = []
+            normalized = []
+
+            for row in rows:
+                if not isinstance(row, dict):
+                    break
+
+                tid = int(row.get("teamId") or 0)
+                rank = int(row.get("rank") or 0)
+                played = int(row.get("played") or 0)
+                wins = int(row.get("win") or 0)
+                draws = int(row.get("draw") or 0)
+                losses = int(row.get("lose") or 0)
+                points = int(row.get("points") or 0)
+                goals_for = int(row.get("goalsFor") or 0)
+                goals_against = int(row.get("goalsAgainst") or 0)
+
+                name = row.get("team")
+                if (
+                    tid <= 0 or not isinstance(name, str)
+                    or not name.strip()
+                    or rank < 1 or rank > 20
+                    or min(played, wins, draws, losses, points,
+                           goals_for, goals_against) < 0
+                    or wins + draws + losses != played
+                ):
+                    break
+
+                ids.append(tid)
+                ranks.append(rank)
+
+                normalized.append({
+                    "rank": rank,
+                    "team": {
+                        "id": tid,
+                        "name": name,
+                        "logo": row.get("logo"),
+                    },
+                    "all": {
+                        "played": played,
+                        "win": wins,
+                        "draw": draws,
+                        "lose": losses,
+                        "goals": {
+                            "for": goals_for,
+                            "against": goals_against,
+                        },
+                    },
+                    "goalsDiff": goals_for - goals_against,
+                    "points": points,
+                    "form": row.get("form") or "",
+                    "description": row.get("description") or "",
+                })
+            else:
+                if (
+                    len(set(ids)) != 20
+                    or set(ranks) != set(range(1, 21))
+                    or int(team_id) not in ids
+                ):
+                    continue
+
+                previous = base.get("standings") or []
+                previous_by_id = {}
+
+                for old in previous:
+                    if not isinstance(old, dict):
+                        continue
+                    old_team = old.get("team") or {}
+                    if not isinstance(old_team, dict):
+                        continue
+                    old_id = int(old_team.get("id") or 0)
+                    if old_id > 0:
+                        previous_by_id[old_id] = old
+
+                new_by_id = {
+                    row["team"]["id"]: row for row in normalized
+                }
+
+                # Never replace a table when any known club would lose
+                # recorded matches. This protects against older snapshots.
+                if any(
+                    new_by_id[tid]["all"]["played"]
+                    < int((old.get("all") or {}).get("played") or 0)
+                    for tid, old in previous_by_id.items()
+                    if tid in new_by_id
+                ):
+                    return base
+
+                old_team_row = previous_by_id.get(int(team_id))
+                new_team_row = new_by_id[int(team_id)]
+
+                old_played = (
+                    int((old_team_row.get("all") or {}).get("played") or 0)
+                    if old_team_row else -1
+                )
+
+                # Equal match counts may still contain corrected points,
+                # rankings or results. Only replace if the current profile
+                # agrees with the older canonical record and the complete
+                # last-good snapshot is demonstrably newer.
+                equal_count_verified = False
+
+                if (
+                    len(previous_by_id) == 20
+                    and old_team_row is not None
+                    and new_team_row["all"]["played"] == old_played
+                    and snapshot.get("updated_at") is not None
+                ):
+                    canonical = _dashboard_snapshot_get(
+                        "canonical_standings:39:2026"
+                    ) or {}
+                    canonical_data = canonical.get("data") or {}
+                    canonical_rows = canonical_data.get("standings") or []
+
+                    if isinstance(canonical_rows, list) and len(canonical_rows) == 20:
+                        canonical_by_id = {}
+                        for stored in canonical_rows:
+                            if not isinstance(stored, dict):
+                                break
+                            stored_team = stored.get("team") or {}
+                            stored_id = int(stored_team.get("id") or 0)
+                            if stored_id <= 0 or stored_id in canonical_by_id:
+                                break
+                            canonical_by_id[stored_id] = stored
+                        else:
+                            canonical_team = canonical_by_id.get(int(team_id))
+                            if (
+                                canonical_team is not None
+                                and set(canonical_by_id) == set(previous_by_id)
+                                and canonical.get("updated_at") is not None
+                                and _snapshot_epoch(snapshot["updated_at"])
+                                    is not None
+                                and _snapshot_epoch(canonical["updated_at"])
+                                    is not None
+                                and _snapshot_epoch(snapshot["updated_at"])
+                                    > _snapshot_epoch(canonical["updated_at"])
+                            ):
+                                equal_count_verified = all(
+                                    int(old_team_row.get(field) or 0)
+                                        == int(canonical_team.get(field) or 0)
+                                    for field in ("rank", "points")
+                                ) and (
+                                    int((old_team_row.get("all") or {}).get("played") or 0)
+                                    == int((canonical_team.get("all") or {}).get("played") or 0)
+                                )
+
+                # Advancing matches or demonstrably newer corrections
+                # may replace older standings. Never regress played counts.
+                if (
+                    len(previous_by_id) < 20
+                    or new_team_row["all"]["played"] > old_played
+                    or equal_count_verified
+                ):
+                    base["standings"] = normalized
+                    base["standingsSource"] = "verified-epl-last-good"
+
+                return base
+
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        log.warning(
+            "V663 968EK standings recovery skipped team=%s error=%s",
+            team_id,
+            type(exc).__name__,
+        )
+
+    return base
+
+
 def _ksn_v590_team_view(profile, team_id, season):
     base = dict(profile) if isinstance(profile, dict) else {}
     snap = _dashboard_snapshot_get(f"team_profile_last_good:{team_id}:{season}")
@@ -12684,6 +12909,9 @@ def _ksn_v590_team_view(profile, team_id, season):
             team_id, type(_exc).__name__
         )
 
+    base = _ksn_v663_968ek_fresh_epl_standings(
+        base, team_id, season
+    )
     base["cached"] = True
     base["refreshing"] = False
     return base
