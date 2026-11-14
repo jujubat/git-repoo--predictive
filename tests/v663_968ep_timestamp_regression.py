@@ -144,6 +144,29 @@ check("Only approved snapshots read",
           "canonical_standings:39:2026",
       }))
 
+from datetime import datetime, timezone, timedelta
+
+configure(
+    latest_time=datetime(2026, 11, 14, 17, 29, tzinfo=timezone.utc),
+    canonical_time=datetime(2026, 10, 31, 9, 10, tzinfo=timezone.utc),
+)
+check("PostgreSQL timezone-aware datetime supported",
+      run()["points"] == 27)
+
+configure(
+    latest_time=datetime(2026, 11, 14, 17, 29),
+    canonical_time=datetime(2026, 10, 31, 9, 10),
+)
+check("PostgreSQL naive datetime supported",
+      run()["points"] == 27)
+
+configure(
+    latest_time=datetime(2026, 10, 31, 9, 10, tzinfo=timezone.utc),
+    canonical_time=datetime(2026, 11, 14, 17, 29, tzinfo=timezone.utc),
+)
+check("Older PostgreSQL datetime rejected",
+      run()["points"] == 21)
+
 print(f"=== RESULTS: {passed} PASS ===")
 print("Database connections: 0")
 print("Provider requests: 0")

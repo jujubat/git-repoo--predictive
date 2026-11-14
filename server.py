@@ -12433,6 +12433,27 @@ def _ksn_v663_968ek_fresh_epl_standings(base, team_id, season):
 
     key = "standings2627:last_good:PREMIER LEAGUE"
 
+    def _snapshot_epoch(value):
+        """Normalize PostgreSQL datetime and numeric snapshot timestamps."""
+        from datetime import datetime, timezone
+        import math
+
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            number = float(value)
+            return number if math.isfinite(number) else None
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return value.timestamp()
+        return None
+
     try:
         snapshot = _dashboard_snapshot_get(key) or {}
         data = snapshot.get("data") or {}
@@ -12587,8 +12608,12 @@ def _ksn_v663_968ek_fresh_epl_standings(base, team_id, season):
                                 canonical_team is not None
                                 and set(canonical_by_id) == set(previous_by_id)
                                 and canonical.get("updated_at") is not None
-                                and float(snapshot["updated_at"])
-                                    > float(canonical["updated_at"])
+                                and _snapshot_epoch(snapshot["updated_at"])
+                                    is not None
+                                and _snapshot_epoch(canonical["updated_at"])
+                                    is not None
+                                and _snapshot_epoch(snapshot["updated_at"])
+                                    > _snapshot_epoch(canonical["updated_at"])
                             ):
                                 equal_count_verified = all(
                                     int(old_team_row.get(field) or 0)
