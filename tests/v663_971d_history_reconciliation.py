@@ -2,6 +2,7 @@ import ast
 import asyncio
 import datetime
 import logging
+import os
 import time
 import warnings
 from pathlib import Path
@@ -141,6 +142,8 @@ def run_case(label, league, verified, expected):
         "datetime": datetime.datetime,
         "timezone": datetime.timezone,
         "asyncio": asyncio,
+        "os": os,
+        "_ksn_v663_staging_football_only": lambda: False,
         "log": logging.getLogger("v663-971d"),
         "_current_season": lambda: 2026,
         "_ksn_v622_on": lambda team: False,

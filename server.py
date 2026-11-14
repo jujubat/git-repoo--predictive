@@ -11454,7 +11454,7 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(6,g
                 # V663 Step 971C: Reconcile the current season against
                 # the existing validated EPL last-good standings.
                 # Historical seasons and other leagues remain unchanged.
-                if yr==current and int(league_hint)==39:
+                if yr==current and league_hint is not None and int(league_hint)==39:
                     verified_base={
                         "league":{"id":39},
                         "standings":(
@@ -11503,6 +11503,60 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(6,g
     # v622: seasons with no stored row are filled from that season's league table (cached /standings call, fetched
     # concurrently, saved permanently) so the page shows the current season + 6 past seasons.
     miss=[y for y in years if sources.get(y)=="none"] if (v622 or league_hint in _KSN_V644_BIG5) else []
+
+    # V663 STEP 971R: Cache-only, opt-in History recovery.
+    # No API-Football calls, snapshot writes or background tasks.
+    # Disabled by default and restricted to the staging environment.
+    if (
+        os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+        and os.getenv("KSN_V663_HISTORY_CACHE_READ", "0") == "1"
+        and not _ksn_v663_staging_football_only()
+    ):
+        cache_missing = [
+            y for y in years if sources.get(y) == "none"
+        ]
+        if cache_missing:
+            try:
+                existing_history = {
+                    y: snaps.get(f"team_history_v614:{team}:{y}")
+                    for y in years
+                }
+                recovered = await asyncio.wait_for(
+                    _ksn_v663_971p_cached_history_dry_run(
+                        team,
+                        cache_missing,
+                        _persistent_cache_get,
+                        existing=existing_history,
+                        max_lookups=4,
+                    ),
+                    timeout=5.0,
+                )
+                for item in recovered.get("planned", []):
+                    data = item.get("data") or {}
+                    y = data.get("season")
+                    if (
+                        type(y) is not int
+                        or y not in cache_missing
+                        or sources.get(y) != "none"
+                        or item.get("key") !=
+                           f"team_history_v614:{team}:{y}"
+                    ):
+                        continue
+                    row = _ksn_v614_history_row(
+                        team, y, {"data": data}
+                    )
+                    if _ksn_v663_history_complete(row):
+                        out.append(row)
+                        sources[y] = "verified-cache-only"
+            except Exception as exc:
+                log.warning(
+                    "V663 971R cache-only History skipped team=%s error=%s",
+                    team, type(exc).__name__
+                )
+
+    # Recompute missing years after applying verified cached rows.
+    miss=[y for y in years if sources.get(y)=="none"] if (v622 or league_hint in _KSN_V644_BIG5) else []
+
     if miss and league_hint and not _v448_api_football_provider_locked():
         async def _fill(y):
             try:
