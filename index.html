@@ -11147,7 +11147,8 @@ if(document.readyState==='loading'){
   const goPublic=async(kind,id,name)=>{if(Number(id)>0){try{const d=await get('/public-route/'+kind+'/'+Number(id),{name:String(name||'')});if(d?.url){location.assign(d.url);return}}catch(_){}}location.assign('/'+(kind==='team'?'teams':'players')+'/'+slugX(String(name||kind)));};
   const goTeam=(id,name)=>goPublic('team',id,name||'Team');
   const goPlayer=(id,name)=>goPublic('player',id,name||'Player');
-  window.openKasiTeamPage=(id,name)=>goTeam(id,name||'Team');
+  window.__ksnV663CanonicalFootballTeam=(id,name)=>goTeam(id,name||'Team');
+  window.openKasiTeamPage=(id,name)=>window.__ksnV663CanonicalFootballTeam(id,name);
   window.openKasiPlayerPage=(id,name)=>goPlayer(id,name||'Player');
   window.openKasiMatchPlayerPage=function(fixtureId,id,name){try{sessionStorage.setItem('kcPlayerMatchContext',JSON.stringify({fixtureId:Number(fixtureId)||0,playerId:Number(id)||0,name:name||'Player',at:Date.now()}));}catch(_){} goPlayer(id,name||'Player');};
   window.kasiscoreOpenTeamRoute=function(name){goTeam('',name);};
@@ -13395,10 +13396,17 @@ html,body,.app{content-visibility:auto}
  };
  window.openLiveMatchPage=window.openStatsPanel;
  window.v249OpenLiveStats=(sport,id,league='')=>window.openStatsPanel(id,sport,league);
- window.openKasiTeamPage=(id)=>{
-   const ref=String(id??'').trim();if(!ref||ref==='0')return;
-   go('/teams/'+clean(ref));
- };
+ window.openKasiTeamPage=(id,name)=>{
+    const ref=String(id??'').trim();
+    if(!ref||ref==='0')return;
+    if(/^[1-9]\d*$/.test(ref)){
+      if(typeof window.__ksnV663CanonicalFootballTeam==='function'){
+        return window.__ksnV663CanonicalFootballTeam(Number(ref),name||'Team');
+      }
+      return go('/teams/'+clean(ref));
+    }
+    go('/teams/'+clean(ref));
+  };
  window.openKasiPlayerPage=(id)=>{
    const ref=String(id??'').trim();if(!ref||ref==='0')return;
    go('/players/'+clean(ref));
@@ -19496,7 +19504,7 @@ async function showTeam(name){const box=get('mk901TeamDetails');if(!box)return;c
  const metrics=text(box,'div','','mk901-metrics');const played=Number(row?.all?.played??stats?.fixtures?.played?.total);const won=Number(row?.all?.win??stats?.fixtures?.wins?.total);const pct=Number.isFinite(played)&&played>0&&Number.isFinite(won)?(won/played*100).toFixed(1)+'%':'—';
  metric(metrics,'League position',row.rank??'—');metric(metrics,'Win rate',pct);metric(metrics,'Matches played',Number.isFinite(played)?played:'—');metric(metrics,'Points',row.points??'—');metric(metrics,'Goal difference',row.goalsDiff??'—');metric(metrics,'Current form',Array.isArray(d?.form)?d.form.join(' '):(row.form||'—'));
  renderSelectedTeamMatches(box,d?.past10||[],d?.future||[],t);
- const actions=text(box,'div','','mk901-actions');const profile=document.createElement('a');profile.textContent='Full team profile, squad and injuries';const ref=String(teamId(name));profile.href='/teams/'+encodeURIComponent(ref);actions.append(profile);
+ const actions=text(box,'div','','mk901-actions');const profile=document.createElement('a');profile.textContent='Full team profile, squad and injuries';const ref=String(resolvedId);profile.href='/teams/'+encodeURIComponent(ref);actions.append(profile);
  text(box,'p','H2H requires a selected opponent or match. Open a match profile to view verified head-to-head data.','mk901-note');
  }catch(e){if(ticket!==sequence)return;box.replaceChildren();text(box,'p','Unable to resolve this club to a verified team profile. Re-select the club using verified search. No statistics have been invented.','mk901-note');}}
 function installTeam(){const fav=get('ksnV663MyKasi');if(!fav||get('mk901TeamDetails'))return;const detail=text(fav,'section','','mk901-detail');detail.id='mk901TeamDetails';text(detail,'p','Select a saved team to see its football statistics.');const list=get('favouritesList');const area=get('ksnMkDashboard')||fav;area.addEventListener('click',event=>{const tr=event.target.closest('tr');if(!tr||!tr.closest('.ksn-mk-table'))return;if(event.target.closest('button'))return;const name=tr.querySelector('td')?.textContent?.trim();const saved=asList(data(FAV));if(name&&saved.some(x=>String(x).toLowerCase()===name.toLowerCase()))showTeam(name)});
