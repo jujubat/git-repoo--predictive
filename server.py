@@ -12359,12 +12359,83 @@ def _ksn_v591_standings(team_id, league_id, season):
     return []
 
 
+def _ksn_v663_969m_verified_global_league(team_id, season):
+    # Read-only verified memberships and cached standings.
+    # Never guess from fixture counts or call the provider.
+    if not DATABASE_URL or psycopg2 is None:
+        return None
+
+    conn = None
+    try:
+        tid, yr = int(team_id), int(season)
+        if tid <= 0 or yr <= 0:
+            return None
+
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=4)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT to_regclass('public.ksn_football_memberships_v530')"
+            )
+            if not cur.fetchone()[0]:
+                return None
+
+            cur.execute(
+                """SELECT DISTINCT competition_id
+                   FROM ksn_football_memberships_v530
+                   WHERE provider=%s AND team_id=%s AND season=%s
+                   ORDER BY competition_id LIMIT 100""",
+                ("api-football", tid, yr),
+            )
+            ids = [
+                int(row[0]) for row in cur.fetchall()
+                if row and row[0] is not None
+            ]
+
+        valid = []
+        for lid in ids:
+            if lid <= 0:
+                continue
+
+            standings = _ksn_v591_standings(tid, lid, yr)
+
+            if not isinstance(standings, list):
+                continue
+
+            for row in standings:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    row_id = int((row.get("team") or {}).get("id") or 0)
+                except (ValueError, TypeError):
+                    continue
+
+                if row_id == tid:
+                    valid.append(lid)
+                    break
+
+        # Multiple verified competitions are ambiguous.
+        return valid[0] if len(valid) == 1 else None
+
+    except Exception as exc:
+        log.warning(
+            "v663 969M global league lookup skipped: %s",
+            type(exc).__name__,
+        )
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _ksn_v591_pg_team_view(profile, team_id, season):
     p = dict(profile or {})
     league = dict(p.get('league') or {})
     league_id = league.get('id') or _team_league_hint_db(team_id,season)
     if not league_id:
         league_id = _ksn_v591_pg_league(team_id,season)
+    if not league_id:
+        league_id = _ksn_v663_969m_verified_global_league(team_id,season)
     if league_id:
         try:
             league_id = int(league_id)
