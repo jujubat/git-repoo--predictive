@@ -12646,6 +12646,304 @@ def _ksn_v663_968ek_fresh_epl_standings(base, team_id, season):
     return base
 
 
+
+def _ksn_v663_968fx_season_stats(base, team_id, season):
+    """Verified EPL season totals; incomplete samples never become totals."""
+    if not isinstance(base, dict):
+        return base
+    try:
+        if int(team_id) != 42 or int(season) != 2026:
+            return base
+        if int((base.get("league") or {}).get("id") or 0) != 39:
+            return base
+        if base.get("standingsSource") != "verified-epl-last-good":
+            return base
+
+        standing = next(
+            (
+                r for r in (base.get("standings") or [])
+                if isinstance(r, dict)
+                and int((r.get("team") or {}).get("id") or 0) == 42
+            ),
+            None,
+        )
+        if not standing:
+            return base
+
+        all_ = standing.get("all") or {}
+        goals = all_.get("goals") or {}
+        expected = (
+            int(all_.get("played") or 0),
+            int(all_.get("win") or 0),
+            int(all_.get("draw") or 0),
+            int(all_.get("lose") or 0),
+            int(goals.get("for") or 0),
+            int(goals.get("against") or 0),
+        )
+        if expected[0] <= 0:
+            return base
+        if expected[1] + expected[2] + expected[3] != expected[0]:
+            return base
+
+        # The standings provide authoritative season aggregate values.
+        # Advanced statistics require complete fixture-by-fixture evidence.
+        summary = {
+            "played": expected[0],
+            "wins": expected[1],
+            "draws": expected[2],
+            "losses": expected[3],
+            "goalsFor": expected[4],
+            "goalsAgainst": expected[5],
+            "cleanSheets": None,
+            "failedToScore": None,
+            "form": standing.get("form") or "",
+            "homePlayed": None,
+            "awayPlayed": None,
+            "homeWins": None,
+            "awayWins": None,
+        }
+
+        from datetime import datetime, timezone
+
+        def timestamp(value):
+            try:
+                d = datetime.fromisoformat(
+                    str(value).replace("Z", "+00:00")
+                )
+                if d.tzinfo is None:
+                    return None
+                return d.astimezone(timezone.utc).timestamp()
+            except (TypeError, ValueError):
+                return None
+
+        mirror = _ksn_v607_mirrored_fixtures(42, 2026)
+        identities = {}
+        finished = {}
+        conflict = False
+
+        for f in mirror:
+            if not isinstance(f, dict):
+                continue
+            lg = f.get("league") or {}
+            fx = f.get("fixture") or {}
+            teams = f.get("teams") or {}
+            try:
+                if int(lg.get("id") or 0) != 39:
+                    continue
+                if int(lg.get("season") or 0) != 2026:
+                    continue
+                fid = int(fx.get("id") or 0)
+                hid = int((teams.get("home") or {}).get("id") or 0)
+                aid = int((teams.get("away") or {}).get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+
+            if not fid or 42 not in (hid, aid) or hid == aid:
+                continue
+
+            identity = (hid, aid, timestamp(fx.get("date")))
+            if identity[2] is None:
+                continue
+
+            if fid in identities:
+                conflict = True
+                break
+            identities[fid] = identity
+
+            if str((fx.get("status") or {}).get("short") or "").upper() != "FT":
+                continue
+
+            g = f.get("goals") or {}
+            hg, ag = g.get("home"), g.get("away")
+            if type(hg) is not int or type(ag) is not int:
+                continue
+            if hg < 0 or ag < 0:
+                conflict = True
+                break
+
+            ft = (f.get("score") or {}).get("fulltime") or {}
+            if (type(ft.get("home")) is int
+                    and type(ft.get("away")) is int
+                    and (hg, ag) != (ft["home"], ft["away"])):
+                conflict = True
+                break
+
+            finished[fid] = (hid, aid, hg, ag)
+
+        # Upgrade older NS records only from same-ID, same-team,
+        # same-kickoff verified finished results in the live profile.
+        if not conflict:
+            for m in base.get("past10") or []:
+                if not isinstance(m, dict):
+                    continue
+                try:
+                    fid = int(m.get("id") or 0)
+                    lid = int(m.get("leagueId") or 0)
+                    hid = int(m.get("homeId") or 0)
+                    aid = int(m.get("awayId") or 0)
+                except (ValueError, TypeError):
+                    continue
+
+                if lid != 39 or fid not in identities:
+                    continue
+                if str(m.get("status") or "").upper() != "FT":
+                    continue
+
+                stored_hid, stored_aid, kickoff = identities[fid]
+                observed = timestamp(m.get("date"))
+
+                if ((hid, aid) != (stored_hid, stored_aid)
+                        or observed is None
+                        or abs(kickoff - observed) > 300):
+                    conflict = True
+                    break
+
+                hg, ag = m.get("homeScore"), m.get("awayScore")
+                if type(hg) is not int or type(ag) is not int:
+                    continue
+                if hg < 0 or ag < 0:
+                    conflict = True
+                    break
+
+                candidate = (hid, aid, hg, ag)
+                if fid in finished and finished[fid] != candidate:
+                    conflict = True
+                    break
+                finished[fid] = candidate
+
+        complete = not conflict and len(finished) == expected[0]
+
+        if complete:
+            wins = draws = losses = gf = ga = 0
+            clean = failed = home_p = away_p = home_w = away_w = 0
+
+            for hid, aid, hg, ag in finished.values():
+                is_home = hid == 42
+                ours, conceded = (hg, ag) if is_home else (ag, hg)
+
+                gf += ours
+                ga += conceded
+                clean += int(conceded == 0)
+                failed += int(ours == 0)
+                home_p += int(is_home)
+                away_p += int(not is_home)
+
+                if ours > conceded:
+                    wins += 1
+                    home_w += int(is_home)
+                    away_w += int(not is_home)
+                elif ours == conceded:
+                    draws += 1
+                else:
+                    losses += 1
+
+            complete = (
+                (len(finished), wins, draws, losses, gf, ga)
+                == expected
+            )
+
+            if complete:
+                summary.update({
+                    "cleanSheets": clean,
+                    "failedToScore": failed,
+                    "homePlayed": home_p,
+                    "awayPlayed": away_p,
+                    "homeWins": home_w,
+                    "awayWins": away_w,
+                })
+
+        stats = _ksn_stats_from_summary(summary, 42, 39, 2026)
+        if not stats:
+            return base
+
+        stats["derivedFromCompletedFixtures"] = complete
+        stats["derivedFromLeagueStandings"] = True
+        stats["verifiedCompleteSeason"] = complete
+        stats["seasonStatsSource"] = (
+            "verified-fixture-reconciliation"
+            if complete else "verified-standings-partial-fixtures"
+        )
+        stats["verifiedFixtureCount"] = (
+            len(finished) if not conflict else 0
+        )
+
+        result = dict(base)
+        result["teamStats"] = stats
+        result["seasonStatsComplete"] = complete
+        return result
+
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        log.warning(
+            "V663 968FX stats reconciliation skipped team=%s error=%s",
+            team_id,
+            type(exc).__name__,
+        )
+        return base
+
+
+
+def _ksn_v663_968gc_intel_summary(summary, profile, team_id, season):
+    """Use verified season statistics in the separate intelligence summary."""
+    if not isinstance(summary, dict) or not isinstance(profile, dict):
+        return summary
+
+    try:
+        if int(team_id) != 42 or int(season) != 2026:
+            return summary
+        if int((profile.get("league") or {}).get("id") or 0) != 39:
+            return summary
+        if profile.get("standingsSource") != "verified-epl-last-good":
+            return summary
+
+        st = profile.get("teamStats") or {}
+        if not st.get("derivedFromLeagueStandings"):
+            return summary
+
+        fx = st.get("fixtures") or {}
+        goals = st.get("goals") or {}
+
+        fields = {
+            "played": (fx.get("played") or {}).get("total"),
+            "wins": (fx.get("wins") or {}).get("total"),
+            "draws": (fx.get("draws") or {}).get("total"),
+            "losses": (fx.get("loses") or {}).get("total"),
+            "goalsFor": ((goals.get("for") or {}).get("total") or {}).get("total"),
+            "goalsAgainst": ((goals.get("against") or {}).get("total") or {}).get("total"),
+        }
+
+        if not all(type(v) is int and v >= 0 for v in fields.values()):
+            return summary
+        if fields["played"] <= 0:
+            return summary
+        if fields["wins"] + fields["draws"] + fields["losses"] != fields["played"]:
+            return summary
+
+        # Never restore incomplete clean-sheet, home/away or
+        # failed-to-score values from older archives or SQL data.
+        complete = st.get("verifiedCompleteSeason") is True
+        fields.update({
+            "cleanSheets": (st.get("clean_sheet") or {}).get("total") if complete else None,
+            "failedToScore": (st.get("failed_to_score") or {}).get("total") if complete else None,
+            "homePlayed": (fx.get("played") or {}).get("home") if complete else None,
+            "awayPlayed": (fx.get("played") or {}).get("away") if complete else None,
+            "homeWins": (fx.get("wins") or {}).get("home") if complete else None,
+            "awayWins": (fx.get("wins") or {}).get("away") if complete else None,
+        })
+
+        result = dict(summary)
+        result.update(fields)
+        result["goalDifference"] = fields["goalsFor"] - fields["goalsAgainst"]
+        result["winRate"] = round(
+            fields["wins"] * 100 / fields["played"], 1
+        )
+        result["seasonStatsComplete"] = complete
+        result["seasonStatsSource"] = st.get("seasonStatsSource")
+        return result
+
+    except (TypeError, ValueError, AttributeError):
+        return summary
+
+
 def _ksn_v590_team_view(profile, team_id, season):
     base = dict(profile) if isinstance(profile, dict) else {}
     snap = _dashboard_snapshot_get(f"team_profile_last_good:{team_id}:{season}")
@@ -12912,6 +13210,7 @@ def _ksn_v590_team_view(profile, team_id, season):
     base = _ksn_v663_968ek_fresh_epl_standings(
         base, team_id, season
     )
+    base = _ksn_v663_968fx_season_stats(base, team_id, season)
     base["cached"] = True
     base["refreshing"] = False
     return base
@@ -13688,6 +13987,8 @@ async def _ksn_v621_build_intel(team:int, season:int, refresh:int):
             if not _ksn_valid_team_stats(prof.get("teamStats")) and _ksn_valid_team_stats(snap_data.get("teamStats")):
                 prof["teamStats"] = snap_data["teamStats"]
     prof = _ksn_v588_complete_profile(prof, team, season)
+    # Reconcile again after profile completion so stale SQL data cannot win.
+    prof = _ksn_v663_968fx_season_stats(prof, team, season)
     _v622=_ksn_v622_on(team)
     _canon_default={"teamId":team,"leagueId":None,"fantasyPlayers":[],"matched":False}
     canonical_task=None
@@ -13769,6 +14070,8 @@ async def _ksn_v621_build_intel(team:int, season:int, refresh:int):
     summary["winRate"]=round((summary.get("wins") or 0)*100/summary.get("played"),1) if summary.get("played") and summary.get("wins") is not None else derived.get("winRate")
     summary.update({k:(derived.get(k) if derived.get('played') else standings_summary.get(k))
                     for k in ("homePlayed","homeWins","awayPlayed","awayWins")})
+    # Apply verified season totals after all legacy fixture fallbacks.
+    summary = _ksn_v663_968gc_intel_summary(summary, prof, team, season)
     fantasy_players=[dict(x) for x in (canonical.get("fantasyPlayers") or []) if isinstance(x,dict)]
     squad_players=[dict(x) for x in (prof.get("players") or []) if isinstance(x,dict)]
     leading_players=[]; fantasy_match={"matched":0,"fantasyRows":len(fantasy_players),"squad":len(squad_players),"unmatchedFantasy":[]}
