@@ -10610,6 +10610,732 @@ def _player_history_summary(profile: dict) -> dict:
     return {"season":profile.get("season"),"teams":teams,"leagues":leagues,"appearances":apps,"starts":starts,"minutes":minutes,
             "goals":goals,"assists":assists,"yellow":yellow,"red":red,"cleanSheets":clean,"saves":saves,"statistics":rows}
 
+def _ksn_v663_971g_history_league_candidates(catalogue, season):
+    """Return possible domestic league IDs, never inferred memberships.
+
+    Catalogue coverage alone does not prove team participation.
+    Each returned league must still be verified against its
+    exact season standings before creating a history record.
+    """
+    try:
+        year = int(season)
+    except (TypeError, ValueError):
+        return []
+
+    if year <= 0 or not isinstance(catalogue, (dict, list)):
+        return []
+
+    entries = (
+        catalogue.get("response") or []
+        if isinstance(catalogue, dict) else catalogue
+    )
+
+    if not isinstance(entries, list):
+        return []
+
+    found = set()
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+
+        league = entry.get("league") or {}
+        country = entry.get("country") or {}
+
+        if not isinstance(league, dict) or not isinstance(country, dict):
+            continue
+
+        if str(league.get("type") or "").strip().lower() != "league":
+            continue
+
+        nation = str(country.get("name") or "").strip().lower()
+
+        # International, friendly and unidentified competitions are
+        # not domestic league-table evidence.
+        if not nation or nation == "world":
+            continue
+
+        try:
+            league_id = int(league.get("id"))
+        except (ValueError, TypeError):
+            continue
+
+        if league_id <= 0:
+            continue
+
+        seasons = entry.get("seasons") or []
+        if not isinstance(seasons, list):
+            continue
+
+        for item in seasons:
+            if not isinstance(item, dict):
+                continue
+            try:
+                listed_year = int(item.get("year"))
+            except (ValueError, TypeError):
+                continue
+
+            if listed_year == year:
+                found.add(league_id)
+
+    # Return all candidates; never guess which league a team
+    # played in when several leagues advertise the same year.
+    return sorted(found)
+
+
+def _ksn_v663_971h_verify_history_membership(
+    team_id, season, candidate_ids, standings_by_league
+):
+    """Select one verified historical league, or fail closed.
+
+    Only exact provider league/season identity and a unique team
+    standings row establish participation. No IO or mutations.
+    """
+    try:
+        tid, yr = int(team_id), int(season)
+        if tid <= 0 or yr <= 0:
+            return None
+        if not isinstance(candidate_ids, (list, tuple)):
+            return None
+        if not isinstance(standings_by_league, dict):
+            return None
+
+        ids = [int(x) for x in candidate_ids]
+        if any(x <= 0 for x in ids) or len(ids) != len(set(ids)):
+            return None
+    except (ValueError, TypeError):
+        return None
+
+    verified = []
+
+    for lid in ids:
+        payload = standings_by_league.get(lid)
+        if not isinstance(payload, dict):
+            continue
+
+        responses = payload.get("response")
+        if not isinstance(responses, list) or len(responses) != 1:
+            continue
+
+        league = responses[0].get("league") or {}
+        if not isinstance(league, dict):
+            continue
+
+        try:
+            if (
+                int(league.get("id") or 0) != lid
+                or int(league.get("season") or 0) != yr
+            ):
+                continue
+        except (TypeError, ValueError):
+            continue
+
+        groups = league.get("standings") or []
+        if not isinstance(groups, list):
+            continue
+
+        rows = []
+        for group in groups:
+            if not isinstance(group, list):
+                rows = []
+                break
+            rows.extend(group)
+
+        if not rows or not all(isinstance(r, dict) for r in rows):
+            continue
+
+        team_ids = []
+        try:
+            for row in rows:
+                team_ids.append(int((row.get("team") or {}).get("id") or 0))
+        except (TypeError, ValueError):
+            continue
+
+        if (
+            any(x <= 0 for x in team_ids)
+            or len(team_ids) != len(set(team_ids))
+            or team_ids.count(tid) != 1
+        ):
+            continue
+
+        row = rows[team_ids.index(tid)]
+        all_stats = row.get("all") or {}
+        goals = all_stats.get("goals") or {}
+
+        metrics = (
+            all_stats.get("played"),
+            all_stats.get("win"),
+            all_stats.get("draw"),
+            all_stats.get("lose"),
+            goals.get("for"),
+            goals.get("against"),
+            row.get("points"),
+            row.get("rank"),
+        )
+
+        if not all(type(x) is int for x in metrics):
+            continue
+
+        played, wins, draws, losses, gf, ga, points, rank = metrics
+
+        if (
+            played <= 0
+            or rank <= 0
+            or min(wins, draws, losses, gf, ga) < 0
+            or wins + draws + losses != played
+        ):
+            continue
+
+        verified.append({
+            "teamId": tid,
+            "season": yr,
+            "leagueId": lid,
+            "leagueName": league.get("name"),
+            "rank": rank,
+            "points": points,
+            "played": played,
+            "wins": wins,
+            "draws": draws,
+            "losses": losses,
+            "goalsFor": gf,
+            "goalsAgainst": ga,
+        })
+
+    return verified[0] if len(verified) == 1 else None
+
+
+async def _ksn_v663_971i_history_recovery_plan(
+    team_id, years, catalogue, fetch_standings,
+    existing=None, max_requests=8
+):
+    """Prepare verified History snapshots without writing to storage.
+
+    The caller supplies a cached/quota-controlled provider reader.
+    No membership is inferred from catalogue coverage alone.
+    Existing valid history is preserved. Incomplete candidate
+    checks fail closed rather than choosing an arbitrary league.
+    """
+    import asyncio
+
+    result = {
+        "teamId": team_id,
+        "planned": [],
+        "preserved": [],
+        "unresolved": {},
+        "requests": 0,
+        "writes": 0,
+    }
+
+    try:
+        tid = int(team_id)
+        budget = int(max_requests)
+        requested = [int(y) for y in years]
+    except (ValueError, TypeError):
+        result["error"] = "invalid-input"
+        return result
+
+    if (
+        tid <= 0 or budget < 0 or budget > 12
+        or not isinstance(years, (list, tuple))
+        or not 1 <= len(requested) <= 6
+        or len(set(requested)) != len(requested)
+        or any(y < 2000 or y > 2100 for y in requested)
+        or not callable(fetch_standings)
+        or existing is not None and not isinstance(existing, dict)
+    ):
+        result["error"] = "invalid-input"
+        return result
+
+    existing = existing or {}
+    result["teamId"] = tid
+
+    for year in requested:
+        snapshot = existing.get(year) or {}
+        if isinstance(snapshot, dict):
+            data = snapshot.get("data") or {}
+            try:
+                matching = (
+                    int(data.get("teamId") or 0) == tid
+                    and int(data.get("season") or 0) == year
+                    and int(data.get("leagueId") or 0) > 0
+                )
+                old = (
+                    _ksn_v614_history_row(tid, year, snapshot)
+                    if matching else None
+                )
+            except (ValueError, TypeError):
+                old = None
+
+            if _ksn_v663_history_complete(old):
+                result["preserved"].append(year)
+                continue
+
+            # A nonempty but invalid stored record is a conflict,
+            # not permission to overwrite historical evidence.
+            if snapshot:
+                result["unresolved"][year] = "existing-snapshot-conflict"
+                continue
+
+        candidates = _ksn_v663_971g_history_league_candidates(
+            catalogue, year
+        )
+
+        if not candidates:
+            result["unresolved"][year] = "no-domestic-league-candidate"
+            continue
+
+        # Every candidate must be examined. Checking only the first
+        # candidate could choose the wrong division.
+        if result["requests"] + len(candidates) > budget:
+            result["unresolved"][year] = "request-budget-insufficient"
+            continue
+
+        responses = {}
+        failed = False
+
+        for league_id in candidates:
+            result["requests"] += 1
+            try:
+                payload = await asyncio.wait_for(
+                    fetch_standings(league_id, year),
+                    timeout=3.0
+                )
+                if not isinstance(payload, dict):
+                    failed = True
+                    break
+                if payload.get("errors"):
+                    failed = True
+                    break
+                responses[league_id] = payload
+            except Exception:
+                failed = True
+                break
+
+        if failed or len(responses) != len(candidates):
+            result["unresolved"][year] = "provider-incomplete"
+            continue
+
+        verified = _ksn_v663_971h_verify_history_membership(
+            tid, year, candidates, responses
+        )
+
+        if verified is None:
+            result["unresolved"][year] = "not-uniquely-verified"
+            continue
+
+        summary = {
+            "season": year,
+            "rank": verified["rank"],
+            "points": verified["points"],
+            "played": verified["played"],
+            "wins": verified["wins"],
+            "draws": verified["draws"],
+            "losses": verified["losses"],
+            "goalsFor": verified["goalsFor"],
+            "goalsAgainst": verified["goalsAgainst"],
+            "goalDifference": (
+                verified["goalsFor"] - verified["goalsAgainst"]
+            ),
+            "winRate": round(
+                100 * verified["wins"] / verified["played"], 1
+            ),
+            "cleanSheets": None,
+        }
+
+        if not _ksn_v663_history_complete(summary):
+            result["unresolved"][year] = "invalid-season-totals"
+            continue
+
+        data = {
+            "teamId": tid,
+            "season": year,
+            "leagueId": verified["leagueId"],
+            "rank": verified["rank"],
+            "points": verified["points"],
+            "summary": summary,
+        }
+
+        result["planned"].append({
+            "key": f"team_history_v614:{tid}:{year}",
+            "data": data,
+        })
+
+    return result
+
+
+def _ksn_v663_971l_history_insert_if_absent(item):
+    """Atomically insert one verified team-season history snapshot.
+
+    PostgreSQL ONLY. No table creation, no SQLite fallback,
+    no updates to existing keys, no provider requests.
+    """
+    import json
+    import time
+
+    if _ksn_v663_staging_football_only():
+        return {"status": "blocked-staging"}
+
+    if not isinstance(item, dict):
+        return {"status": "invalid"}
+
+    data = item.get("data")
+    key = item.get("key")
+
+    if not isinstance(data, dict) or not isinstance(key, str):
+        return {"status": "invalid"}
+
+    try:
+        team = data.get("teamId")
+        season = data.get("season")
+        league = data.get("leagueId")
+        rank = data.get("rank")
+        points = data.get("points")
+
+        if not all(
+            type(x) is int
+            for x in (team, season, league, rank, points)
+        ):
+            return {"status": "invalid"}
+
+        if (
+            team <= 0 or league <= 0 or rank <= 0
+            or not 2000 <= season <= 2100
+        ):
+            return {"status": "invalid"}
+
+        expected_key = f"team_history_v614:{team}:{season}"
+
+        if key != expected_key:
+            return {"status": "invalid"}
+
+        snapshot = {"data": data}
+        row = _ksn_v614_history_row(team, season, snapshot)
+
+        if not _ksn_v663_history_complete(row):
+            return {"status": "invalid"}
+
+        serialized = json.dumps(
+            snapshot, ensure_ascii=False, allow_nan=False
+        )
+
+    except (TypeError, ValueError, OverflowError):
+        return {"status": "invalid"}
+
+    if not DATABASE_URL or psycopg2 is None:
+        return {"status": "unavailable"}
+
+    conn = None
+
+    try:
+        conn = psycopg2.connect(
+            DATABASE_URL, connect_timeout=4
+        )
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO ksn_shared_snapshots_v485
+                   (k, payload, updated)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (k) DO NOTHING
+                   RETURNING k""",
+                (key, serialized, time.time()),
+            )
+
+            inserted = cur.fetchone() is not None
+
+        conn.commit()
+
+        return {
+            "status": "inserted" if inserted else "exists",
+            "key": key,
+        }
+
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        log.warning(
+            "V663 971L History insert skipped team=%s season=%s error=%s",
+            team, season, type(exc).__name__
+        )
+
+        return {"status": "error"}
+
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+async def _ksn_v663_971m_history_recovery_coordinator(
+    team_id, years, catalogue, fetch_standings,
+    existing=None, max_requests=8,
+    write_enabled=False, writer=None
+):
+    """Coordinate verified historical recovery; dry-run by default.
+
+    The caller supplies provider/cache access explicitly.
+    No production route invokes this function yet.
+    """
+    result = {
+        "teamId": team_id,
+        "planned": [],
+        "preserved": [],
+        "unresolved": {},
+        "requests": 0,
+        "writes": 0,
+        "writeResults": [],
+        "dryRun": not write_enabled,
+    }
+
+    if write_enabled and not callable(writer):
+        result["error"] = "writer-required"
+        return result
+
+    plan = await _ksn_v663_971i_history_recovery_plan(
+        team_id, years, catalogue, fetch_standings,
+        existing=existing, max_requests=max_requests
+    )
+
+    for key in ("planned", "preserved", "unresolved", "requests"):
+        result[key] = plan.get(key, result[key])
+
+    if plan.get("error"):
+        result["error"] = plan["error"]
+        return result
+
+    if not write_enabled:
+        return result
+
+    for item in result["planned"]:
+        key = item.get("key")
+
+        try:
+            response = writer(item)
+
+            if not isinstance(response, dict):
+                response = {"status": "invalid-writer-response"}
+
+            status = response.get("status", "invalid-writer-response")
+
+        except Exception:
+            status = "writer-error"
+
+        # Never infer successful persistence from a planned record.
+        if status == "inserted":
+            result["writes"] += 1
+
+        result["writeResults"].append({
+            "key": key,
+            "status": status,
+        })
+
+    return result
+
+
+async def _ksn_v663_971n_history_provider_adapter(
+    team_id, years, get_provider, provider_locked,
+    existing=None, max_requests=8, enabled=False
+):
+    """Explicitly enabled, quota-guarded History discovery.
+
+    Dry-run only. No snapshot writes and no automatic route
+    invocation. The supplied provider reader may use existing
+    API-Football caching; this adapter never bypasses the lock.
+    """
+    import asyncio
+
+    output = {
+        "teamId": team_id,
+        "status": "disabled",
+        "catalogueRequests": 0,
+        "planned": [],
+        "preserved": [],
+        "unresolved": {},
+        "requests": 0,
+        "writes": 0,
+        "dryRun": True,
+    }
+
+    if not enabled:
+        return output
+
+    if not callable(get_provider) or not callable(provider_locked):
+        output["status"] = "invalid-adapter"
+        return output
+
+    try:
+        tid = int(team_id)
+        budget = int(max_requests)
+
+        if (
+            tid <= 0
+            or not isinstance(years, (list, tuple))
+            or not 1 <= len(years) <= 6
+            or any(type(y) is not int or y < 2000 or y > 2100 for y in years)
+            or len(set(years)) != len(years)
+            or budget < 0 or budget > 12
+        ):
+            output["status"] = "invalid-input"
+            return output
+
+        if provider_locked():
+            output["status"] = "provider-locked"
+            return output
+
+        output["catalogueRequests"] = 1
+
+        catalogue = await asyncio.wait_for(
+            get_provider("/leagues", {"team": tid}),
+            timeout=4.0,
+        )
+
+        if (
+            not isinstance(catalogue, dict)
+            or not isinstance(catalogue.get("response"), list)
+            or catalogue.get("errors")
+        ):
+            output["status"] = "invalid-catalogue"
+            return output
+
+    except Exception:
+        output["status"] = "catalogue-unavailable"
+        return output
+
+    async def verified_reader(league, season):
+        # Re-evaluate the quota lock before every standings request.
+        if provider_locked():
+            raise RuntimeError("provider-locked")
+
+        payload = await get_provider(
+            "/standings",
+            {"league": int(league), "season": int(season)}
+        )
+
+        if not isinstance(payload, dict) or payload.get("errors"):
+            raise ValueError("invalid-provider-response")
+
+        return payload
+
+    result = await _ksn_v663_971m_history_recovery_coordinator(
+        tid, years, catalogue, verified_reader,
+        existing=existing,
+        max_requests=budget,
+        write_enabled=False,
+    )
+
+    output.update(result)
+    output["status"] = (
+        "planned" if output["planned"]
+        else "no-verified-recovery"
+    )
+    output["catalogueRequests"] = 1
+    output["writes"] = 0
+    output["dryRun"] = True
+
+    return output
+
+
+async def _ksn_v663_971p_cached_history_dry_run(
+    team_id, years, cache_get, existing=None, max_lookups=8
+):
+    """Cache-only historical recovery; no provider or snapshot writes.
+
+    max_lookups includes one catalogue lookup and all standings
+    lookups. cache_get is a synchronous, read-only cache reader.
+    """
+    result = {
+        "teamId": team_id,
+        "status": "unavailable",
+        "cacheLookups": 0,
+        "planned": [],
+        "preserved": [],
+        "unresolved": {},
+        "writes": 0,
+        "dryRun": True,
+    }
+
+    if not callable(cache_get):
+        result["status"] = "invalid-input"
+        return result
+
+    try:
+        if (
+            type(team_id) is not int or team_id <= 0
+            or not isinstance(years, (list, tuple))
+            or not 1 <= len(years) <= 6
+            or any(type(y) is not int or y < 2000 or y > 2100 for y in years)
+            or len(set(years)) != len(years)
+            or type(max_lookups) is not int
+            or not 0 <= max_lookups <= 12
+        ):
+            result["status"] = "invalid-input"
+            return result
+
+        if max_lookups == 0:
+            result["status"] = "budget-exhausted"
+            return result
+
+        result["cacheLookups"] += 1
+        catalogue = cache_get("/leagues", {"team": team_id})
+
+        if (
+            not isinstance(catalogue, dict)
+            or not isinstance(catalogue.get("response"), list)
+            or catalogue.get("errors")
+        ):
+            result["status"] = "catalogue-cache-miss"
+            return result
+
+    except Exception:
+        result["status"] = "cache-error"
+        return result
+
+    async def cached_standings(league, season):
+        if result["cacheLookups"] >= max_lookups:
+            raise RuntimeError("cache-lookup-budget-exhausted")
+
+        result["cacheLookups"] += 1
+
+        payload = cache_get(
+            "/standings",
+            {"league": int(league), "season": int(season)}
+        )
+
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("response"), list)
+            or payload.get("errors")
+        ):
+            raise ValueError("standings-cache-miss")
+
+        return payload
+
+    plan = await _ksn_v663_971m_history_recovery_coordinator(
+        team_id,
+        years,
+        catalogue,
+        cached_standings,
+        existing=existing,
+        max_requests=max_lookups - 1,
+        write_enabled=False,
+    )
+
+    result.update(plan)
+    result["status"] = (
+        "planned" if result.get("planned") else "no-verified-recovery"
+    )
+    result["writes"] = 0
+    result["dryRun"] = True
+
+    return result
+
+
 def _ksn_v663_history_complete(row):
     """Accept only internally consistent numerical season totals."""
     if not isinstance(row, dict):
@@ -10643,8 +11369,8 @@ def _ksn_v663_history_complete(row):
 
 
 @app.get("/team/seasons-history")
-async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,ge=1,le=8), refresh: int=Query(0,ge=0,le=1)):
-    """v618: default 7 = the current season + the last 6 completed seasons. v617: stored rows are read with one PostgreSQL connection; the heavy profile rebuild is a last,
+async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(6,ge=1,le=6), refresh: int=Query(0,ge=0,le=1)):
+    """v663: default 6 = current season plus five previous seasons. v617: stored rows are read with one PostgreSQL connection; the heavy profile rebuild is a last,
     time-boxed resort. The response includes diagnostics showing where every season came from."""
     t0=time.time(); v622=_ksn_v622_on(team)
     current=_current_season(); years=[current-i for i in range(seasons)]; out=[]; sources={}
@@ -10725,6 +11451,36 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
                 )
                 canonical_valid=_ksn_v663_history_complete(canonical_row)
 
+                # V663 Step 971C: Reconcile the current season against
+                # the existing validated EPL last-good standings.
+                # Historical seasons and other leagues remain unchanged.
+                if yr==current and league_hint is not None and int(league_hint)==39:
+                    verified_base={
+                        "league":{"id":39},
+                        "standings":(
+                            (snaps.get(
+                                f"canonical_standings:{league_hint}:{yr}"
+                            ) or {}).get("data") or {}
+                        ).get("standings") or [],
+                    }
+                    verified_base=_ksn_v663_968ek_fresh_epl_standings(
+                        verified_base,team,yr
+                    )
+                    if verified_base.get("standingsSource")=="verified-epl-last-good":
+                        verified_row=_ksn_v615_history_row_from_standings(
+                            team,yr,39,
+                            {"data":{"standings":verified_base["standings"]}}
+                        )
+                        if (
+                            _ksn_v663_history_complete(verified_row)
+                            and (
+                                not canonical_valid
+                                or verified_row["played"]>canonical_row["played"]
+                            )
+                        ):
+                            canonical_row=verified_row
+                            canonical_valid=True
+
             if yr==current and canonical_valid and (
                 not history_valid or
                 canonical_row["played"]>history_row["played"]
@@ -10747,12 +11503,82 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
     # v622: seasons with no stored row are filled from that season's league table (cached /standings call, fetched
     # concurrently, saved permanently) so the page shows the current season + 6 past seasons.
     miss=[y for y in years if sources.get(y)=="none"] if (v622 or league_hint in _KSN_V644_BIG5) else []
-    if miss and league_hint and not _v448_api_football_provider_locked():
+
+    cache_only_active = False
+    # V663 STEP 971R: Cache-only, opt-in History recovery.
+    # No API-Football calls, snapshot writes or background tasks.
+    # Disabled by default and restricted to the staging environment.
+    if (
+        os.getenv("KSN_V663_HISTORY_CACHE_READ", "0") == "1"
+        and (
+            (
+                os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+                and not _ksn_v663_staging_football_only()
+            )
+            or (
+                os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "production"
+                and os.getenv(
+                    "KSN_V663_HISTORY_CACHE_READ_PRODUCTION", "0"
+                ) == "1"
+            )
+        )
+    ):
+        cache_only_active = True
+        cache_missing = [
+            y for y in years if sources.get(y) == "none"
+        ]
+        if cache_missing:
+            try:
+                existing_history = {
+                    y: snaps.get(f"team_history_v614:{team}:{y}")
+                    for y in years
+                }
+                recovered = await asyncio.wait_for(
+                    _ksn_v663_971p_cached_history_dry_run(
+                        team,
+                        cache_missing,
+                        _persistent_cache_get,
+                        existing=existing_history,
+                        max_lookups=4,
+                    ),
+                    timeout=5.0,
+                )
+                for item in recovered.get("planned", []):
+                    data = item.get("data") or {}
+                    y = data.get("season")
+                    if (
+                        type(y) is not int
+                        or y not in cache_missing
+                        or sources.get(y) != "none"
+                        or item.get("key") !=
+                           f"team_history_v614:{team}:{y}"
+                    ):
+                        continue
+                    row = _ksn_v614_history_row(
+                        team, y, {"data": data}
+                    )
+                    if _ksn_v663_history_complete(row):
+                        out.append(row)
+                        sources[y] = "verified-cache-only"
+            except Exception as exc:
+                log.warning(
+                    "V663 971R cache-only History skipped team=%s error=%s",
+                    team, type(exc).__name__
+                )
+
+    # Recompute missing years after applying verified cached rows.
+    miss=[y for y in years if sources.get(y)=="none"] if (v622 or league_hint in _KSN_V644_BIG5) else []
+
+    if miss and league_hint and not cache_only_active and not _v448_api_football_provider_locked():
         async def _fill(y):
             try:
-                lg=_team_league_hint_db(team,y) or league_hint
-                tbl=await asyncio.wait_for(_fetch_standings_for_league(int(lg),int(y)),5.0)
-                if not tbl and lg!=league_hint: lg=league_hint; tbl=await asyncio.wait_for(_fetch_standings_for_league(int(lg),int(y)),5.0)
+                # Historical competitions must be resolved for their own season.
+                # Never apply the current domestic league to an earlier year.
+                lg=_team_league_hint_db(team,y)
+                if not lg: return y,None
+                tbl=await asyncio.wait_for(
+                    _fetch_standings_for_league(int(lg),int(y)),5.0
+                )
                 if not tbl: return y,None
                 row=_ksn_v615_history_row_from_standings(team,y,lg,{"data":{"standings":tbl}})
                 if row:
@@ -10792,9 +11618,9 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(7,g
                 log.warning("v620 history clean-sheet mirror skipped team=%s season=%s: %s",team,r.get("season"),type(exc).__name__)
     have={int(r.get("season")):r for r in out}
     cs_missing=[y for y in years if y not in have or have[y].get("cleanSheets") is None]
-    cs_scheduled=_ksn_v621_schedule_cs_fill(team,league_hint,cs_missing) if cs_missing else False
+    cs_scheduled=_ksn_v621_schedule_cs_fill(team,league_hint,cs_missing) if (cs_missing and not cache_only_active) else False
     out.sort(key=lambda r:int(r.get("season") or 0),reverse=True)
-    return {"teamId":team,"defaultSeason":current,"seasons":out,"coverage":"Current season + the last 6 completed seasons when provider data is available","source":"PostgreSQL-first historical team intelligence","updatedAt":datetime.now(timezone.utc).isoformat(),
+    return {"teamId":team,"defaultSeason":current,"seasons":out,"coverage":"Up to six verified seasons, including the current season","source":"PostgreSQL-first historical team intelligence","updatedAt":datetime.now(timezone.utc).isoformat(),
             "diagnostics":{"elapsedMs":int((time.time()-t0)*1000),"leagueId":league_hint,"sources":sources,"cleanSheetsMissing":cs_missing,"csFillScheduled":cs_scheduled,"requestedSeasons":years,"missingSeasons":[y for y in years if y not in have],"historyFetchLimitPerRequest":3}}
 
 @app.get("/player/history")
@@ -12341,7 +13167,7 @@ def _ksn_v591_standings(team_id, league_id, season):
     for candidate in candidates:
         if not isinstance(candidate,dict):
             continue
-        standings = candidate.get('standings') or []
+        standings = (candidate.get('standings') or (candidate.get('league') or {}).get('standings') or [])
         if isinstance(standings,dict):
             standings = (standings.get('league') or {}).get('standings') or standings.get('standings') or []
         if isinstance(standings,list) and standings and isinstance(standings[0],list):
@@ -13015,6 +13841,65 @@ def _ksn_v663_968gc_intel_summary(summary, profile, team_id, season):
         return summary
 
 
+
+def _ksn_v663_970n_team_completeness(profile, team_id, season):
+    """Validate completed football team profiles without provider calls."""
+    p = dict(profile) if isinstance(profile, dict) else {}
+    try:
+        tid = int(team_id)
+        yr = int(season)
+        team = p.get("team") or {}
+        league = p.get("league") or {}
+        table = p.get("standings") or []
+        squad = p.get("players") or []
+        matches = (p.get("past10") or []) + (p.get("future") or [])
+
+        identity_ok = (
+            tid > 0
+            and int(team.get("id") or 0) == tid
+            and bool(team.get("name"))
+            and str(team.get("name")) != str(tid)
+        )
+        league_ok = (
+            int(league.get("id") or 0) > 0
+            and int(league.get("season") or yr) == yr
+        )
+
+        matching = [
+            row for row in table
+            if isinstance(row, dict)
+            and int((row.get("team") or {}).get("id") or 0) == tid
+        ]
+        standings_ok = league_ok and len(matching) == 1
+
+        player_ids = [
+            int(row.get("id") or 0)
+            for row in squad if isinstance(row, dict)
+        ]
+        squad_ok = (
+            bool(squad)
+            and len(player_ids) == len(squad)
+            and all(pid > 0 for pid in player_ids)
+            and len(set(player_ids)) == len(player_ids)
+        )
+        matches_ok = bool(matches)
+        statistics_ok = bool(_ksn_valid_team_stats(p.get("teamStats")))
+
+        complete = bool(
+            identity_ok
+            and standings_ok
+            and squad_ok
+            and matches_ok
+            and statistics_ok
+        )
+    except (TypeError, ValueError, AttributeError):
+        complete = False
+
+    p["dataComplete"] = complete
+    p["repairRequired"] = not complete
+    return p
+
+
 def _ksn_v590_team_view(profile, team_id, season):
     base = dict(profile) if isinstance(profile, dict) else {}
     snap = _dashboard_snapshot_get(f"team_profile_last_good:{team_id}:{season}")
@@ -13282,6 +14167,7 @@ def _ksn_v590_team_view(profile, team_id, season):
         base, team_id, season
     )
     base = _ksn_v663_968fx_season_stats(base, team_id, season)
+    base = _ksn_v663_970n_team_completeness(base, team_id, season)
     base["cached"] = True
     base["refreshing"] = False
     return base
@@ -30856,7 +31742,7 @@ async function team(){{
   const v622=V622_TEAMS==='all'||(Array.isArray(V622_TEAMS)&&V622_TEAMS.includes(Number(id)));
   const _dP=J('/team/profile?team='+encodeURIComponent(id),9000).then(p=>{{window.__ksnVerifiedOverview=p;return p;}});
   const _tiP=J('/team/intelligence?team='+encodeURIComponent(id),14000).catch(()=>({{}}));
-  const _hP=J('/team/seasons-history?team='+encodeURIComponent(id)+'&seasons=7',v622?12000:7000).catch(()=>({{seasons:[]}}));
+  const _hP=J('/team/seasons-history?team='+encodeURIComponent(id)+'&seasons=6',v622?12000:7000).catch(()=>({{seasons:[]}}));
   let d,ti,h;
   if(v622){{
     // v622: draw the Overview as soon as the profile is back. Intelligence/history get a short grace period; if they
@@ -30864,9 +31750,9 @@ async function team(){{
     d=await _dP;
     const _settle=(p,ms,dflt)=>Promise.race([p,new Promise(r=>setTimeout(()=>r(dflt),ms))]);
     ti=await _settle(_tiP,6000,{{pending:true}});
-    h=await _settle(_hP,4000,{{seasons:[]}});
+    h=await _settle(_hP,4000,{{seasons:[],pending:true}});
     ti=ti||{{}};h=h||{{seasons:[]}};
-    if(!window.__ksnLate&&((ti&&ti.pending)||(h.seasons||[]).length<7)){{
+    if(!window.__ksnLate&&((ti&&ti.pending)||(h&&h.pending))){{
       window.__ksnLate=1;
       (async()=>{{try{{let x=await _tiP;for(let n=0;n<4&&x&&x.pending;n++){{await new Promise(r=>setTimeout(r,5000));x=await J('/team/intelligence?team='+encodeURIComponent(id),14000).catch(()=>({{}}));}}await _hP;}}catch(e){{}}setTimeout(()=>team(),200);}})();
     }}
@@ -30925,7 +31811,7 @@ async function team(){{
       winRate:played>0&&wins!=null?Math.round(wins/played*1000)/10:r.winRate}};
   }});
   if(rank&&!historyRows.some(r=>Number(r.season)===currentSeason))historyRows.unshift({{season:currentSeason,rank:rank.rank,points:rank.points,played:liveAll.played,wins:liveAll.win,draws:liveAll.draw,losses:liveAll.lose,goalsFor:liveGoals.for,goalsAgainst:liveGoals.against,goalDifference:liveGoals.for!=null&&liveGoals.against!=null?liveGoals.for-liveGoals.against:null,winRate:liveAll.played>0&&liveAll.win!=null?Math.round(liveAll.win/liveAll.played*1000)/10:null,cleanSheets:sum.cleanSheets}});
-  if((h.diagnostics||{{}}).csFillScheduled)setTimeout(async()=>{{try{{const h2=await J('/team/seasons-history?team='+encodeURIComponent(id)+'&seasons=7',9000);const trs=document.querySelectorAll('[data-teampanel="history"] tbody tr');(h2.seasons||[]).forEach(r=>{{if(r.cleanSheets==null)return;trs.forEach(tr=>{{const tds=tr.querySelectorAll('td');if(tds.length&&tds[0].textContent.trim()===String(seasonLabel(r.season)).trim()&&!/^[0-9]+$/.test(tds[tds.length-1].textContent.trim()))tds[tds.length-1].textContent=r.cleanSheets}})}})}}catch(e){{}}}},20000);
+  if((h.diagnostics||{{}}).csFillScheduled)setTimeout(async()=>{{try{{const h2=await J('/team/seasons-history?team='+encodeURIComponent(id)+'&seasons=6',9000);const trs=document.querySelectorAll('[data-teampanel="history"] tbody tr');(h2.seasons||[]).forEach(r=>{{if(r.cleanSheets==null)return;trs.forEach(tr=>{{const tds=tr.querySelectorAll('td');if(tds.length&&tds[0].textContent.trim()===String(seasonLabel(r.season)).trim()&&!/^[0-9]+$/.test(tds[tds.length-1].textContent.trim()))tds[tds.length-1].textContent=r.cleanSheets}})}})}}catch(e){{}}}},20000);
   const histRows=historyRows.map((r,i)=>`<tr style="border-left:4px solid ${{i===0?theme.primary:theme.secondary}}"><td style="text-align:left"><b>${{seasonLabel(r.season)}}</b></td><td>${{E(r.rank??'—')}}</td><td>${{E(r.points??'—')}}</td><td>${{E(r.played??'—')}}</td><td style="color:#22c55e">${{E(r.wins??'—')}}</td><td style="color:#f59e0b">${{E(r.draws??'—')}}</td><td style="color:#ef4444">${{E(r.losses??'—')}}</td><td>${{E(r.goalsFor??'—')}}</td><td>${{E(r.goalsAgainst??'—')}}</td><td>${{E(r.goalDifference??'—')}}</td><td>${{E(r.winRate??'—')}}${{r.winRate!=null?'%':''}}</td><td>${{E(r.cleanSheets??'—')}}</td></tr>`).join('');
   const validSeasonData=!!(sum.played!=null||d.teamStats?.fixtures?.played?.total!=null||(d.standings||[]).length);
   if(!validSeasonData){{for(const key of Object.keys(sum)){{if(typeof sum[key]==='number'&&sum[key]===0)sum[key]=null;}}}}
