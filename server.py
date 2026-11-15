@@ -11508,9 +11508,19 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(6,g
     # No API-Football calls, snapshot writes or background tasks.
     # Disabled by default and restricted to the staging environment.
     if (
-        os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
-        and os.getenv("KSN_V663_HISTORY_CACHE_READ", "0") == "1"
-        and not _ksn_v663_staging_football_only()
+        os.getenv("KSN_V663_HISTORY_CACHE_READ", "0") == "1"
+        and (
+            (
+                os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "staging"
+                and not _ksn_v663_staging_football_only()
+            )
+            or (
+                os.getenv("KSN_ENVIRONMENT", "").strip().lower() == "production"
+                and os.getenv(
+                    "KSN_V663_HISTORY_CACHE_READ_PRODUCTION", "0"
+                ) == "1"
+            )
+        )
     ):
         cache_missing = [
             y for y in years if sources.get(y) == "none"
