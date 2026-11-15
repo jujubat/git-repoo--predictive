@@ -11450,14 +11450,243 @@ if(document.readyState==='loading'){
       const trophyRows=trophies.map(x=>`<div class="kc-row"><div><b>${escX(x.league||'Competition unavailable')}</b><div class="kc-row-meta">${escX(x.country||'')} · ${escX(x.season||'')}</div></div><b>${escX(x.place||x.status||'—')}</b></div>`).join('')||'<div class="kc-empty">No trophy data available.</div>';
       const recentRows=(d.recentMatches||[]).slice(0,15).map(x=>{const ts=x.teams||{},g=x.goals||{},lg=x.league||{};return `<div class="kc-row"><div><div class="kc-row-title">${teamCell(ts.home?.logo||'',ts.home?.name||'Home','xs',ts.home?.id||0)} <span class="sub">vs</span> ${teamCell(ts.away?.logo||'',ts.away?.name||'Away','xs',ts.away?.id||0)}</div><div class="kc-row-meta">${escX(lg.name||'')} · ${fmtDate(x.fixture?.date)} · ${escX(x.fixture?.status?.short||'')}</div></div><b>${statVal(g.home)} - ${statVal(g.away)}</b></div>`}).join('')||'<div class="kc-empty">No recent matches returned.</div>';
       const avg=d.ratingSummary?.average;
+
+      const ksn973QSeason=d.requestedSeason??d.season??'?';
+      const ksn973QCards=stats.map(s=>{
+        const lg=s.league||{},tm=s.team||{},g=s.games||{};
+        return `<article class="kc973q-comp-card">
+          <strong>${escX(lg.name||'Competition unavailable')}</strong>
+          <small>${escX(tm.name||'Team unavailable')} ? ${escX(lg.season??ksn973QSeason)}</small>
+          <div class="kc973q-comp-values">
+            <span><b>${statVal(g.appearences??g.appearances)}</b> Apps</span>
+            <span><b>${statVal(g.minutes)}</b> Minutes</span>
+            <span><b>${statVal(g.rating)}</b> Rating</span>
+          </div>
+        </article>`;
+      }).join('');
+      const ksn973QNav=Number(id)===19465?`
+        <nav class="kc973q-player-nav" aria-label="Player profile sections">
+          <a href="#kc973q-profile">Profile</a>
+          <a href="#kc973q-matches">Matches</a>
+          <a href="#kc973q-stats">Stats</a>
+          <a href="#kc973q-career">Career</a>
+          <a href="#kc973q-transfers">Transfers</a>
+          <a href="#kc973q-trophies">Trophies</a>
+        </nav>
+        <section class="kc-card kc973q-overview">
+          <h2>Season ${escX(ksn973QSeason)} ? Competition overview</h2>
+          <div class="kc973q-competition-grid">
+            ${ksn973QCards||'<p class="sub">Verified competition statistics are not available.</p>'}
+          </div>
+        </section>`:'';
+
       r.innerHTML=`<main class="kc-entity-page"><div class="kc-back"><button onclick="return window.kasiDashboardBack()">← Back</button></div>
-      <section class="kc-card"><div class="kc-player-hero">${img(p.photo,'kc-player-photo')}<div><h1 class="kc-player-name">${escX(p.name||'Player')}</h1><div class="kc-badges"><span class="kc-badge">${escX(p.position||games.position||'Position unavailable')}</span><span class="kc-badge">${escX(p.nationality||'Nationality unavailable')}</span><span class="kc-badge">${teamCell(team.logo||'',team.name||'Team unavailable','sm',team.id||0)}</span><span class="kc-badge">#${escX(games.number??'—')}</span></div><p class="sub">${escX(p.birth?.date||'Date of birth unavailable')} · ${escX(p.birth?.place||'Birth place unavailable')} · ${escX(p.height||'Height unavailable')} · ${escX(p.weight||'Weight unavailable')}</p></div></div></section>
+      ${ksn973QNav}<section class="kc-card"><div class="kc-player-hero">${img(p.photo,'kc-player-photo')}<div><h1 class="kc-player-name">${escX(p.name||'Player')}</h1><div class="kc-badges"><span class="kc-badge">${escX(p.position||games.position||'Position unavailable')}</span><span class="kc-badge">${escX(p.nationality||'Nationality unavailable')}</span><span class="kc-badge">${teamCell(team.logo||'',team.name||'Team unavailable','sm',team.id||0)}</span><span class="kc-badge">#${escX(games.number??'—')}</span></div><p class="sub">${escX(p.birth?.date||'Date of birth unavailable')} · ${escX(p.birth?.place||'Birth place unavailable')} · ${escX(p.height||'Height unavailable')} · ${escX(p.weight||'Weight unavailable')}</p></div></div></section>
       <div class="kc-grid"><div class="kc-stat"><b>${statVal(games.appearences??games.appearances)}</b><span>Appearances</span></div><div class="kc-stat"><b>${statVal(games.lineups)}</b><span>Starts</span></div><div class="kc-stat"><b>${statVal(games.minutes)}</b><span>Minutes</span></div><div class="kc-stat"><b>${statVal(goals.total)}</b><span>Goals</span></div><div class="kc-stat"><b>${statVal(goals.assists)}</b><span>Assists</span></div><div class="kc-stat"><b>${statVal(passes.key)}</b><span>Key passes</span></div><div class="kc-stat"><b>${statVal(tackles.total)}</b><span>Tackles</span></div><div class="kc-stat"><b>${statVal(duels.won)}</b><span>Duels won</span></div><div class="kc-stat"><b>${statVal(dribbles.success)}</b><span>Successful dribbles</span></div><div class="kc-stat"><b>${statVal(cards.yellow)}</b><span>Yellow cards</span></div><div class="kc-stat"><b>${statVal(avg)}</b><span>Recent rating avg</span></div><div class="kc-stat"><b>${statVal(d.ratingSummary?.best)}</b><span>Best recent rating</span></div></div>
       <div class="kc-grid2"><section class="kc-card"><h2>Competition-by-competition</h2><div class="kc-list">${splitRows}</div></section><section class="kc-card"><h2>Player profile</h2><div class="kc-list"><div class="kc-row"><span>Age</span><b>${statVal(p.age)}</b></div><div class="kc-row"><span>Date of birth</span><b>${statVal(p.birth?.date)}</b></div><div class="kc-row"><span>Nationality</span><b>${statVal(p.nationality)}</b></div><div class="kc-row"><span>Birth place</span><b>${statVal(p.birth?.place)}</b></div><div class="kc-row"><span>Height</span><b>${statVal(p.height)}</b></div><div class="kc-row"><span>Weight</span><b>${statVal(p.weight)}</b></div><div class="kc-row"><span>Current team</span><b>${teamCell(team.logo||'',team.name||'—','xs',team.id||0)}</b></div></div></section></div>
       <section class="kc-card"><h2>Current form & match ratings</h2><p class="sub">Fixture-level ratings are shown only when a verified rating is available for this player.</p><div class="kc-list">${formRows}</div></section>
       <div class="kc-grid2"><section class="kc-card"><h2>Career history</h2><div class="kc-list">${careerRows}</div></section><section class="kc-card"><h2>Trophies</h2><div class="kc-list">${trophyRows}</div></section></div>
       <section class="kc-card"><h2>Transfers</h2><div class="kc-list">${transferRows}</div></section>
       <section class="kc-card"><h2>Recent matches</h2><div class="kc-list">${recentRows}</div></section></main>`;
+
+
+      // V663 973R: Reference player only. Preserve existing sections.
+      if(Number(id)===19465){
+        const nav=r.querySelector('.kc973q-player-nav');
+        const overview=r.querySelector('.kc973q-overview');
+        const hero=r.querySelector('.kc-player-hero');
+        const heroCard=hero?.closest('section.kc-card');
+
+        if(nav){
+          nav.innerHTML=`
+            <a href="#kc973q-profile">Profile</a>
+            <a href="#kc973q-matches">Matches</a>
+            <a href="#kc973q-stats">Stats</a>`;
+        }
+
+        if(heroCard){
+          heroCard.id='kc973q-profile';
+          if(nav)heroCard.after(nav);
+          if(overview && nav)nav.after(overview);
+        }
+
+        if(overview){
+          overview.id='kc973q-stats';
+          const section=document.createElement('section');
+          section.className='kc-card kc973r-match-section';
+          section.id='kc973q-matches';
+
+          section.innerHTML=`
+            <h2>All verified player matches</h2>
+            <p class="sub">
+              Every available verified appearance, with its
+              competition and individual match rating.
+            </p>
+            <div class="kc973r-seasons" aria-label="Match seasons"></div>
+            <p class="sub kc973r-coverage" aria-live="polite">
+              Loading stored player match records?
+            </p>
+            <div class="kc-list kc973r-match-list"></div>
+            <button type="button" class="kc973r-more"
+                    style="display:none">
+              Load more matches
+            </button>`;
+
+          overview.after(section);
+
+          const years=Array.from(
+            {length:7},
+            (_,i)=>Number(d.requestedSeason||d.season||2026)-i
+          );
+
+          const seasonBar=section.querySelector('.kc973r-seasons');
+          const list=section.querySelector('.kc973r-match-list');
+          const coverage=section.querySelector('.kc973r-coverage');
+          const more=section.querySelector('.kc973r-more');
+
+          let selectedYear=years[0];
+          let offset=0;
+          let pending=false;
+
+          const safe=v=>escX(v===null||v===undefined?'?':v);
+          const validId=v=>{
+            const n=Number(v);
+            return Number.isSafeInteger(n)&&n>0?n:0;
+          };
+
+          const renderSeasons=()=>{
+            seasonBar.innerHTML='';
+            years.forEach(year=>{
+              const button=document.createElement('button');
+              button.type='button';
+              button.textContent=String(year);
+              button.className='kc973r-season'+
+                (year===selectedYear?' is-active':'');
+              button.addEventListener('click',()=>{
+                if(pending || year===selectedYear)return;
+                selectedYear=year;
+                renderSeasons();
+                load(0);
+              });
+              seasonBar.appendChild(button);
+            });
+          };
+
+          const renderMatch=m=>{
+            const home=m.home||{},away=m.away||{};
+            const competition=m.competition||{};
+            const fid=validId(m.fixtureId);
+            const date=safe(String(m.date||'').slice(0,10)||null);
+            const rating=m.rating===null||m.rating===undefined
+              ?'Not available':safe(m.rating);
+            const minutes=safe(m.minutes);
+            const score=m.score||{};
+            const result=score.home===null||score.home===undefined||
+              score.away===null||score.away===undefined
+              ?'?':safe(score.home)+' - '+safe(score.away);
+
+            const entry=document.createElement('article');
+            entry.className='kc973r-match';
+            entry.innerHTML=`
+              <div class="kc973r-match-main">
+                <strong>${safe(home.name)} ${result} ${safe(away.name)}</strong>
+                <div class="kc-row-meta">
+                  ${date} ? ${safe(competition.name)}
+                </div>
+                <div class="kc-row-meta">
+                  ${minutes} minutes ?
+                  ${safe(m.position||'Position unavailable')}
+                </div>
+              </div>
+              <div class="kc973r-rating">
+                <b>${rating}</b>
+                <small>Player rating</small>
+              </div>
+              ${fid?`<a href="/match/football/${fid}"
+                 class="kc973r-match-link">Match Centre</a>`:''}`;
+            return entry;
+          };
+
+          async function load(nextOffset){
+            if(pending)return;
+            pending=true;
+            more.style.display='none';
+            if(nextOffset===0){
+              list.replaceChildren();
+              offset=0;
+            }
+            coverage.textContent='Loading verified match records?';
+
+            try{
+              const response=await get('/player/matches',{
+                player:id,
+                season:selectedYear,
+                seasons:1,
+                limit:25,
+                offset:nextOffset
+              });
+
+              if(!response||!Array.isArray(response.matches)){
+                throw new Error('Invalid match-history response');
+              }
+
+              response.matches.forEach(m=>list.appendChild(renderMatch(m)));
+              offset=nextOffset+response.matches.length;
+
+              const total=Number(response.total||0);
+              const missing=Number(response.missingMatchSnapshots||0);
+
+              coverage.textContent=
+                `${total} verified appearances indexed for ${selectedYear}. `+
+                `${missing} candidate fixtures lack completed cached data. `+
+                `Ratings are shown only when verified.`;
+
+              if(total===0){
+                const empty=document.createElement('p');
+                empty.className='sub';
+                empty.textContent=
+                  'No verified player appearances are stored for this season yet.';
+                list.appendChild(empty);
+              }
+
+              more.style.display=response.hasMore?'inline-flex':'none';
+
+              if(response.scanTruncated){
+                coverage.textContent+=' Cache scan was truncated.';
+              }
+            }catch(error){
+              coverage.textContent=
+                'Verified match history is not available from the '+
+                'current backend deployment. Existing player details '+
+                'and statistics remain available.';
+            }finally{
+              pending=false;
+            }
+          }
+
+          more.addEventListener('click',()=>load(offset));
+          renderSeasons();
+          void load(0);
+        }
+      }
+
+      if(Number(id)===19465){
+        const labels={
+          'player profile':'kc973q-details',
+          'recent matches':'kc973q-recent',
+          'current form & match ratings':'kc973q-form',
+          'competition-by-competition':'kc973q-detail-stats',
+          'career history':'kc973q-career',
+          'transfers':'kc973q-transfers',
+          'trophies':'kc973q-trophies'
+        };
+        r.querySelectorAll('section.kc-card').forEach(section=>{
+          const heading=section.querySelector('h2');
+          if(!heading)return;
+          const key=heading.textContent.trim().toLowerCase();
+          if(labels[key])section.id=labels[key];
+        });
+      }
     }catch(e){r.innerHTML=`<main class="kc-entity-page"><div class="kc-empty">Player data could not be loaded.<br><small>${escX(e.message||e)}</small><br><button onclick="return window.kasiDashboardBack()">Return to dashboard</button></div></main>`}
   }
 
@@ -11517,6 +11746,144 @@ if(document.readyState==='loading'){
   window.addEventListener('popstate',route);
 })();
 </script>
+<style id="kc973q-player-structure">
+.kc-player-route .kc973q-player-nav{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  padding:14px 0;
+  margin:12px 0 18px;
+  border-bottom:1px solid #344657;
+}
+.kc-player-route .kc973q-player-nav a{
+  display:inline-flex;
+  padding:10px 15px;
+  color:#dceaf7;
+  border:1px solid #344657;
+  border-radius:8px;
+  text-decoration:none;
+  font-size:13px;
+  font-weight:700;
+  background:#142333;
+}
+.kc-player-route .kc973q-player-nav a:hover,
+.kc-player-route .kc973q-player-nav a:focus-visible{
+  border-color:#48bdf1;
+  color:#68d2ff;
+}
+.kc-player-route .kc973q-competition-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+  gap:12px;
+  margin-top:14px;
+}
+.kc-player-route .kc973q-comp-card{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  padding:15px;
+  background:#142333;
+  border:1px solid #344657;
+  border-radius:10px;
+  color:#edf5fa;
+}
+.kc-player-route .kc973q-comp-card small{
+  color:#b8ccda;
+}
+.kc-player-route .kc973q-comp-values{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  flex-wrap:wrap;
+  color:#b8ccda;
+  font-size:12px;
+}
+.kc-player-route .kc973q-comp-values b{
+  color:#fff;
+  font-size:15px;
+}
+.kc-player-route [id^="kc973q-"]{
+  scroll-margin-top:85px;
+}
+@media(max-width:640px){
+  .kc-player-route .kc973q-player-nav a{
+    padding:9px 11px;
+    font-size:12px;
+  }
+  .kc-player-route .kc973q-competition-grid{
+    grid-template-columns:1fr;
+  }
+}
+</style>
+<style id="kc973r-player-matches">
+.kc-player-route .kc973r-seasons{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin:16px 0;
+}
+.kc-player-route .kc973r-season{
+  border:1px solid #344657;
+  background:#142333;
+  color:#dceaf7;
+  padding:9px 14px;
+  border-radius:7px;
+  cursor:pointer;
+  font-weight:700;
+}
+.kc-player-route .kc973r-season.is-active{
+  border-color:#48bdf1;
+  background:#173c5c;
+  color:#fff;
+}
+.kc-player-route .kc973r-match{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:14px;
+  padding:16px;
+  margin:10px 0;
+  background:#142333;
+  border:1px solid #344657;
+  border-radius:10px;
+}
+.kc-player-route .kc973r-match-main{
+  flex:1 1 240px;
+}
+.kc-player-route .kc973r-match-main strong{
+  color:#eaf4ff;
+}
+.kc-player-route .kc973r-match-main .kc-row-meta{
+  margin-top:6px;
+}
+.kc-player-route .kc973r-rating{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:4px;
+  min-width:90px;
+}
+.kc-player-route .kc973r-rating b{
+  font-size:20px;
+  color:#fff;
+}
+.kc-player-route .kc973r-rating small{
+  color:#b6c9d7;
+}
+.kc-player-route .kc973r-match-link{
+  color:#64caff;
+  font-weight:700;
+}
+.kc-player-route .kc973r-more{
+  margin-top:16px;
+  padding:11px 20px;
+  background:#173c5c;
+  color:#fff;
+  border:1px solid #48bdf1;
+  border-radius:8px;
+  cursor:pointer;
+}
+</style>
 <style id="ksn-v663-958-global-standings">
 .ksn958-scroll{overflow-x:auto;overscroll-behavior-x:contain;margin-top:9px;border:1px solid #293b4b;border-radius:10px;background:#0c151e}
 .ksn958-table{width:100%;min-width:650px;border-collapse:collapse;color:#e6edf5;font-size:12px;white-space:nowrap}
