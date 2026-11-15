@@ -14440,6 +14440,331 @@ async def team_profile(team: str = Query(...), season: int = Query(0, ge=0), ref
 
 
 # V663 STEP 182: transparent player-profile section availability.
+def _ksn_v663_973d_player_data_pilot(profile):
+    """Response-only, provider-free player statistics expansion."""
+    if not isinstance(profile, dict):
+        return {}
+
+    identity = profile.get("player") or {}
+    if not isinstance(identity, dict):
+        return {}
+
+    try:
+        pid = int(identity.get("id") or 0)
+    except (ValueError, TypeError):
+        return {}
+
+    if pid != 19465:
+        return {}
+
+    def num(value):
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        return None
+
+    def obj(value):
+        return value if isinstance(value, dict) else {}
+
+    stats = profile.get("statistics") or []
+    if not isinstance(stats, list):
+        stats = []
+
+    competition_rows = []
+
+    for entry in stats:
+        if not isinstance(entry, dict):
+            continue
+
+        team = obj(entry.get("team"))
+        league = obj(entry.get("league"))
+        games = obj(entry.get("games"))
+        goals = obj(entry.get("goals"))
+        shots = obj(entry.get("shots"))
+        passes = obj(entry.get("passes"))
+        tackles = obj(entry.get("tackles"))
+        duels = obj(entry.get("duels"))
+        dribbles = obj(entry.get("dribbles"))
+        fouls = obj(entry.get("fouls"))
+        cards = obj(entry.get("cards"))
+        penalty = obj(entry.get("penalty"))
+
+        rating = games.get("rating")
+        try:
+            rating = (
+                float(rating)
+                if rating is not None and str(rating).strip()
+                else None
+            )
+            if rating is not None and not 0 <= rating <= 10:
+                rating = None
+        except (TypeError, ValueError, OverflowError):
+            rating = None
+
+        competition_rows.append({
+            "team": {
+                "id": team.get("id"),
+                "name": team.get("name"),
+                "logo": team.get("logo"),
+            },
+            "league": {
+                "id": league.get("id"),
+                "name": league.get("name"),
+                "country": league.get("country"),
+                "season": league.get("season"),
+            },
+            "games": {
+                "appearances": num(
+                    games.get("appearences")
+                    if games.get("appearences") is not None
+                    else games.get("appearances")
+                ),
+                "starts": num(games.get("lineups")),
+                "minutes": num(games.get("minutes")),
+                "position": games.get("position"),
+                "number": games.get("number"),
+                "rating": rating,
+            },
+            "attacking": {
+                "goals": num(goals.get("total")),
+                "assists": num(goals.get("assists")),
+                "shots": num(shots.get("total")),
+                "shotsOnTarget": num(shots.get("on")),
+                "keyPasses": num(passes.get("key")),
+                "dribbleAttempts": num(dribbles.get("attempts")),
+                "successfulDribbles": num(dribbles.get("success")),
+            },
+            "passing": {
+                "total": num(passes.get("total")),
+                "accuracy": num(passes.get("accuracy")),
+            },
+            "defending": {
+                "tackles": num(tackles.get("total")),
+                "blocks": num(tackles.get("blocks")),
+                "interceptions": num(tackles.get("interceptions")),
+                "duels": num(duels.get("total")),
+                "duelsWon": num(duels.get("won")),
+            },
+            "discipline": {
+                "foulsCommitted": num(fouls.get("committed")),
+                "foulsDrawn": num(fouls.get("drawn")),
+                "yellowCards": num(cards.get("yellow")),
+                "redCards": num(cards.get("red")),
+            },
+            "penalties": {
+                "scored": num(penalty.get("scored")),
+                "missed": num(penalty.get("missed")),
+                "saved": num(penalty.get("saved")),
+            },
+            "goalkeeper": {
+                "saves": num(goals.get("saves")),
+                "goalsConceded": num(goals.get("conceded")),
+                "penaltySaves": num(penalty.get("saved")),
+                "cleanSheets": None,
+            },
+        })
+
+    requested = profile.get("requestedSeason")
+    actual = profile.get("season")
+
+    return {
+        "playerId": pid,
+        "referenceProfile": True,
+        "requestedSeason": requested,
+        "statisticsSeason": actual,
+        "seasonFallback": (
+            requested is not None
+            and actual is not None
+            and str(requested) != str(actual)
+        ),
+        "competitionStatistics": competition_rows,
+        "competitionCount": len(competition_rows),
+        "dataSource": "existing-player-profile-statistics",
+        "providerRequestsAdded": 0,
+    }
+
+
+def _ksn_v663_973i_career_preview(player_id, years, profile_reader):
+    """Build a historical preview from existing stored records only."""
+    if int(player_id) != 19465:
+        return {"status": "unsupported_reference_player"}
+
+    def obj(value):
+        return value if isinstance(value, dict) else {}
+
+    def number(value):
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return value
+        return None
+
+    seasons = []
+    missing = []
+
+    for year in years:
+        profile = profile_reader(int(player_id), int(year))
+        if not isinstance(profile, dict):
+            missing.append(int(year))
+            continue
+
+        stats = profile.get("statistics") or []
+        if not isinstance(stats, list) or not stats:
+            missing.append(int(year))
+            continue
+
+        competitions = []
+
+        for entry in stats:
+            if not isinstance(entry, dict):
+                continue
+
+            team = obj(entry.get("team"))
+            league = obj(entry.get("league"))
+            games = obj(entry.get("games"))
+            goals = obj(entry.get("goals"))
+            cards = obj(entry.get("cards"))
+            penalty = obj(entry.get("penalty"))
+
+            # Never relabel a different season as the requested year.
+            record_year = league.get("season")
+            if record_year is not None:
+                try:
+                    if int(record_year) != int(year):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+
+            competitions.append({
+                "teamId": team.get("id"),
+                "team": team.get("name"),
+                "leagueId": league.get("id"),
+                "competition": league.get("name"),
+                "country": league.get("country"),
+                "appearances": number(
+                    games.get("appearences")
+                    if games.get("appearences") is not None
+                    else games.get("appearances")
+                ),
+                "starts": number(games.get("lineups")),
+                "minutes": number(games.get("minutes")),
+                "position": games.get("position"),
+                "goals": number(goals.get("total")),
+                "assists": number(goals.get("assists")),
+                "saves": number(goals.get("saves")),
+                "goalsConceded": number(goals.get("conceded")),
+                "penaltySaves": number(penalty.get("saved")),
+                "yellowCards": number(cards.get("yellow")),
+                "redCards": number(cards.get("red")),
+            })
+
+        if competitions:
+            seasons.append({
+                "season": int(year),
+                "competitions": competitions,
+                "competitionCount": len(competitions),
+            })
+        else:
+            missing.append(int(year))
+
+    return {
+        "playerId": int(player_id),
+        "status": "available" if seasons else "no_stored_history",
+        "seasons": seasons,
+        "availableSeasonCount": len(seasons),
+        "missingSeasons": missing,
+        "source": "existing-stored-player-season-statistics",
+        "providerRequestsAdded": 0,
+        "databaseWritesAdded": 0,
+    }
+
+
+@app.get("/player/career-preview")
+def _ksn_v663_973i_player_career_preview(
+    player: int = Query(..., ge=1),
+    seasons: int = Query(7, ge=1, le=7),
+):
+    """Read-only reference pilot. No provider or sync fallback."""
+    if player != 19465:
+        raise HTTPException(
+            status_code=404,
+            detail="Career preview is limited to the reference player"
+        )
+
+    years = [_current_season() - i for i in range(seasons)]
+
+    if not SPORTS_DB_ENABLED:
+        return {
+            "playerId": player,
+            "status": "database_unavailable",
+            "seasons": [],
+            "missingSeasons": years,
+        }
+
+    return _ksn_v663_973i_career_preview(
+        player, years, _sql_player_profile
+    )
+
+
+@app.get("/player/matches")
+def _ksn_v663_973s_player_matches(
+    player: int = Query(..., ge=1),
+    season: int = Query(0, ge=0),
+    seasons: int = Query(1, ge=1, le=7),
+    competition: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    """Reference-player pilot. Never calls the provider."""
+    if player != 19465:
+        raise HTTPException(404, "Reference player pilot only")
+
+    from player_match_history_v663 import (
+        collect_cached_player_matches,
+        paginate_player_matches,
+    )
+
+    start = season or _current_season()
+    years = [start - i for i in range(seasons)]
+
+    if not SPORTS_DB_ENABLED:
+        return {
+            "playerId": player,
+            "requestedYears": years,
+            "matches": [],
+            "total": 0,
+            "hasMore": False,
+            "status": "database_unavailable",
+            "coverage": "unavailable",
+        }
+
+    collected = collect_cached_player_matches(
+        player, years,
+        _sql_player_profile,
+        _ksn_v607_mirrored_fixtures,
+        _dashboard_snapshot_get,
+    )
+
+    page = paginate_player_matches(
+        collected["matches"],
+        season=start if seasons == 1 else None,
+        competition=competition or None,
+        limit=limit,
+        offset=offset,
+    )
+
+    collected.pop("matches", None)
+
+    return {
+        **collected,
+        **page,
+        "playerId": player,
+        "requestedYears": years,
+        "status": "ok",
+    }
+
+
 def _ksn_v663_player_completeness(profile):
     if not isinstance(profile, dict):
         return {
@@ -14576,6 +14901,9 @@ async def player_profile(player: int = Query(..., ge=1), season: int = Query(0, 
         response["playerDataCompleteness"] = (
             _ksn_v663_player_completeness(response)
         )
+        pilot = _ksn_v663_973d_player_data_pilot(response)
+        if pilot:
+            response["enhancedPlayerData"] = pilot
         return response
 
     season=season or _current_season()
