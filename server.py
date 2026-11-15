@@ -11504,6 +11504,7 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(6,g
     # concurrently, saved permanently) so the page shows the current season + 6 past seasons.
     miss=[y for y in years if sources.get(y)=="none"] if (v622 or league_hint in _KSN_V644_BIG5) else []
 
+    cache_only_active = False
     # V663 STEP 971R: Cache-only, opt-in History recovery.
     # No API-Football calls, snapshot writes or background tasks.
     # Disabled by default and restricted to the staging environment.
@@ -11522,6 +11523,7 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(6,g
             )
         )
     ):
+        cache_only_active = True
         cache_missing = [
             y for y in years if sources.get(y) == "none"
         ]
@@ -11567,7 +11569,7 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(6,g
     # Recompute missing years after applying verified cached rows.
     miss=[y for y in years if sources.get(y)=="none"] if (v622 or league_hint in _KSN_V644_BIG5) else []
 
-    if miss and league_hint and not _v448_api_football_provider_locked():
+    if miss and league_hint and not cache_only_active and not _v448_api_football_provider_locked():
         async def _fill(y):
             try:
                 # Historical competitions must be resolved for their own season.
@@ -11616,7 +11618,7 @@ async def team_seasons_history(team: int=Query(...,ge=1), seasons: int=Query(6,g
                 log.warning("v620 history clean-sheet mirror skipped team=%s season=%s: %s",team,r.get("season"),type(exc).__name__)
     have={int(r.get("season")):r for r in out}
     cs_missing=[y for y in years if y not in have or have[y].get("cleanSheets") is None]
-    cs_scheduled=_ksn_v621_schedule_cs_fill(team,league_hint,cs_missing) if cs_missing else False
+    cs_scheduled=_ksn_v621_schedule_cs_fill(team,league_hint,cs_missing) if (cs_missing and not cache_only_active) else False
     out.sort(key=lambda r:int(r.get("season") or 0),reverse=True)
     return {"teamId":team,"defaultSeason":current,"seasons":out,"coverage":"Up to six verified seasons, including the current season","source":"PostgreSQL-first historical team intelligence","updatedAt":datetime.now(timezone.utc).isoformat(),
             "diagnostics":{"elapsedMs":int((time.time()-t0)*1000),"leagueId":league_hint,"sources":sources,"cleanSheetsMissing":cs_missing,"csFillScheduled":cs_scheduled,"requestedSeasons":years,"missingSeasons":[y for y in years if y not in have],"historyFetchLimitPerRequest":3}}
