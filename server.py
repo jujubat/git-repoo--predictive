@@ -27216,6 +27216,7 @@ def _v660_fp_players_from_bundle(
 ):
     """Return all eligible players, retaining distinct provider identities."""
     import re
+    from fantasy_player_detail_v663 import normalized_fantasy_details
 
     league_keys = {
         39: "eng.1",
@@ -27291,6 +27292,7 @@ def _v660_fp_players_from_bundle(
             "league": meta["name"],
             "country": meta["country"],
             "source": "FantasyPlayoffs",
+            **normalized_fantasy_details(record),
         })
 
     clubs = len({p["team"].casefold() for p in players})
