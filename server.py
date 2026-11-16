@@ -14795,78 +14795,56 @@ def _ksn_v663_973s_player_matches(
             "teams": data.get("teams") or [],
         }
 
-    collected = collect_cached_player_matches(
-        player, years,
-        _verified_profile_reader,
-        _ksn_v607_mirrored_fixtures,
-        _dashboard_snapshot_get,
-    )
 
-    # V663 976C: Include stored finished player matches even when
-    # historical team-season fixture mirrors are unavailable.
+    # V663 STEP 979B: Single-query historical player recovery.
+    # The reference player no longer performs repeated per-fixture
+    # snapshot connections before loading the stored appearance index.
     from player_history_pg_v663 import (
         recover_historical_player_matches,
     )
 
-    history = {
-        "matches": [],
-        "verifiedHistoricalRecords": 0,
-        "historicalSnapshotsScanned": 0,
-        "historicalScanTruncated": False,
-        "historicalSource": "unavailable",
-    }
+    if _ksn_v663_staging_football_only():
+        raise HTTPException(
+            status_code=503,
+            detail="Player history unavailable in isolated staging",
+        )
 
     try:
-        if not _ksn_v663_staging_football_only():
-            history = recover_historical_player_matches(
-                player,
-                years,
-                _v485_snapshot_pg_connection,
-            )
-    except Exception as exc:
-        log.warning(
-            "V663 historical player scan failed: %s",
-            type(exc).__name__,
+        history = recover_historical_player_matches(
+            player,
+            years,
+            _v485_snapshot_pg_connection,
         )
-        history["historicalSource"] = "read_failed"
+    except Exception:
+        log.exception(
+            "V663 STEP 979B historical player recovery failed"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Historical player records temporarily unavailable",
+        )
 
-    combined = {
-        record["fixtureId"]: record
-        for record in collected["matches"]
+    combined_records = history["matches"]
+
+    collected = {
+        "verifiedAppearances": len(combined_records),
+        "candidateFixtureCount": None,
+        "scannedFixtureCount": None,
+        "missingMatchSnapshots": 0,
+        "fixturesWithoutVerifiedAppearance": 0,
+        "missingTeamSeasonMirrors": None,
+        "missingProfileYears": [],
+        "historicalSnapshotsScanned":
+            history["historicalSnapshotsScanned"],
+        "historicalScanTruncated":
+            history["historicalScanTruncated"],
+        "historicalSource":
+            history["historicalSource"],
+        "scanTruncated":
+            history["historicalScanTruncated"],
+        "cacheOnly": True,
+        "coverage": "partial_verified_postgresql_match_index",
     }
-
-    for record in history["matches"]:
-        existing = combined.get(record["fixtureId"])
-        if (
-            existing is None
-            or (
-                existing.get("rating") is None
-                and record.get("rating") is not None
-            )
-        ):
-            combined[record["fixtureId"]] = record
-
-    combined_records = sorted(
-        combined.values(),
-        key=lambda item: (
-            item.get("date") or "",
-            item["fixtureId"],
-        ),
-        reverse=True,
-    )
-
-    collected["verifiedAppearances"] = len(combined_records)
-    collected["historicalSnapshotsScanned"] = history[
-        "historicalSnapshotsScanned"
-    ]
-    collected["historicalScanTruncated"] = history[
-        "historicalScanTruncated"
-    ]
-    collected["historicalSource"] = history["historicalSource"]
-    collected["scanTruncated"] = (
-        collected["scanTruncated"]
-        or history["historicalScanTruncated"]
-    )
 
     page = paginate_player_matches(
         combined_records,
