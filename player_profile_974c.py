@@ -132,6 +132,82 @@ STYLE = """
 .ksn975-panel {
   min-width:0;
 }
+
+body.ksn976-black,
+body.ksn976-black #page {
+  background:#000 !important;
+  color:#f4f7fa;
+}
+body.ksn976-black .ksn974c-section,
+body.ksn976-black .ksn974c-item,
+body.ksn976-black .ksn975-panel,
+body.ksn976-black #ksn974c-nav a {
+  background:#000 !important;
+}
+body.ksn976-black .ksn974c-section,
+body.ksn976-black .ksn974c-item,
+body.ksn976-black #ksn974c-nav a {
+  border-color:#27333b;
+}
+.ksn976-team-grid,
+.ksn976-fixture-teams {
+  display:flex;
+  flex-wrap:wrap;
+  gap:14px;
+  align-items:center;
+}
+.ksn976-team-grid {
+  margin:14px 0;
+}
+.ksn976-team-link {
+  display:inline-flex;
+  gap:8px;
+  align-items:center;
+  color:#e9f4ff;
+  text-decoration:none;
+  font-weight:600;
+}
+a.ksn976-team-link:hover,
+a.ksn976-team-link:focus-visible {
+  color:#68bdff;
+  text-decoration:underline;
+}
+.ksn976-team-badge {
+  width:28px;
+  height:28px;
+  object-fit:contain;
+  flex-shrink:0;
+}
+.ksn976-badge-placeholder {
+  width:28px;
+  height:28px;
+  border:1px solid #52616c;
+  border-radius:50%;
+  flex-shrink:0;
+}
+.ksn976-competition-team {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:10px;
+}
+.ksn976-fixture-teams {
+  margin-bottom:6px;
+}
+.ksn976-score {
+  color:#fff;
+  white-space:nowrap;
+}
+@media(max-width:640px) {
+  .ksn976-fixture-teams {
+    gap:8px;
+    font-size:13px;
+  }
+  .ksn976-team-badge {
+    width:23px;
+    height:23px;
+  }
+}
 </style>
 """
 
@@ -140,6 +216,7 @@ SCRIPT = r"""
 (function () {
   "use strict";
   if (location.pathname !== "/players/19465") return;
+  document.body.classList.add("ksn976-black");
 
   const E = v => String(v == null || v === "" ? "Not available" : v)
     .replace(/[&<>"']/g, c => ({
@@ -150,6 +227,31 @@ SCRIPT = r"""
   const number = v => {
     const n = Number(v);
     return Number.isSafeInteger(n) && n > 0 ? n : 0;
+  };
+
+  const safeLogo = value => {
+    if (typeof value !== "string") return "";
+    try {
+      const url = new URL(value, location.origin);
+      return url.protocol === "https:" ? E(url.href) : "";
+    } catch (_) {
+      return "";
+    }
+  };
+
+  const teamLink = team => {
+    const id = number(team?.id);
+    const name = E(team?.name || "Team unavailable");
+    const logo = safeLogo(team?.logo);
+    const badge = logo
+      ? `<img src="${logo}" alt="" loading="lazy"
+              class="ksn976-team-badge">`
+      : `<span class="ksn976-badge-placeholder"
+               aria-hidden="true"></span>`;
+    return id
+      ? `<a class="ksn976-team-link"
+            href="/teams/${id}">${badge}<span>${name}</span></a>`
+      : `<span class="ksn976-team-link">${badge}<span>${name}</span></span>`;
   };
 
   function mount() {
@@ -329,6 +431,29 @@ SCRIPT = r"""
       const d = await response.json();
       const stats = Array.isArray(d.statistics) ? d.statistics : [];
 
+      const profilePanel = document.getElementById(
+        "ksn975-profile-panel"
+      );
+      if (profilePanel && !document.getElementById("ksn976-teams")) {
+        const teams = new Map();
+        stats.forEach(s => {
+          const team = s.team || {};
+          const id = number(team.id);
+          if (id && !teams.has(id)) teams.set(id, team);
+        });
+
+        const section = document.createElement("section");
+        section.id = "ksn976-teams";
+        section.className = "ksn974c-section";
+        section.innerHTML = `
+          <h2>Clubs and national team</h2>
+          <div class="ksn976-team-grid">
+            ${Array.from(teams.values()).map(teamLink).join("") ||
+              '<p class="ksn974c-muted">Team details unavailable.</p>'}
+          </div>`;
+        profilePanel.prepend(section);
+      }
+
       target.innerHTML = stats.map(s => {
         const league = s.league || {};
         const team = s.team || {};
@@ -338,7 +463,10 @@ SCRIPT = r"""
 
         return `<article class="ksn974c-item">
           <strong>${E(league.name)}</strong>
-          <small>${E(team.name)} | ${E(league.season)}</small>
+          <div class="ksn976-competition-team">
+            ${teamLink(team)}
+            <small>${E(league.season)}</small>
+          </div>
           <div class="ksn974c-metrics">
             <span><b>${E(games.appearences ?? games.appearances)}</b> Apps</span>
             <span><b>${E(games.minutes)}</b> Minutes</span>
@@ -433,8 +561,11 @@ SCRIPT = r"""
 
           row.innerHTML = `
             <div class="ksn974c-match-main">
-              <strong>${E(m.home?.name)} ${result}
-                      ${E(m.away?.name)}</strong>
+              <div class="ksn976-fixture-teams">
+                ${teamLink(m.home)}
+                <strong class="ksn976-score">${result}</strong>
+                ${teamLink(m.away)}
+              </div>
               <small>${E(m.date?.slice(0,10))} |
                      ${E(m.competition?.name)} |
                      ${E(m.minutes)} minutes</small>
@@ -461,8 +592,9 @@ SCRIPT = r"""
 
         if (total === 0)
           list.innerHTML =
-            '<p class="ksn974c-muted">No verified appearances ' +
-            'indexed for this season yet.</p>';
+            '<p class="ksn974c-muted">Historical match records ' +
+            'have not yet been fully indexed for this season. ' +
+            'This does not mean the player made no appearances.</p>';
 
         more.hidden = !data.hasMore;
       } catch (err) {

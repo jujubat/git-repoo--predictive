@@ -14802,8 +14802,74 @@ def _ksn_v663_973s_player_matches(
         _dashboard_snapshot_get,
     )
 
+    # V663 976C: Include stored finished player matches even when
+    # historical team-season fixture mirrors are unavailable.
+    from player_history_pg_v663 import (
+        recover_historical_player_matches,
+    )
+
+    history = {
+        "matches": [],
+        "verifiedHistoricalRecords": 0,
+        "historicalSnapshotsScanned": 0,
+        "historicalScanTruncated": False,
+        "historicalSource": "unavailable",
+    }
+
+    try:
+        if not _ksn_v663_staging_football_only():
+            history = recover_historical_player_matches(
+                player,
+                years,
+                _v485_snapshot_pg_connection,
+            )
+    except Exception as exc:
+        log.warning(
+            "V663 historical player scan failed: %s",
+            type(exc).__name__,
+        )
+        history["historicalSource"] = "read_failed"
+
+    combined = {
+        record["fixtureId"]: record
+        for record in collected["matches"]
+    }
+
+    for record in history["matches"]:
+        existing = combined.get(record["fixtureId"])
+        if (
+            existing is None
+            or (
+                existing.get("rating") is None
+                and record.get("rating") is not None
+            )
+        ):
+            combined[record["fixtureId"]] = record
+
+    combined_records = sorted(
+        combined.values(),
+        key=lambda item: (
+            item.get("date") or "",
+            item["fixtureId"],
+        ),
+        reverse=True,
+    )
+
+    collected["verifiedAppearances"] = len(combined_records)
+    collected["historicalSnapshotsScanned"] = history[
+        "historicalSnapshotsScanned"
+    ]
+    collected["historicalScanTruncated"] = history[
+        "historicalScanTruncated"
+    ]
+    collected["historicalSource"] = history["historicalSource"]
+    collected["scanTruncated"] = (
+        collected["scanTruncated"]
+        or history["historicalScanTruncated"]
+    )
+
     page = paginate_player_matches(
-        collected["matches"],
+        combined_records,
         season=start if seasons == 1 else None,
         competition=competition or None,
         limit=limit,
