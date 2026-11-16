@@ -115,6 +115,23 @@ STYLE = """
 #ksn974c-profile,
 #ksn974c-matches,
 #ksn974c-stats { scroll-margin-top:75px; }
+
+.ksn975-panel[hidden] {
+  display:none !important;
+}
+#ksn974c-nav a.ksn975-active {
+  border-color:#47b4ff;
+  border-bottom:3px solid #47b4ff;
+  background:#193449;
+  color:#fff;
+}
+#ksn974c-nav a:focus-visible {
+  outline:2px solid #8bd8ff;
+  outline-offset:2px;
+}
+.ksn975-panel {
+  min-width:0;
+}
 </style>
 """
 
@@ -124,7 +141,7 @@ SCRIPT = r"""
   "use strict";
   if (location.pathname !== "/players/19465") return;
 
-  const E = v => String(v == null ? "?" : v)
+  const E = v => String(v == null || v === "" ? "Not available" : v)
     .replace(/[&<>"']/g, c => ({
       "&":"&amp;","<":"&lt;",">":"&gt;",
       '"':"&quot;","'":"&#39;"
@@ -182,7 +199,7 @@ SCRIPT = r"""
       <section class="ksn974c-section" id="ksn974c-overview">
         <h2>Goalkeeper performance</h2>
         <div class="ksn974c-grid" id="ksn974c-overview-data">
-          <p class="ksn974c-muted">Loading verified statistics?</p>
+          <p class="ksn974c-muted">Loading verified statistics...</p>
         </div>
       </section>
       <section class="ksn974c-section" id="ksn974c-matches">
@@ -199,12 +216,100 @@ SCRIPT = r"""
       <section class="ksn974c-section">
         <h2>Career, transfers and trophies</h2>
         <div id="ksn974c-career">
-          <p class="ksn974c-muted">Loading verified history?</p>
+          <p class="ksn974c-muted">Loading verified history...</p>
         </div>
       </section>
     `;
 
     nav.after(container);
+
+    // V663 975: Proper tab panels on the canonical player page.
+    // Keep the player hero visible while switching content.
+    const overview = container.querySelector("#ksn974c-overview");
+    const matches = container.querySelector("#ksn974c-matches");
+    const career = container.querySelector(
+      ".ksn974c-section:last-child"
+    );
+
+    if (!overview || !matches || !career) return false;
+
+    const makePanel = (id, label) => {
+      const panel = document.createElement("div");
+      panel.id = id;
+      panel.className = "ksn975-panel";
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-label", label);
+      return panel;
+    };
+
+    const profilePanel = makePanel(
+      "ksn975-profile-panel", "Profile"
+    );
+    const matchesPanel = makePanel(
+      "ksn975-matches-panel", "Matches"
+    );
+    const statsPanel = makePanel(
+      "ksn975-stats-panel", "Stats"
+    );
+
+    profilePanel.appendChild(career);
+    matchesPanel.appendChild(matches);
+    statsPanel.appendChild(overview);
+    statsPanel.appendChild(stats);
+
+    container.replaceWith(
+      profilePanel, matchesPanel, statsPanel
+    );
+
+    const panels = {
+      profile: profilePanel,
+      matches: matchesPanel,
+      stats: statsPanel
+    };
+
+    const links = Array.from(nav.querySelectorAll("a"));
+    nav.setAttribute("role", "tablist");
+
+    const activate = key => {
+      const selected = panels[key] ? key : "profile";
+
+      Object.entries(panels).forEach(([name, panel]) => {
+        panel.hidden = name !== selected;
+      });
+
+      links.forEach(link => {
+        const name = link.dataset.tab;
+        const active = name === selected;
+        link.classList.toggle("ksn975-active", active);
+        link.setAttribute("aria-selected", String(active));
+        link.tabIndex = active ? 0 : -1;
+      });
+    };
+
+    links.forEach((link, index) => {
+      const key = ["profile", "matches", "stats"][index];
+      link.dataset.tab = key;
+      link.setAttribute("role", "tab");
+      link.setAttribute(
+        "aria-controls",
+        panels[key].id
+      );
+
+      link.addEventListener("click", event => {
+        event.preventDefault();
+        activate(key);
+        history.replaceState(
+          null, "",
+          "#ksn974c-" + key
+        );
+      });
+    });
+
+    const initial = location.hash.match(
+      /^#ksn974c-(profile|matches|stats)$/
+    );
+    activate(initial ? initial[1] : "profile");
+
     void loadProfile();
     setupMatches();
     return true;
@@ -233,7 +338,7 @@ SCRIPT = r"""
 
         return `<article class="ksn974c-item">
           <strong>${E(league.name)}</strong>
-          <small>${E(team.name)} ? ${E(league.season)}</small>
+          <small>${E(team.name)} | ${E(league.season)}</small>
           <div class="ksn974c-metrics">
             <span><b>${E(games.appearences ?? games.appearances)}</b> Apps</span>
             <span><b>${E(games.minutes)}</b> Minutes</span>
@@ -264,7 +369,7 @@ SCRIPT = r"""
         ${trophies.map(t => `
           <div class="ksn974c-item">
             <strong>${E(t.league)}</strong>
-            <small>${E(t.season)} ? ${E(t.place || t.status)}</small>
+            <small>${E(t.season)} | ${E(t.place || t.status)}</small>
           </div>`).join("") ||
           '<p class="ksn974c-muted">No verified trophies returned.</p>'}
         </div>
@@ -295,7 +400,7 @@ SCRIPT = r"""
       }
 
       more.hidden = true;
-      coverage.textContent = "Loading stored match history?";
+      coverage.textContent = "Loading stored match history...";
 
       try {
         const params = new URLSearchParams({
@@ -324,18 +429,18 @@ SCRIPT = r"""
           const fid = number(m.fixtureId);
           const score = m.score || {};
           const result = score.home == null || score.away == null
-            ? "?" : E(score.home) + "?" + E(score.away);
+            ? "Not available" : E(score.home) + "-" + E(score.away);
 
           row.innerHTML = `
             <div class="ksn974c-match-main">
               <strong>${E(m.home?.name)} ${result}
                       ${E(m.away?.name)}</strong>
-              <small>${E(m.date?.slice(0,10))} ?
-                     ${E(m.competition?.name)} ?
+              <small>${E(m.date?.slice(0,10))} |
+                     ${E(m.competition?.name)} |
                      ${E(m.minutes)} minutes</small>
             </div>
             <div class="ksn974c-rating">
-              ${m.rating == null ? "?" : E(m.rating)}
+              ${m.rating == null ? "Not rated" : E(m.rating)}
             </div>
             ${fid ? `<a href="/match/football/${fid}">
               Match Centre</a>` : ""}
