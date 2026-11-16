@@ -24,7 +24,7 @@ def recover_historical_player_matches(
     sql = """
         SELECT payload
         FROM ksn_shared_snapshots_v485
-        WHERE k LIKE 'match:football:%'
+        WHERE k LIKE 'match:football:%%'
           AND jsonb_path_exists(
               COALESCE(
                   payload::jsonb->'data'->'players',
