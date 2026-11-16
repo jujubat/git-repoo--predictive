@@ -24,7 +24,7 @@ def recover_historical_player_matches(
     sql = """
         SELECT payload
         FROM ksn_shared_snapshots_v485
-        WHERE k LIKE 'match:football:%'
+        WHERE k LIKE %s
           AND jsonb_path_exists(
               COALESCE(
                   payload::jsonb->'data'->'players',
@@ -39,7 +39,7 @@ def recover_historical_player_matches(
     connection = connect()
     try:
         with connection.cursor() as cursor:
-            cursor.execute(sql, (path, limit + 1))
+            cursor.execute(sql, ("match:football:%", path, limit + 1))
             rows = cursor.fetchall()
     finally:
         connection.close()

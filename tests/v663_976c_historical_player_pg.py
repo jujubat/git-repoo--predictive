@@ -113,7 +113,7 @@ print("PASS: Competitions preserved")
 assert db.closed
 print("PASS: PostgreSQL connection closed")
 
-assert "$[*].players[*].player" in db.cur.params[0]
+assert "$[*].players[*].player" in db.cur.params[1]
 print("PASS: Exact player record query")
 
 assert result["historicalSource"] == (
