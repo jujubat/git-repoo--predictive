@@ -14739,9 +14739,65 @@ def _ksn_v663_973s_player_matches(
             "coverage": "unavailable",
         }
 
+    def _verified_profile_reader(pid, year):
+        """Prefer stored player data; fall back to verified PG snapshot."""
+        try:
+            profile = _sql_player_profile(pid, year)
+        except Exception:
+            profile = None
+
+        if (
+            isinstance(profile, dict)
+            and profile.get("statistics")
+        ):
+            return profile
+
+        snap = _dashboard_snapshot_get(
+            f"player_profile_last_good:{pid}:{year}"
+        ) or {}
+
+        data = (
+            snap.get("data")
+            if isinstance(snap, dict)
+            else None
+        )
+
+        if not isinstance(data, dict):
+            return profile
+
+        person = data.get("player") or {}
+        try:
+            valid_id = int(person.get("id") or 0) == pid
+            valid_year = int(
+                data.get("requestedSeason", year)
+            ) == year
+        except (TypeError, ValueError):
+            return profile
+
+        if not valid_id or not valid_year:
+            return profile
+
+        statistics = [
+            stat for stat in (data.get("statistics") or [])
+            if isinstance(stat, dict)
+            and isinstance(stat.get("team"), dict)
+            and stat["team"].get("id")
+            and isinstance(stat.get("league"), dict)
+            and str(stat["league"].get("season")) == str(year)
+        ]
+
+        if not statistics:
+            return profile
+
+        return {
+            "player": person,
+            "statistics": statistics,
+            "teams": data.get("teams") or [],
+        }
+
     collected = collect_cached_player_matches(
         player, years,
-        _sql_player_profile,
+        _verified_profile_reader,
         _ksn_v607_mirrored_fixtures,
         _dashboard_snapshot_get,
     )
@@ -35554,6 +35610,10 @@ def _ksn_v491_seo_profile(kind, entity_id):
             '\n<script id="ksn-v663-alaves-safe-layout">\n(function(){\n  \'use strict\';\n\n  if (location.pathname !== \'/teams/542\') return;\n\n  const root = document.getElementById(\'page\');\n  if (!root) return;\n\n  // Visual layout only. Existing DOM nodes, navigation\n  // and event handlers remain intact.\n  const style = document.createElement(\'style\');\n  style.id = \'ksn-v663-alaves-layout-css\';\n\n  style.textContent = `\n    #page {\n      display: flex !important;\n      flex-direction: column !important;\n      align-items: stretch !important;\n    }\n\n    /* Existing club badge and header first */\n    #page > section.card:has(img) {\n      order: -20 !important;\n    }\n\n    /* Populated verified Overview immediately below */\n    #page > #ksn-v663-public-overview {\n      order: -10 !important;\n    }\n  `;\n\n  document.head.appendChild(style);\n\n  function hideOnlyLegacyPlaceholder(){\n    const verified = root.querySelector(\n      \':scope > #ksn-v663-public-overview\'\n    );\n\n    if (!verified) return;\n\n    for (const section of Array.from(root.children)) {\n      if (section === verified) continue;\n      if (section.tagName !== \'SECTION\') continue;\n\n      const heading = Array.from(\n        section.querySelectorAll(\'h2,h3\')\n      ).find(h =>\n        (h.textContent || \'\').trim() === \'Team Overview\'\n      );\n\n      if (!heading) continue;\n\n      const text = (\n        section.textContent || \'\'\n      ).replace(/\\s+/g, \' \').trim();\n\n      const legacyPhrase =\n        \'Current form, matches, league position and leading players in one club profile.\';\n\n      if (!text.includes(legacyPhrase)) continue;\n\n      // Never conceal a genuine data table or statistics.\n      if (section.querySelector(\n        \'table,canvas,[data-stat],.standings-table\'\n      )) continue;\n\n      // Hide the redundant description without\n      // deleting any underlying element.\n      section.style.setProperty(\n        \'display\', \'none\', \'important\'\n      );\n    }\n  }\n\n  // Watch for the existing renderer replacing page content.\n  // We do not change child nodes, so this cannot create\n  // a DOM-reordering loop.\n  const observer = new MutationObserver(\n    hideOnlyLegacyPlaceholder\n  );\n\n  observer.observe(root, {\n    childList: true,\n    subtree: false\n  });\n\n  hideOnlyLegacyPlaceholder();\n})();\n</script>\n' + '</body>',
             1,
         )
+
+    if kind == "player" and int(entity_id) == 19465:
+        from player_profile_974c import enhance_player_document
+        document = enhance_player_document(document)
     return document
 
 # v492: read-only, bounded identity recovery from existing fixture provider cache.
